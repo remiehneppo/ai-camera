@@ -1,0 +1,40 @@
+services:
+  mongo:
+    image: mongo:7.0.43-jammy
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    restart: unless-stopped
+
+  mongo-init:
+    image: mongo:7.0.43-jammy
+    depends_on:
+      mongo:
+        condition: service_healthy
+    volumes:
+      - ./infra/mongo-init.js:/mongo-init.js:ro
+    entrypoint: ["mongosh", "mongodb://mongo:27017/admin", "--quiet", "--file", "/mongo-init.js"]
+    restart: "no"
+
+  server:
+    build: .
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+    environment:
+      MONGO_URI: mongodb://mongo:27017/?replicaSet=rs0&retryWrites=true&w=majority&journal=true
+      MONGO_DATABASE: camera_lab
+      DEVICE_TOKENS: ${DEVICE_TOKENS:?Set DEVICE_TOKENS to a JSON object mapping bearer tokens to device IDs}
+      DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:?Set DASHBOARD_TOKEN before starting the lab stack}
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+
+volumes:
+  mongo-data:
+    name: ai-camera-oc-mongo-data-7.0

@@ -1,0 +1,10 @@
+.git
+.codegraph
+.scratch
+docs
+traffic-ai-camera-research
+tests
+data
+AGENTS.md
+**/__pycache__
+**/*.py[cod]

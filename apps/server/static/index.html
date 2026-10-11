@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Camera Lab Events</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0 auto; max-width: 960px; padding: 2rem 1rem; }
+    h1 { margin-bottom: .25rem; }
+    .muted { opacity: .72; }
+    #status { min-height: 1.5rem; }
+    .event { border: 1px solid #8886; border-radius: .5rem; margin: .75rem 0; padding: 1rem; }
+    .event header { display: flex; gap: .6rem; flex-wrap: wrap; align-items: baseline; }
+    code, time { overflow-wrap: anywhere; }
+    button { font: inherit; padding: .35rem .7rem; }
+  </style>
+</head>
+<body>
+  <h1>AI Camera Lab Events</h1>
+  <p class="muted">Metadata from committed event snapshots. Synthetic and replay events never notify.</p>
+  <button id="auth">Set dashboard token</button>
+  <p id="status" role="status" aria-live="polite">Loading…</p>
+  <main id="events" aria-label="Events"></main>
+  <script>
+    (() => {
+      let token = "";
+      const status = document.querySelector("#status");
+      const list = document.querySelector("#events");
+      document.querySelector("#auth").addEventListener("click", () => {
+        token = window.prompt("Dashboard bearer token") || "";
+        refresh();
+      });
+      const add = (parent, tag, text, className) => {
+        const node = document.createElement(tag);
+        node.textContent = text;
+        if (className) node.className = className;
+        parent.append(node);
+        return node;
+      };
+      async function refresh() {
+        if (!token) { status.textContent = "Enter the dashboard token to load events."; return; }
+        status.textContent = "Loading events…";
+        try {
+          const response = await fetch("/v1/events?limit=50", { headers: { Authorization: `Bearer ${token}` } });
+          if (!response.ok) throw new Error(response.status === 401 ? "Dashboard token rejected." : `Request failed (${response.status}).`);
+          const data = await response.json();
+          list.replaceChildren();
+          if (!data.events.length) {
+            status.textContent = "No events yet. Run the edge synthetic fixture to add one.";
+            return;
+          }
+          for (const row of data.events) {
+            const event = row.event;
+            const card = document.createElement("article");
+            card.className = "event";
+            const header = document.createElement("header");
+            add(header, "strong", event.payload.taxonomy || "Event");
+            add(header, "span", event.origin, "muted");
+            add(card, "h2", `${event.camera_id} · revision ${event.revision}`);
+            card.prepend(header);
+            add(card, "p", `${event.payload.lifecycle || "unknown"} · ${event.payload.severity || "unknown"} · quality ${event.quality_state}`);
+            const time = add(card, "time", event.event_time);
+            time.dateTime = event.event_time;
+            add(card, "p", `Event ${event.event_id}`, "muted");
+            list.append(card);
+          }
+          status.textContent = `Showing ${data.events.length} event${data.events.length === 1 ? "" : "s"}. Refreshes every 3 seconds.`;
+        } catch (error) {
+          status.textContent = `${error.message} Check the API and try again.`;
+        }
+      }
+      refresh();
+      window.setInterval(refresh, 3000);
+    })();
+  </script>
+</body>
+</html>
