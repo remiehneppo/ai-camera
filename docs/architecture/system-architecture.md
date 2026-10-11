@@ -44,7 +44,7 @@ Mỗi camera phải có cấu hình Operational Design Domain: địa điểm, v
 | Recorder ưu tiên hơn analytics | Khi tài nguyên thiếu, giảm analysis FPS/pose trước; không để inference backpressure làm mất video đã mã hóa |
 | Hai tầng ngôn ngữ: C++ perception core + Python control | Đường per-frame (decode→preprocess→inference→postprocess→track) là C++ (§6.7a); Python giữ phần tần suất thấp (orchestration, IncidentEngine, evidence, delivery, control). Pixel không đi qua Python trên hot path; chỉ metadata (detections/tracks/pose) vượt ranh giới |
 
-**Công nghệ dự kiến, có thể thay:** Python cho orchestration/reference pipeline và API server; NumPy/OpenCV cho baseline image/geometry; ONNX Runtime cho baseline inference; RKNN/MPP/RGA cho adapter Orange Pi; TensorRT/GStreamer/DeepStream khi benchmark yêu cầu. React/TypeScript cho dashboard là lựa chọn triển khai, không thuộc domain contract. C++17 cho perception core trên thiết bị đích (§6.7a), bind sang Python bằng pybind11/nanobind; Python reference pipeline giữ làm oracle để test parity.
+**Công nghệ:** Python orchestration/reference pipeline, FastAPI/Python + MongoDB cho server; ONNX Runtime baseline inference; RKNN/MPP/RGA khi chọn target, alternative backends chỉ khi có yêu cầu. C++17 cho perception core (§6.7a), bindings pybind11/nanobind dự kiến; Python reference giữ làm oracle. Q19 chỉ yêu cầu dev demo UI đơn giản; chọn HTML/JS do FastAPI phục vụ để test qua API, không bắt buộc React app. Đội giao diện riêng ghép UI sản phẩm qua API/schema sau.
 
 ## 3. Bối cảnh và topology triển khai
 
@@ -117,7 +117,7 @@ Tách hai phần vì có lifecycle khác nhau:
 - **`FrameMetadata` (domain, immutable, không I/O):** `camera_id`, session/frame ID, timestamps, width/height, pixel format, color space/range, plane layout/stride, geometry reference và quality flags. Chưa mặc định BGR cho mọi adapter.
 - **`FrameBuffer` (port/adapter, có lifecycle):** tham chiếu dữ liệu điểm ảnh, gắn với một `FrameMetadata`. Domain chỉ thấy metadata.
 
-Contract này phải được kiểm chứng sớm bằng đường hardware decode thật (NV12, stride ≠ width, MPP buffer) từ Slice 1, không đợi Slice 3. Nếu không, các slice CPU-copy sẽ dựng trên một contract chưa từng gặp native buffer.
+Theo quyết định Q1 ngày 2026-10-11, Slice 1 dùng ONNX và software decode khi chưa chọn board; contract phải có fixtures stride ≠ width, format/color và buffer lifetime ngay từ đầu. Đường hardware decode/native buffer thật (NV12/MPP khi phù hợp) được kiểm khi chọn target, trước nghiệm thu capacity/pilot; CPU-copy tests không thay thế bằng chứng hardware.
 
 **Buffer contract:** loại CPU/native handle; read/write permission; ownership; acquire/release hoặc context lifecycle; synchronization; validity. Native handles opaque với application/domain. Không giữ frame vô hạn trong track/event history. Scheduler phải release frame khi drop/cancel/fail.
 
@@ -159,6 +159,8 @@ Event revision có thể tới trước clip; server biểu diễn `evidence_pen
 **Công nghệ dự kiến:** Python, Pydantic hoặc schema validation tương đương, typed factories, YAML.  
 **Giao tiếp:** tạo các port implementations, cung cấp immutable config snapshot/version.  
 **Chú ý:** fail fast khi model/runtime/device không tương thích; không dynamic import tùy ý từ config không tin cậy; config update phải stage/validate/activate/rollback. Không tạo universal plugin system trước có nhu cầu.
+
+Q13 ngày 2026-10-11: pipeline enabled mà thiếu/sai config phải panic/fail-fast toàn bộ analytics startup (exit nonzero, nêu pipeline/field và mask secrets), không tự bỏ pipeline hoặc báo unavailable rồi tiếp tục. Validate mọi enabled pipeline trước start analytics. Pipeline disabled được phép thiếu config nghiệp vụ và hiển thị unavailable với reason=disabled. Config activation lỗi bị reject và giữ last-known-good; recorder độc lập vẫn tiếp tục. Lỗi runtime sau startup được quy định riêng.
 
 ### 6.2 VideoSource
 
@@ -303,6 +305,8 @@ Contract phải khóa reconnect owner, session/discontinuity IDs, PTS/time mappi
 
 ### 6.15 IncidentEngine
 
+Quyết định Q5/Q9 ngày 2026-10-11: IncidentEngine nằm trong từng pipeline tính năng cảnh báo đăng ký riêng; lifecycle/config/state tách theo pipeline và camera/session. Pipeline dùng chung semantic event contract có producer pipeline provenance, chia sẻ source/detector/tracker/pose khi tương thích. Chỉ tách process khi cần fault/resource isolation; tách logic không ngăn native crash hoặc quá tải shared resource. Xem [ADR-0001](../adr/0001-feature-pipeline-boundaries.md) và [plan triển khai](implementation-plan.md).
+
 **Port:** evaluate observations/features/time→event transitions; reset/restore policy explicit.  
 **Nhiệm vụ:** tai nạn/ngã/bất động, temporal verification, hysteresis, cooldown, dedup nội bộ; attach supporting evidence/uncertainty.  
 **Dự kiến:** deterministic FSM + heuristic baseline; TCN/feature classifier hoặc video classifier khi data chứng minh cần.  
@@ -370,15 +374,17 @@ Contract phải khóa reconnect owner, session/discontinuity IDs, PTS/time mappi
 
 | Module | Nhiệm vụ / giao tiếp | Công nghệ dự kiến / chú ý |
 |---|---|---|
-| Ingestion API | Authenticate device, validate schema/limits, idempotent event revision persist, ACK | FastAPI hoặc tương đương; ACK sau durable commit, không sau chỉ enqueue RAM |
+| Ingestion API | Authenticate device, validate schema/limits, idempotent event revision persist, ACK | FastAPI/Python theo Q14; ACK sau durable commit, không sau chỉ enqueue RAM |
 | Evidence service | Authorized upload/download, checksum, object key ownership, manifest states | S3-compatible storage; scoped short-lived upload URL nếu dùng; không cho client tùy ý overwrite key khác |
-| Event repository/search | Metadata, filtering time/site/type/review | PostgreSQL, indexes theo query thực; event lineage/version preserved |
+| Event repository/search | Metadata, filtering time/site/type/review | MongoDB theo Q14; compound indexes theo query thực, unique revision và event lineage/version preserved |
 | Alert workflow | Operator assignment, ACK/escalate/resolve, notification retry | DB + worker; cứu hộ theo human review/protocol, không từ một threshold chưa nghiệm thu |
 | Retrieval service | Check local/server retention, gửi request edge, phản hồi pending/expired/offline | REST/control transport; không bảo đảm có clip ngoài thời hạn lưu |
 | Fleet/config service | Inventory, desired/observed versions, rollout status | Versioned DB/bundle store, RBAC, audit |
-| Dashboard | Live event list, evidence review, filters, health và annotation feedback | React/TypeScript dự kiến; raw access phân quyền, live preview on-demand có audit/time limit |
+| Dev demo / UI bàn giao | Lab list/detail/play/review; UI sản phẩm và annotation/fleet UX do đội giao diện làm sau | Lab HTML/JS gọi API, raw access phân quyền; đội UI nhận OpenAPI/schema/fixtures |
 
-Không coi object store và PostgreSQL là một transaction: server cần pending/finalize/reconciliation tương tự edge. Enforce unique `(device_id, event_id, revision)` trong scope device đã authenticate/authorize; cùng key khác payload hash là conflict/quarantine, không overwrite im lặng. Giữ revision history; chỉ cập nhật current view bằng revision hợp lệ mới hơn. Persist revision và server notification outbox trong cùng DB transaction; worker dùng idempotency key cho mỗi side effect. Outbox không bảo đảm exactly-once ở nhà cung cấp notification không hỗ trợ dedup/receipt. Synthetic/replay bị chặn trước khi tạo notification outbox. Journal/revisions phục vụ audit/recovery cục bộ, không cam kết event sourcing toàn hệ thống.
+Q19 thay phạm vi UI lab trong bảng trên bằng dev demo list/detail/play/review đơn giản, HTML/JS gọi public API và do FastAPI phục vụ. Annotation/fleet UX và UI production giao đội giao diện riêng qua OpenAPI/fixtures, không bắt buộc framework cho đội đó. Demo không bypass auth/download permissions hoặc ghi thẳng DB. Q18 chốt MongoDB replica set một member cho lab với persistent volume/transaction tests; production HA/restore chốt riêng.
+
+Không coi evidence storage và MongoDB là một transaction: server cần pending/finalize/reconciliation tương tự edge. Enforce unique `(device_id, event_id, revision)` trong scope device đã authenticate/authorize; cùng key khác payload hash là conflict/quarantine, không overwrite im lặng. Giữ revision history; chỉ cập nhật current view bằng revision hợp lệ mới hơn. Persist revision/current projection và server outbox intent trong cùng MongoDB transaction; cần transaction-capable replica set, topology lab chốt riêng. Commit dùng `w: majority, j: true`; timeout/unknown commit reconcile/retry bằng idempotency, không ACK giả. Worker dùng idempotency key cho mỗi side effect; không bảo đảm exactly-once ở downstream/provider thiếu dedup/receipt. Synthetic/replay bị chặn trước notification outbox. Journal/revisions phục vụ audit/recovery cục bộ, không cam kết event sourcing toàn hệ thống. [MongoDB transactions](https://www.mongodb.com/docs/manual/core/transactions-production-consideration/), [write concern](https://www.mongodb.com/docs/manual/reference/write-concern/).
 
 ## 7. Pipelines và scheduling
 
@@ -476,6 +482,8 @@ ONNX→RKNN/TRT là build/conversion workflow offline, không convert model trê
 
 Typed calls/iterators hoặc bounded queues; events nội bộ chỉ dùng khi giúp decouple workflow cụ thể. Không cần event bus toàn cục che mọi control flow. Heavy frames truyền references, metadata immutable khi qua worker boundaries. Runtime exceptions chuyển thành typed failure ở adapter boundary, logs có correlation IDs.
 
+Q17: sau startup hợp lệ, pipeline runtime fault phải báo degraded/fault, retry/restart có giới hạn và reset state/session khi mất continuity. Giữ pipeline không phụ thuộc thành phần lỗi và recorder hoạt động; shared native core crash có thể restart toàn analytics, không silent fallback. Q13 config enabled thiếu/sai vẫn fail-fast startup, không chuyển thành runtime degraded để bỏ qua.
+
 ### 9.1a Storage classes và resource ownership
 
 | Class | Nội dung | Budget / bảo vệ |
@@ -490,6 +498,8 @@ Tách directory/partition/quota chỉ hạn chế disk-full, **không loại b�
 ### 9.2 Edge–server
 
 MVP HTTPS: event POST với schema/revision/idempotency, evidence upload riêng, health heartbeat. **Command transport tách khỏi event transport:** edge sau NAT không nhận kết nối vào, nên poll định kỳ làm truy hồi evidence và rollback khẩn cấp trễ bằng một chu kỳ poll. MVP dùng HTTPS long-poll cho kênh lệnh, WebSocket/MQTT khi cần. Event vẫn chỉ có một nguồn sự thật. Có thể thêm MQTT adapter khi cần push/integration; QoS1 vẫn duplicate, retain không dùng tùy tiện cho incident commands. Không chọn đồng thời hai event transports làm hai nguồn sự thật.
+
+Theo Q6/Q10 ngày 2026-10-11, EventPublisher nằm ở server downstream để sau này thêm Kafka, RabbitMQ hoặc WebSocket; chưa triển khai adapters/dependencies. Edge giữ HTTPS; server commit event cùng downstream outbox intent rồi worker publish, không để downstream outage đảo ngược ingestion đã commit. Transport mới giữ identity/revision/idempotency và delivery result; broker ACK/WebSocket send không thay ingestion/evidence receipt hoặc chứng minh consumer đã xử lý. Q7 giữ lab review trên dashboard; placeholder không bật notification ngoài dashboard. Xem [ADR-0002](../adr/0002-server-downstream-event-publishing.md).
 
 ### 9.3 An toàn thông tin và dữ liệu
 
@@ -592,7 +602,7 @@ AI-Camera-OC/
 ├── apps/
 │   ├── edge/                      # entrypoint/CLI; thin composition root
 │   ├── server/                    # API, use cases, repositories, workers, migrations
-│   └── dashboard/                 # optional React/TS app
+│   └── dashboard/                 # UI sản phẩm tương lai do đội giao diện sở hữu; lab demo nằm trong server
 ├── schemas/                       # network JSON schemas/OpenAPI, canonical versions
 ├── configs/
 │   ├── examples/                  # no credentials; minimal reference config
@@ -725,21 +735,21 @@ Hardware/OS/drivers/SDK; model/artifact hash; input/precision/batch; source code
 
 ## 14. Kế hoạch triển khai theo vertical slices
 
-**Use case chính làm trước: person-down** (ngã/người nằm: pose, persistence, hard negatives, ít cần calibration). Tai nạn xe (calibration, ground projection, TTC, motion compensation) có nhu cầu dữ liệu và ngưỡng khác, làm sau khi person-down đạt gate Slice 2. Cùng IncidentEngine, khác rule set.
+**Use case làm trước đã xác nhận ở Q11: person-down**, một camera cố định/ROI lòng đường (ngã/người nằm: pose, persistence, hard negatives, ít cần calibration). Theo Q5/Q9, mỗi tính năng cảnh báo là pipeline register riêng với lifecycle/config/state độc lập theo camera/session và event contract chung có pipeline provenance. Registry dùng allowlisted factories, chia sẻ perception khi tương thích; chỉ tách process khi cần fault/resource isolation. Nhánh tai nạn xe (calibration, ground projection, TTC, motion compensation) triển khai sau gate person-down, không triển khai đồng thời chỉ vì có registry.
 
 **Module theo slice** (module không có trong slice hiện tại thì không tạo code/port, kể cả file rỗng):
 
 | Slice | Module/yêu cầu |
 |---|---|
-| 1 (MVP) | Config/composition root, VideoSource (file+RTSP), Python reference pipeline (oracle), native perception core khung tối thiểu: 1 đường HW decode + ORT C++ detector + NMS + binding, Tracker, IncidentEngine tối thiểu, recorder process riêng, EventJournal/Outbox/Uploader, Ingestion API + review tối thiểu |
-| 2 | Quality & ODD Monitor, PoseScheduler/Estimator, negative audit + data engine tối thiểu |
-| 3 | RKNN/RGA backends trong native core, ByteTrack C++ + pose trong core, Model Registry, model conversion pipeline |
+| 1 (MVP) | Config/composition root, VideoSource (file+RTSP), Python reference pipeline (oracle), native core: software decode + ORT C++ detector + NMS + ByteTrack C++ + binding, IncidentEngine tối thiểu, recorder process riêng, EventJournal/Outbox/Uploader, Ingestion API + review tối thiểu |
+| 2 | Quality & ODD Monitor, PoseScheduler/Estimator với pose native ONNX, negative audit + data engine tối thiểu |
+| 3 | RKNN/RGA backends trong native core khi chọn target, hardware buffer verification, Model Registry, model conversion pipeline |
 | 4 (Pilot prep) | Retention đầy đủ, DeviceHealth/FleetControl, device trust lifecycle, SBOM/release provenance, RBAC/audit, signed rollout, retrieval, GroundProjector/Calibration + MotionAnalyzer cho use case tai nạn xe |
 | 5 (Target) | TPM/secure element theo SKU, MotionCompensator, CameraNativeAnalytics, PTP nếu chứng minh cần |
 
 ### Slice 1 — Một camera đến một sự kiện có clip
 
-File + RTSP source, CPU/ONNX detector, ByteTrack, một FSM cơ bản, compressed recorder (process riêng), local journal/outbox, HTTP ingress server, event review tối thiểu. Chạy **trên phần cứng đích** (không chỉ máy reference) để lộ sớm nhiệt, decode và I/O thật; có ít nhất một đường hardware decode (NV12/stride/MPP) để kiểm chứng `FrameBuffer`. Kèm các quyết định/spike trước nghiệm thu:
+File + RTSP source, CPU/ONNX detector, ByteTrack C++ trong native core (Python làm oracle), một FSM cơ bản, compressed recorder (process riêng), local journal/outbox, HTTP ingress server, event review tối thiểu. Khi chưa chọn board, chạy software decode + ONNX trên nền tảng lab có runtime hỗ trợ; x86/Raspberry Pi/board khác cần build và E2E test riêng để xác nhận hỗ trợ. Gate Slice 1 không bắt buộc board đích hoặc hardware decode. Khi chọn target phải đo nhiệt/decode/I/O và kiểm `FrameBuffer` trên hardware thật trước nghiệm thu capacity/pilot. Kèm các quyết định/spike trước nghiệm thu:
 
 - **Facts sheet + preliminary SLO:** hardware/camera/storage/network/power inventory và workload/retention trước BOM; storage reserve/quota tối thiểu và disk-full fault từ Slice 1, không đợi Slice 4.
 - **ADR stream ownership:** chọn dual sessions hoặc upstream + relay theo §6.3a; chưa tạo ADR accepted khi camera benchmark chưa có.

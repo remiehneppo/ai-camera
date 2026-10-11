@@ -6,6 +6,8 @@
 
 Owner dưới đây là vai trò đề xuất; chủ dự án phải gán người cụ thể, ngày và link bằng chứng trước khi đánh dấu đạt. `TBD`, `null`, `REQUIRED` là thiếu dữ liệu, không phải giá trị nghiệm thu.
 
+Quyết định vòng 1 ngày 2026-10-11: chưa chọn board; ONNX/software decode làm baseline lab, event ring + clip sự kiện, một server lab nội bộ. G1 lab không đòi hardware đích; inventory lab ghi thực tế, mục target chưa chọn ghi rõ pending. Trước nghiệm thu target capacity/pilot vẫn cần facts, decoder/buffer và benchmark trên thiết bị thật; kết quả x86 không chứng minh Raspberry Pi hoặc RKNN đã đạt. Tracker C++ ở P1, pose native ở P2; backend mới phải giữ contract semantic và vượt conformance/event regression.
+
 | Artifact | Nội dung bắt buộc | Owner đề xuất | Gate |
 |---|---|---|---|
 | Physical/facts sheet | Camera SKU/firmware; main/sub codec/profile/bitrate/FPS; concurrent sessions đã test; board/RAM/OS/kernel/SDK; storage SKU/TBW/filesystem; switch/VLAN/WAN; UPS/power/thermal enclosure | Edge/platform | Trước BOM và Slice 1 |
@@ -21,6 +23,8 @@ Owner dưới đây là vai trò đề xuất; chủ dự án phải gán ngư�
 | Central SLA/restore | Ingestion/DB/object-store failure domain, durable receipts, backup/restore/HA theo SLA | Backend + operations | Trước fleet theo SLA |
 
 ## Site profile tối thiểu
+
+Target lab đã xác nhận ở Q6: pre-roll 10 giây, post-roll 20 giây, event ring 10 phút, server giữ clip 7 ngày và edge outage budget 24 giờ cho clip chưa ACK. Đây là đầu vào sizing; chưa xác nhận quota, bitrate/event rate, time-to-full hoặc bảo đảm autonomy. Q12 bảo vệ pinned/unACK evidence, dọn dữ liệu được phép trước; vẫn thiếu thì degraded và evidence mới partial/failed. Không tự xóa evidence chưa ACK khi vượt 24 giờ. State/outbox có reserve hữu hạn; khi journal không commit được phải báo fault và không ACK giả.
 
 Minh họa dữ liệu cần thu thập, chưa phải schema runtime. Không đưa credential hoặc URI có password vào hồ sơ.
 
