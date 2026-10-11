@@ -148,7 +148,7 @@ Owner: Edge/platform. Source: `bootstrap/`, `apps/edge/`, `model_manifests/`.
 
 Q13: validate toàn bộ pipeline được enable trước khi start analytics; missing/invalid config, registry ID hoặc artifact/capability không đáp ứng phải làm startup fail với tên pipeline và field/lý do, exit nonzero, log đã mask secrets. Không catch rồi bỏ pipeline hoặc hạ thành unavailable để startup thành công. Pipeline disabled không cần đầy đủ config nghiệp vụ, được hiển thị unavailable với reason=disabled. Config activation lỗi bị reject, giữ last-known-good theo B04; recorder có lifecycle độc lập, không bị shutdown chỉ vì analytics config sai. Q17 áp dụng sau startup hợp lệ: fault/degraded rõ, retry/restart có giới hạn, reset state/session khi mất continuity; pipeline độc lập và recorder tiếp tục. Shared native crash có thể restart toàn analytics; không silent fallback hoặc áp dụng recovery để bỏ qua config lỗi.
 
-Model Registry P1 chỉ cần exact manifest lookup/hash; catalog backend, conversion report và signed release mở ở M13/M16. Không dựng service registry riêng.
+Model Registry P1 chỉ cần exact manifest lookup/hash; catalog backend, conversion report và signed release mở ở M15/M16. Không dựng service registry riêng.
 
 ### M03 — VideoSource, demux và decoder (P1)
 
@@ -418,3 +418,14 @@ Không ước lượng ngày/person-week hoặc chốt BOM khi chưa biết nhâ
 - Glossary/domain context cập nhật khi taxonomy được chốt; không nhồi SDK/schema/runtime decisions vào định nghĩa thuật ngữ.
 
 Plan này chỉ tạo công việc và acceptance. Mọi trạng thái `đạt` phải liên kết artifact thực; chưa có benchmark, legal clearance hoặc field pilot mới từ việc viết tài liệu.
+
+## 8. Bộ checklist để thực hiện backlog
+
+Bộ checklist ngày 2026-10-11 giữ nguyên 18 module/89 task IDs ở trên và bổ sung từng bước implement, SOLID theo module, contract/caller scope, failure checks và evidence record. Đây là tài liệu kế hoạch, chưa claim hoặc triển khai runtime, chưa xác nhận gate đạt.
+
+- [Mục lục checklist và dependency/ownership](../implementation-checklists/README.md).
+- [Phân tích kiến trúc và làm rõ contract/integration dependencies](../implementation-checklists/architecture-analysis.md).
+- [Kiểm tra xuyên module và release gates](../implementation-checklists/integration-release.md).
+- [PRD và tracker module](../../.scratch/system-build/PRD.md).
+
+Checklist làm rõ cách phân kỳ B04 local activation/T02 signed rollout, QL03 camera movement/G01 geometry contract và O04/A05 shared integration run; không bỏ các prerequisites nghiệm thu hoặc đổi ADR accepted. S01 downstream intent/guard có baseline P1, W02 worker/provider chỉ khi protocol được bật; lab vẫn dashboard-only.
