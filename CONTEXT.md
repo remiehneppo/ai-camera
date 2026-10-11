@@ -49,8 +49,15 @@ _Avoid_: Sự kiện tai nạn.
 **Track**: Chuỗi quan sát được liên kết theo thời gian trong một phiên camera.
 _Avoid_: Danh tính người, định danh liên camera.
 
+**Origin**: Nguồn chạy live, replay hoặc synthetic; bất biến suốt event và độc lập taxonomy nghiệp vụ.
+_Avoid_: Đổi replay thành live ở revision sau.
+
+**Review freshness**: Quan hệ giữa quyết định review và event/evidence versions đã được người trực xem. Thông tin mới có ý nghĩa tạo cờ cần xem lại, không tự xóa quyết định trước.
+_Avoid_: Mọi AI revision mới tự reset review.
+
 ## Tài liệu liên quan
 
+- [Mục lục tài liệu](docs/README.md) và [hợp đồng tích hợp](docs/architecture/contracts.md).
 - [Plan theo module](docs/architecture/implementation-plan.md).
 - [Deployment readiness](docs/architecture/deployment-readiness.md).
 - Quyết định chưa chốt nằm trong plan/readiness; không coi đề xuất là quyết định accepted.

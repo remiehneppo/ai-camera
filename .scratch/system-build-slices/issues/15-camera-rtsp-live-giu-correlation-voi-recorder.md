@@ -17,7 +17,7 @@ Owner: Edge/platform; chưa claim.
 
 Task nguồn: V02, V03, V04, F04, R01.
 
-Task IDs là mapping phạm vi baseline/integration/hardening; chỉ Blocked by mới là dependency ticket. Không phải hoàn thành toàn module nguồn trước khi làm lát cắt này.
+Task IDs là mapping phạm vi baseline/integration/hardening; Blocked by là dependency chung; Conditional blockers áp dụng theo target đã chọn. Không phải hoàn thành toàn module nguồn trước khi làm lát cắt này.
 
 ## External prerequisites / activation gate
 

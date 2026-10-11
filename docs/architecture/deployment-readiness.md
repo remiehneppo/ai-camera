@@ -49,10 +49,10 @@ workload:
   pose_mean_roi_per_second: null
   pose_burst_roi_per_second: null
 evidence:
-  mode: REQUIRED # continuous_nvr hoặc event_ring
-  pre_roll_seconds: null
-  post_roll_seconds: null
-  ring_hours: null
+  mode: event_ring
+  pre_roll_seconds: 10
+  post_roll_seconds: 20
+  ring_minutes: 10
   pinned_retention_policy_ref: REQUIRED
   quota_and_reserve_ref: REQUIRED
 network:
@@ -65,6 +65,14 @@ acceptance:
   approved_by: null
   approved_at: null
 ```
+
+## Sizing evidence và phục hồi WAN
+
+Anchor/ranges và pin recovery theo [contracts §3](contracts.md). Với ring10 phút, phải đo maximum anchor-to-pin delay gồm verification/scheduling/handoff/recovery cộng pre10 giây và clock/keyframe margin; vượt budget báo partial/missing, không coi clip đủ chiều dài là đủ onset.
+
+F03/J05 ghi backlog B, tốc độ upload hữu dụng U và tốc độ sinh evidence G cùng đơn vị. Nếu U ≤ G thì backlog không thoát; nếu U > G, thời gian drain xấp xỉ B/(U−G). Đo cả burst, pin/temp/proxy/WAL/reserve và lúc upload cạnh tranh recording. Outage24h không phải TTL xóa protected data.
+
+G3 áp dụng target thực: ONNX vẫn phải native/oracle/event conformance và soak; chỉ thêm conversion/RKNN parity khi chọn RKNN. Chưa chọn target thì chưa ký capacity, nhưng không chặn lab ONNX.
 
 ## Manifest benchmark tối thiểu
 

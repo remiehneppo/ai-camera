@@ -1,0 +1,38 @@
+topic: 'AI Camera giao thông xử lý tại edge: tai nạn, té ngã, vi phạm'
+research_date: '2026-10-09'
+updated_date: '2026-10-11'
+architecture_reference: '../docs/architecture/system-architecture.md'
+language: vi
+status: 'Đồng bộ thiết kế/contracts; chưa benchmark, giá giữ ngày quan sát09–10-10'
+scope:
+  literature: 'Không giới hạn; ưu tiên nguồn gốc còn phù hợp'
+  prices: 'Quan sát lịch sử09–10-10-2026; cần quote mới trước procurement'
+  baseline: 'Một camera person-down; ONNX/native C++ + Python; capacity/FPS theo target benchmark'
+  medical_boundary: 'Cảnh báo ngã/quỵ xuống/bất động; không chẩn đoán đột quỵ'
+items:
+  - {id: camera, name: 'Camera IP cố định RTSP/ONVIF, WDR, ánh sáng, ống kính, PoE'}
+  - {id: jetson, name: 'Orin Nano Super devkit; Orin NX module và máy sản xuất; Thor tham khảo'}
+  - {id: x86, name: 'Intel N100/N150 OpenVINO; x86 NVIDIA GPU'}
+  - {id: npu, name: 'RPi5/ONNX CPU; OrangePi5/RKNN; Hailo tùy chọn'}
+  - {id: camera_poc, name: 'Tapo C100/C110/C200/C310; EZVIZ H1c RTSP; A9 chưa xác minh'}
+  - {id: camera_module, name: 'IMX219-160 CSI so với camera IP, pixel-on-target/ISP/IR'}
+  - {id: portable_architecture, name: 'Semantic ports/adapters, buffer/timestamp/coordinate contracts, backend regression'}
+  - {id: all_in_one, name: 'Camera AI tích hợp; radar bổ sung; tích hợp VMS'}
+  - {id: detector, name: 'YOLOX; RTMDet; RT-DETR/PaddleDetection; giấy phép weights'}
+  - {id: tracker, name: 'ByteTrack; bù chuyển động camera; ReID tùy nhu cầu'}
+  - {id: pose, name: 'RTMPose/MMPose; temporal skeleton và video classifier'}
+  - {id: runtime, name: 'TensorRT, DeepStream, ONNX Runtime, OpenVINO, NPU SDK'}
+  - {id: multimedia, name: 'GStreamer, FFmpeg, MediaMTX; decode, remux, bộ đệm clip'}
+  - {id: events, name: 'Tai nạn nghi ngờ, ngã/bất động, vật cản, ngược chiều, đèn đỏ, tốc độ, helmet/ANPR'}
+  - {id: calibration, name: 'Homography, timestamp, sai số, drift, kiểm định tốc độ'}
+  - {id: data, name: 'DoTA/DAD/TAD; UR/UP-Fall/Le2i/OmniFall; quyền dữ liệu và domain shift'}
+  - {id: backend, name: 'HTTPS/FastAPI/MongoDB, full snapshots, evidence receipts, review freshness, downstream eligibility'}
+  - {id: operations, name: 'OTA, watchdog, health, tủ, UPS, chống sét, bảo trì'}
+  - {id: governance, name: 'Giấy phép thương mại, chuỗi bằng chứng, dữ liệu cá nhân Việt Nam'}
+  - {id: acceptance, name: 'Event-level metrics, camera-ngày, P95/P99, overload, pilot'}
+deliverables:
+  - fields.yaml
+  - report.md
+  - prices.csv
+  - sources.md
+  - README.md

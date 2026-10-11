@@ -1,13 +1,11 @@
-# M15 — Model Registry, conversion và RK3588 (P3)
+# M15 — Target conformance/capacity; RKNN có điều kiện (P3)
 
-Status: needs-triage
-Execution: not-started
-Scope claimed: chưa claim
+Document role: acceptance/checklist; tiến độ ở tracker slices.
 Owner: ML + Edge; người phụ trách cụ thể chưa gán.
 Phase: P3 sau target selection
 Updated: 2026-10-11
 
-> Đây là issue/checklist kế hoạch. Không checkbox nào chứng minh runtime đã implement. Triage state khác trạng thái thực hiện; cần gán owner trước khi claim.
+> Checklist nghiệm thu theo module; claim/Execution nằm trong [tracker slices](../../system-build-slices/PRD.md). Chỉ tick khi có evidence từ ticket tương ứng.
 
 [Mục lục và quy tắc](../../../docs/implementation-checklists/README.md) · [Plan nguồn](../../../docs/architecture/implementation-plan.md) · [Kiểm tra tích hợp](../../../docs/implementation-checklists/integration-release.md)
 
@@ -21,10 +19,11 @@ Updated: 2026-10-11
 
 ## Điều kiện bắt đầu
 
-- [ ] Owner cụ thể nhận module và ghi task/phase sẽ làm trong Comments.
-- [ ] Đọc CONTEXT.md, ADR liên quan, kiến trúc và task nguồn; ghi conflict trước khi đổi quyết định.
-- [ ] Các prerequisites ở từng task có artifact hoặc fake/fixture contract đã thống nhất; fake chỉ mở unit/contract work, không thay acceptance tích hợp.
-- [ ] Chốt input/output/error/reset/version semantics với producer/consumer; số chưa đo ghi null/preliminary, không tự đặt threshold sản phẩm.
+Áp dụng [Definition of Ready/Done chung](../../../docs/implementation-checklists/README.md). Claim ticket slices, đọc ADR/contracts, thống nhất inputs/owner và prerequisites; fixture chỉ mở unit work, không thay acceptance thật.
+
+## Contract hiện hành
+
+Đối chiếu [contracts §8 RKNN conditional, actual-target conformance/capacity bắt buộc](../../../docs/architecture/contracts.md). Protocol tại đây thay các diễn giải sơ lược bên dưới; acceptance phải bao phủ producer/consumer liên quan.
 
 ## Các bước triển khai theo task
 
@@ -57,12 +56,12 @@ Phụ thuộc nguồn: `A02,I05`.
 - [ ] **A03.01** — Chạy contract + detection/pose/tracker conformance và full event replay regression.
 - [ ] **A03.02** — So với tolerance C05 trên golden và held-out, gồm empty/unsupported/stale/quality cases.
 - [ ] **A03.03** — Lưu parity report/hash; fail thì chặn release, không gọi đổi backend chỉ là đổi file config.
-- [ ] **A03.AC** — Nghiệm thu: Golden + held-out tolerance đạt; failed/fallback không báo normal.
+- [ ] **A03.AC** — Nghiệm thu RKNN: Golden + held-out tolerance đạt; failed/fallback không báo normal.
 - [ ] **A03.EV** — Ghi test/fixture ID, expected/actual, lệnh chạy thật và artifact/report path trong Comments; ghi rõ phần chưa chạy hoặc blocked.
 
 ### A04 — Profile copies/queue/infer/fsync/upload/thermal; tối ưu hotspot đã đo
 
-Phụ thuộc nguồn: `A03,O03,R06`.
+Phụ thuộc nguồn: `C05,I05,O03,R06; A03 nếu RKNN`.
 
 - [ ] **A04.01** — Profile decode/copies/preprocess/queue/infer/fsync/upload/thermal trên hardware thật.
 - [ ] **A04.02** — Tối ưu bottleneck đã đo bằng dependency/platform hiện có; kiểm ownership khi giảm copy.
@@ -90,16 +89,9 @@ Phụ thuộc nguồn: `A04,O04`.
 
 Ca tích hợp cần phối hợp: **X03, X22, X25, X26**. Xem bước inject/expected/gate tại [ma trận kiểm lỗi](../../../docs/implementation-checklists/integration-release.md). Chỉ chạy case thuộc phase/scope đang claim; case phase sau giữ not-run.
 
-## Checklist review và hoàn tất module
+## Review và hoàn tất
 
-- [ ] Mỗi nhánh/loop/parser hoặc state transition mới có unit/contract test meaningful; không chỉ test mock được gọi.
-- [ ] Happy path, invalid/missing/stale input, retry/duplicate/concurrency nếu áp dụng, failure và recovery đã được kiểm; ghi N/A có lý do khi không liên quan.
-- [ ] Rà tất cả callers/consumers, schema fixtures, config examples, exports/bindings/migrations và docs chịu ảnh hưởng; không bỏ consumer cũ.
-- [ ] Review SRP/OCP/LSP/ISP/DIP theo seam thật của module; không thêm interface cho helper hoặc generic framework để đạt hình thức.
-- [ ] Integration với producer/consumer thực đã chạy cho phase này; fake/unit pass không tự đánh dấu module hoặc gate đạt.
-- [ ] Logs/errors có correlation và redact secrets; bounds/timeout/release/cleanup/security cần thiết đã kiểm.
-- [ ] Ghi report và giới hạn vào docs/logs; chỉ tick task đã có evidence, task phase sau vẫn mở.
-- [ ] Handoff có schema/config/artifact versions, commands để reproduce, residual risks và owner gate tiếp theo.
+Áp dụng [quy tắc review/Done chung](../../../docs/implementation-checklists/README.md) và [release cases](../../../docs/implementation-checklists/integration-release.md). Lưu artifact/lệnh/expected-actual/giới hạn ở ticket thực thi, liên kết vào evidence record dưới đây; không đánh dấu gate chỉ từ unit tests.
 
 ## Evidence record
 

@@ -13,11 +13,15 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 - [ ] Case X01–X19 và baseline X27/X31 có manifest/results; browser API thật, metadata trước clip.
 - [ ] P95 durable edge commit→render ≤5s trên LAN có sample count/clock uncertainty; không ký AI quality/hardware capacity.
 
+- [ ] Semantic replay parity và realtime stress là hai report riêng; có evidence anchor/pin-crash/partial-uploaded/snapshot/re-review checks X38–X43.
+
+Chuẩn semantic: [Hợp đồng tích hợp](../../../docs/architecture/contracts.md).
+
 ## Traceability
 
 Task nguồn: F06, C05, UI01, R06.
 
-Task IDs là mapping phạm vi baseline/integration/hardening; chỉ Blocked by mới là dependency ticket. Không phải hoàn thành toàn module nguồn trước khi làm lát cắt này.
+Task IDs là mapping phạm vi baseline/integration/hardening; Blocked by là dependency chung; Conditional blockers áp dụng theo target đã chọn. Không phải hoàn thành toàn module nguồn trước khi làm lát cắt này.
 
 ## Evidence và handoff
 
@@ -26,3 +30,5 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 ## Comments
 
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
+
+- 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.

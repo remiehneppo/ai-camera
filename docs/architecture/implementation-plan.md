@@ -1,8 +1,8 @@
 # Plan xây dựng hệ thống AI Camera giao thông
 
-**Ngày:** 2026-10-11. **Trạng thái:** Q1–Q19 đã được người dùng xác nhận/làm rõ; bản tổng hợp chờ xác nhận hiểu đúng trước khi triển khai. Chưa triển khai runtime, chưa có nghiệm thu hardware. Facts, targets theo site và quyết định production được xử lý ở các gate tương ứng.
+**Ngày:** 2026-10-11. **Trạng thái:** Thiết kế/backlog đã được duyệt và cập nhật theo review; tracker slices là đơn vị thực thi. Chưa triển khai runtime, chưa có nghiệm thu hardware. Facts, targets theo site và quyết định production được xử lý ở các gate tương ứng.
 
-Nguồn chuẩn: [kiến trúc hệ thống](system-architecture.md), [deployment readiness](deployment-readiness.md), [đối chiếu review mới nhất](../logs/2026-10-11-architecture-review-response.md). Khi log lịch sử khác kiến trúc hiện hành, dùng kiến trúc hiện hành. Các đường dẫn source dưới đây là vị trí dự kiến, chỉ tạo khi task tương ứng bắt đầu.
+Nguồn chuẩn: [kiến trúc hệ thống](system-architecture.md), [deployment readiness](deployment-readiness.md), [hợp đồng tích hợp](contracts.md) và [tracker thực thi](../../.scratch/system-build-slices/PRD.md). [Mục lục docs](../README.md) xác định nguồn chuẩn; log/research không ghi đè thiết kế hiện hành. Các đường dẫn source dưới đây là vị trí dự kiến, chỉ tạo khi task tương ứng bắt đầu.
 
 ## 1. Kết quả cần xây và phạm vi
 
@@ -40,9 +40,9 @@ Không implement đồng thời nhiều detector/backend, không tạo tất c�
 | Q10 | Vị trí publisher mở rộng | Edge→server dùng HTTPS; server durable-commit event trước rồi phát downstream qua outbox/EventPublisher | S01/W02; Kafka/RabbitMQ/WebSocket chỉ là future adapters |
 | Q11 | Scope đầu tiên | Person-down trước, một camera cố định và ROI lòng đường; vehicle pipeline làm sau | F02, I01–I05, G1/G2 |
 | Q12 | Quota cạn | Bảo vệ pinned/unACK evidence; dọn dữ liệu được phép; vẫn thiếu thì degraded + evidence partial/failed, metadata/outbox có reserve riêng | R04/R05/J01/H01; không tự xóa unACK sau 24 giờ |
-| Q13 | Config pipeline | Enabled mà config thiếu/sai phải panic/fail-fast startup với lỗi rõ; disabled được đánh dấu unavailable/disabled, không âm thầm bỏ qua config sai của pipeline enabled | B01–B03/O01, validation trước start analytics; runtime fault policy chốt riêng |
-| Q14 | Backend stack | FastAPI/Python + MongoDB | S01/S02/W01; topology MongoDB, dashboard và evidence storage chốt tiếp |
-| Q15 | Packaging lab | Docker Compose server/DB/dashboard; edge native C++ + Python riêng với service manager/watchdog; replay cùng composition | Build/deploy/runbook và lifecycle recorder độc lập |
+| Q13 | Config pipeline | Enabled mà config thiếu/sai phải panic/fail-fast startup với lỗi rõ; disabled được đánh dấu unavailable/disabled, không âm thầm bỏ qua config sai của pipeline enabled | B01–B03/O01, validation trước start analytics; runtime fault theo Q17 |
+| Q14 | Backend stack | FastAPI/Python + MongoDB | S01/S02/W01; replica set lab Q18, demo Q19 và filesystem evidence lab; production storage/HA còn mở |
+| Q15 | Packaging lab | Docker Compose server (phục vụ dev demo) + DB; edge native C++ + Python riêng với service manager/watchdog; replay cùng composition | Build/deploy/runbook và lifecycle recorder độc lập |
 | Q16 | Lab latency/evidence | P95 edge durable event commit→dashboard ≤5 giây trên LAN; đủ pre/post nếu nguồn có dữ liệu, partial khi gap | G1 metrics clock/correlation; không gồm temporal verification, không chứng minh recall/FPS/capacity |
 | Q17 | Runtime fault | Sau startup hợp lệ, fault/degraded rõ + bounded retry/reset; pipeline độc lập và recorder tiếp tục; shared native crash restart analytics/reset session | O02/O03/H01/T06; không silent fallback hoặc dùng runtime recovery để bỏ qua config sai |
 | Q18 | MongoDB lab | Replica set một member, persistent volume và transaction/retry tests; không phải HA | S01/W01, Compose bootstrap/readiness; production topology chốt riêng |
@@ -69,7 +69,7 @@ Các số cần ký ở P0: vùng ODD, latency, false-alert/review capacity, rec
 
 Đây là vai trò, chưa gán nhân sự hay hứa lịch hoàn thành. Một người có thể nhận nhiều vai trò. Tách ownership Edge/Backend/Frontend theo đường dẫn; sửa `schemas/` phải có review của cả producer và consumer. Không giao hai người sửa cùng task/module khi chưa thống nhất người tích hợp.
 
-Mỗi issue nhỏ phải ghi: ID, owner, `Status:`, prerequisites, phạm vi file, contract thay đổi, đầu ra, acceptance và bằng chứng. Khi materialize issue dùng `.scratch/system-build/issues/<NN>-<slug>.md` theo [quy ước tracker](../agents/issue-tracker.md). Task trong bảng là backlog đề xuất, chưa được claim hoặc đánh dấu hoàn thành.
+Mỗi issue nhỏ phải ghi: ID, owner, `Status:`, prerequisites, phạm vi file, contract thay đổi, đầu ra, acceptance và bằng chứng. Ticket thực thi hiện ở `.scratch/system-build-slices/issues/<NN>-<slug>.md`; checklist module ở `.scratch/system-build/issues/` theo [quy ước tracker](../agents/issue-tracker.md). Task trong bảng là phạm vi/acceptance; claim và Execution chỉ cập nhật ở tracker slices. Checklist module giữ mapping và bằng chứng, không là tracker thứ hai.
 
 ## 3. Phase và dependency
 
@@ -78,7 +78,7 @@ Mỗi issue nhỏ phải ghi: ID, owner, `Status:`, prerequisites, phạm vi fil
 | P0 — Khóa đầu vào | Facts, use case, contracts, dataset mẫu, preliminary SLO và storage budget | G0: Q1–Q3 đã xử lý cho nhánh cần làm; target/owner rõ; không nhầm TBD là đạt |
 | P1 — Vertical slice lab | File/RTSP, ONNX oracle + native detector/tracker, software decode, recorder, FSM tối thiểu, journal/upload/server/review | G1: một sự kiện replay/live có clip và provenance; crash/retry đúng; buffer lifecycle/stride được test; chưa ký capacity hardware đích |
 | P2 — Person-down | Quality/ODD, pose scheduling/native pose, temporal rules, hard negatives, negative audit | G2: event regression + track-gap tests + báo cáo recall/FP/coverage theo ODD |
-| P3 — RK3588 và capacity | RKNN/RGA, artifact pipeline, parity, đo concurrency/thermal | G3: output/event parity đạt tolerance; capacity envelope đo cả record/upload |
+| P3 — Target conformance và capacity | Backend đã chọn, parity và concurrency/thermal; RKNN/RGA chỉ nếu chọn RK3588 | G3: output/event parity đạt tolerance; capacity envelope đo cả record/upload |
 | P4 — Sẵn sàng field pilot | Recovery/retention đầy đủ, identity/RBAC/audit, signed rollout, fleet/retrieval, vehicle branch | G4a: hệ person-down đủ reliability/security; G4b riêng cho vehicle nếu bật use case này |
 | P5 — Field pilot → fleet | Site ODD/calibration, field data, review operation, final targets, restore và rollout drills | G5: ký field acceptance và quyết định mở rộng; chưa đạt thì quay lại module liên quan |
 
@@ -94,7 +94,9 @@ flowchart TD
   R --> G1
   F --> G1
   G1 --> P2[P2 Person-down / quality / data engine]
-  P2 --> P3[P3 RKNN / parity / capacity]
+  P2 --> P3[P3 Target conformance / capacity]
+  P2 -. target RKNN .-> RK[Conversion / RKNN parity]
+  RK --> P3
   P3 --> P4[P4 Reliability / trust / fleet]
   P2 --> V[Calibration / motion / vehicle branch]
   V --> G4B[G4b Vehicle acceptance riêng]
@@ -106,7 +108,7 @@ Có thể nghiên cứu export RKNN sớm trong P0 để phát hiện model khô
 
 ## 4. Backlog chi tiết từng module
 
-Mỗi dòng là đơn vị công việc có thể review riêng. `Phụ thuộc` tham chiếu ID công việc; các task còn lại trong cùng module đi theo thứ tự trừ khi nêu khác. Test cases trong acceptance phải dùng fixtures có version, không chỉ demo thủ công.
+Mỗi dòng là đơn vị công việc có thể review riêng. `Phụ thuộc` tham chiếu input/contract của task; thứ tự claim thực tế là Blocked by/Conditional blockers trong tracker slices. Một task có thể được thực hiện dần qua nhiều ticket, không đợi toàn module hoàn thành. Test cases trong acceptance phải dùng fixtures có version, không chỉ demo thủ công.
 
 ### M00 — Facts, scope và acceptance (P0)
 
@@ -116,7 +118,7 @@ Owner: Product/operations + Edge + ML. Output: site profile/readiness records d�
 |---|---|---|---|
 | F01 | Ghi hardware/camera/firmware/OS/SDK/storage/power/network đang có; đánh dấu số chưa đo | Q1 | Facts sheet truy được từng thiết bị; không suy camera marketing thành capability |
 | F02 | Chọn một site/ROI person-down và positive/hard-negative scenarios; xác định người ký | — | ODD gồm kích thước người, ánh sáng/che khuất và tình huống unsupported |
-| F03 | Khóa workload/pre-post/ring/pins/offline/review load và preliminary SLO | F01,F02,Q2 | Owner ký target thử nghiệm; capacity chưa đo ghi rõ |
+| F03 | Khóa workload/pre-post/ring/pins/offline/review load và preliminary SLO | F01,F02,Q2 | Owner ký target thử nghiệm; capacity chưa đo ghi rõ. Contract: [contracts §3 anchor-to-pin/ring budget](contracts.md). |
 | F04 | Probe RTSP sessions, main/sub/codec, reconnect/time mapping; chọn stream ADR | F01 | Có trace/video và kill test thiết kế; main/sub được đánh giá theo pixel-on-target |
 | F05 | Kiểm tra exact checkpoint/hash/license, quyền dataset; spike export target | F01 | Manifest nguồn rõ; production clearance chưa có được đánh dấu gate, không tự suy từ code license |
 | F06 | Tạo failure matrix và test manifest template từ readiness | F03,F04 | Mỗi lỗi có expected state, protected data, RTO/gap budget, owner và evidence cần thu |
@@ -127,13 +129,13 @@ Owner: Domain + Edge + ML + Backend. Source dự kiến: `domain/contracts/`, `s
 
 | ID | Việc cụ thể | Phụ thuộc | Điều kiện hoàn thành |
 |---|---|---|---|
-| C01 | Định nghĩa IDs/session/epoch, event-time/receive-time/monotonic và discontinuity | F02 | Replay fast/realtime cho cùng temporal outcome; clock jump không tạo motion giả |
-| C02 | Khóa FrameMetadata/Buffer lifecycle, transforms, observation statuses và track/pose association | C01 | Fixture NV12/stride, ROI/letterbox, missing/stale có expected semantic output |
-| C03 | Khóa IncidentEvent/EvidenceManifest/network revision/receipt và compatibility policy | C01 | Validate unknown provenance tường minh; malformed khác event hợp lệ; no secrets/local paths in public URL |
+| C01 | Định nghĩa IDs/session/epoch, event-time/receive-time/monotonic và discontinuity | F02 | Semantic replay fast/paced với cùng inputs cho cùng temporal outcome; clock jump không tạo motion giả |
+| C02 | Khóa FrameMetadata/Buffer lifecycle, transforms, observation statuses và track/pose association | C01 | Fixture NV12/stride, ROI/letterbox, missing/stale có expected semantic output. Contract: [contracts §1 PerceptionPipeline và status theo stage](contracts.md). |
+| C03 | Khóa IncidentEvent/EvidenceManifest/network revision/receipt và compatibility policy | C01 | Validate unknown provenance tường minh; malformed khác event hợp lệ; no secrets/local paths in public URL. Contract: [contracts §2–§6 full snapshots/origin, pin/ranges/evidence, review/eligibility](contracts.md). |
 | C04 | Chọn một định nghĩa struct chung và generator tối thiểu cho native/Python; adapter serialization | C02 | Không duy trì hai enum/struct chép tay; round-trip metadata và version mismatch có tests |
-| C05 | Xây bộ conformance versioned: transform, detection/pose tolerance, tracker sequences, event outputs | C02,C03,F05 | Hash fixtures + tiêu chí so sánh rõ; exact equality chỉ cho phần deterministic, không ép tensor parity tuyệt đối |
+| C05 | Xây bộ conformance versioned: transform, detection/pose tolerance, tracker sequences, event outputs | C02,C03,F05 | Hash fixtures + tiêu chí so sánh rõ; exact equality chỉ cho phần deterministic, không ép tensor parity tuyệt đối. Contract: [contracts §1/§7 same-consumer conformance và semantic replay](contracts.md). |
 
-Ranh giới thay engine là contract semantic: đầu vào có frame/ROI, format/layout/stride, transform, timestamp và session/frame/track IDs; đầu ra detection/pose có tọa độ ảnh gốc, class/keypoint schema, confidence, status và correlation. Adapter/model manifest sở hữu tensor names/shapes/dtype/quantization và pre/postprocess của từng engine. Không ép ONNX và RKNN có tensor ABI giống nhau; tracker/domain/server/UI không phụ thuộc tensor vendor. Đổi engine phải vượt C05, detection/pose tolerance và event regression trên cùng fixtures; missing/failed không được đổi thành negative.
+Ranh giới ứng dụng là PerceptionPipeline lifecycle/observations/request_pose. Các stage nội bộ khi thay engine giữ frame/ROI/format/stride/transform/timestamps/IDs; đầu ra canonical detection/pose có tọa độ gốc, schema, status riêng và correlation. Adapter/model manifest sở hữu tensor names/shapes/dtype/quantization và pre/postprocess của từng engine. Không ép ONNX và RKNN có tensor ABI giống nhau; tracker/domain/server/UI không phụ thuộc tensor vendor. Đổi engine phải vượt C05, detection/pose tolerance và event regression trên cùng fixtures; missing/failed không được đổi thành negative.
 
 ### M02 — Config, composition và artifact bootstrap (P1; mở rộng P3–P4)
 
@@ -156,7 +158,7 @@ Owner: Edge/platform. Source: adapter video cho oracle; `native/src/decode/` cho
 
 | ID | Việc cụ thể | Phụ thuộc | Điều kiện hoàn thành |
 |---|---|---|---|
-| V01 | File replay PTS + deterministic clock, fast/realtime modes và local sink | C01 | Đổi tốc độ replay không đổi duration rules; không gửi notification thật |
+| V01 | File replay PTS + deterministic clock, fast/realtime modes và local sink | C01 | Đổi tốc độ replay không đổi duration rules; không gửi notification thật. Contract: [contracts §7 semantic replay khác realtime stress](contracts.md). |
 | V02 | RTSP auth/timeouts/backoff+jitter/session reset và liveness/freeze signal | F04,C02 | Disconnect/reconnect/codec change sinh discontinuity và health lý do rõ |
 | V03 | Native software decode baseline portable; hardware decode truth-path khi đã chọn board | Q1,V02 | P1: stride/color/lifetime đúng với fixtures, software path explicit. Target gate: NV12/native buffer được kiểm trên hardware thật trước ký capacity/pilot |
 | V04 | Stream ownership dual-session hoặc relay đã chọn; correlation analytics↔recording | F04,V03,R01 | Không giả PTS/session ID hai session trùng; uncertainty/range thực tế được lưu |
@@ -169,11 +171,11 @@ Owner: Edge + ML. Source: `native/src/{core,preprocess,engines,models}/`, bindin
 
 | ID | Việc cụ thể | Phụ thuộc | Điều kiện hoàn thành |
 |---|---|---|---|
-| N01 | CMake/build profile + binding lifecycle/poll/capabilities/typed failure; release GIL khi block | C04 | Start/stop/reopen, timeout và error conformance chạy được; bounded output queue |
+| N01 | CMake/build profile + binding lifecycle/poll/capabilities/typed failure; release GIL khi block | C04 | Start/stop/reopen, timeout và error conformance chạy được; bounded output queue. Contract: [contracts §1 lifecycle/pose request terminal outcome](contracts.md). |
 | N02 | Python YOLOX/ORT oracle với manifest pinned, preprocess/label map/transform | F05,C05,V01 | Golden frames: bbox original coords, color/letterbox/NMS đúng |
 | N03 | ORT C++ load/run + C++ preprocess/decode outputs/NMS; instrumentation mỗi stage | N01,N02,V03 | Detection parity trong tolerance đã khóa; không double normalize |
 | N04 | Buffer pool/release/drop/cancel/error paths và result session/frame correlation | N03 | ASan/UBSan trên path phù hợp; soak không tăng buffer vô hạn; reject stale epoch |
-| N05 | Tích hợp native capture→detector→tracker→ObservationBatch | N04,K02 | Python không copy pixels mỗi frame; timings và queue-age đủ đo bottleneck |
+| N05 | Tích hợp native capture→detector→tracker→ObservationBatch | N04,K02 | Python không copy pixels mỗi frame; timings và queue-age đủ đo bottleneck. Contract: [contracts §1 application chỉ gọi PerceptionPipeline](contracts.md). |
 
 Không viết lại inference runtime. Dùng API C++/C hiện có; tensor engines không lộ ra IncidentEngine. Fuzz/parser checks tập trung input không tin cậy, không tạo framework fuzz toàn repo.
 
@@ -193,10 +195,10 @@ Owner: Edge/platform. Source: `application/pipeline/`, `application/scheduling/`
 
 | ID | Việc cụ thể | Phụ thuộc | Điều kiện hoàn thành |
 |---|---|---|---|
-| O01 | Wiring per-camera session + registry pipeline tính năng + ordered observations + event callbacks | N05,I01,J01 | Registry dùng factory allowlist; state/reset/config theo camera/session/pipeline; thêm pipeline không sửa logic pipeline hiện có; domain không import runtime/DB |
+| O01 | Wiring per-camera session + registry pipeline tính năng + ordered observations + event callbacks | N05,I01,J01 | Registry dùng factory allowlist; state/reset/config theo camera/session/pipeline; thêm pipeline không sửa logic pipeline hiện có; domain không import runtime/DB. Contract: [contracts §1 perception port; §3 durable pin intent](contracts.md). |
 | O02 | Bounded queues, drop/release stale work, deadlines/cancel và shutdown | O01 | Inject slow detector/consumer không tăng RAM vô hạn; recorder không bị backpressure |
 | O03 | Degradation/recovery hysteresis: pose→analysis FPS→optional work; capability visibility | O02,P02,H01 | Không báo healthy khi use case mất capability; recovery không dao động liên tục |
-| O04 | Shared runtime serialization/fairness và upload/record contention benchmark | O03,A03 | Multi-camera có per-camera freshness/drop/pose coverage; chốt capacity từ số đo |
+| O04 | Shared runtime serialization/fairness và upload/record contention benchmark | O03,C05,I05; A03 nếu RKNN | Multi-camera có per-camera freshness/drop/pose coverage; chốt capacity từ số đo |
 
 ### M07 — Quality & ODD Monitor (P2)
 
@@ -218,7 +220,7 @@ Owner: ML + Edge. Python quyết định ROI/budget; native giữ buffer/crop/in
 |---|---|---|---|
 | P01 | Pin RTMPose checkpoint/keypoint schema; ONNX oracle crop/affine/SimCC và original mapping | F05,C05,K01 | Keypoint missing/low confidence rõ; không trộn schema khác nhau |
 | P02 | Fast-fall, slow sampling, persistent-lying scheduling; priority/fairness/deadline | K03,QL02,P01 | Đo coverage theo nhánh; không chỉ gọi pose khi y spike |
-| P03 | Native ROI buffer cache bounded + request_pose/frame/track/deadline; ORT native pose | P02,N04 | Buffer đã hết hạn→skipped; pose cũ không gắn frame mới; native/oracle parity |
+| P03 | Native ROI buffer cache bounded + request_pose/frame/track/deadline; ORT native pose | P02,N04 | Buffer đã hết hạn→skipped; pose cũ không gắn frame mới; native/oracle parity. Contract: [contracts §1 late pose không update tracker lại](contracts.md). |
 | P04 | Burst/overload tests và tuning budget theo ODD | P03 | Báo riêng skipped/failed/stale, coverage và end-to-end latency; không suy missing pose thành người bình thường |
 
 ### M09 — Pipeline tính năng cảnh báo và IncidentEngine (P1 baseline; P2 person-down; P4 vehicle)
@@ -245,8 +247,8 @@ Owner: Edge/platform. Source: recorder service + `application/evidence/`, eviden
 | ID | Việc cụ thể | Phụ thuộc | Điều kiện hoàn thành |
 |---|---|---|---|
 | R01 | Recorder process, RTSP ownership và compressed segment rotation; raw unchanged | F04,C03 | Record độc lập analytics; ghi codec/PTS/discontinuity và ranges thật |
-| R02 | Pin interval atomic với cleanup, ACK trước xóa; overlapping events và postroll | R01,C03 | Race pin/cleanup không xóa segment đã ACK pin; bounded pending pins |
-| R03 | Finalize/remux keyframe-aware và local commit/reconcile | R02,J01 | Pending intent→temp→fsync file→rename→fsync dir→DB finalize; gap thành partial |
+| R02 | Pin interval atomic với cleanup, ACK trước xóa; overlapping events và postroll | R01,C03 | Race pin/cleanup không xóa segment đã ACK pin; bounded pending pins. Contract: [contracts §3 pin receipt bền vững/idempotent](contracts.md). |
+| R03 | Finalize/remux keyframe-aware và local commit/reconcile | R02,J01 | Pending intent→temp→fsync file→rename→fsync dir→DB finalize; gap thành partial. Contract: [contracts §4 finalized và completeness riêng](contracts.md). |
 | R04 | Quota/reserve/ring expiry/temp cleanup tối thiểu + disk-full behavior | F03,R03 | Budget tính pins/postroll/temp/WAL; không chiếm state reserve hoặc pin vô hạn |
 | R05 | Retention nhiều lớp, release sau receipt theo policy và retrieval giữa cleanup | R04,E02 | Policy version/access/delete rõ; thiếu clip→expired/unavailable, không URL hỏng giả thành available |
 | R06 | Service resource priority và kill/hang/OOM-boundary/recorder-restart drills | R04,O02 | Kill analytics recorder vẫn trong signed gap budget; host/disk/power SPOF ghi rõ |
@@ -261,10 +263,10 @@ Owner: Edge + Backend contract. Source: persistence/transport adapters, `applica
 
 | ID | Việc cụ thể | Phụ thuộc | Điều kiện hoàn thành |
 |---|---|---|---|
-| J01 | SQLite schema/migrations, journal+outbox atomic; WAL/FULL/checkpoint/reserve | C03,F03 | Crash giữa writes không tạo event không delivery intent; fsync/write errors không ACK thành công |
+| J01 | SQLite schema/migrations, journal+outbox atomic; WAL/FULL/checkpoint/reserve | C03,F03 | Crash giữa writes không tạo event không delivery intent; fsync/write errors không ACK thành công. Contract: [contracts §3 event/outbox/pin intent cùng transaction](contracts.md). |
 | J02 | HTTPS metadata retry/backoff/jitter, revision idempotency và metadata receipt | J01,S01 | Duplicate/reordered delivery không overwrite history; conflict cùng revision khác hash có lỗi rõ |
 | J03 | Evidence resumable/chunk-or-multipart upload, hash/size verify và clip receipt | R03,E01,J02 | Disconnect retry hoàn tất một evidence identity; metadata tới trước clip vẫn xem được |
-| J04 | Startup reconcile/dead-letter/operator recovery và bounded forensic malformed | J03,R04 | Inject pending/temp/final/missing/corrupt/orphan; unique malformed flood báo truncation/degraded |
+| J04 | Startup reconcile/dead-letter/operator recovery và bounded forensic malformed | J03,R04 | Inject pending/temp/final/missing/corrupt/orphan; unique malformed flood báo truncation/degraded. Contract: [contracts §3 recovery trước/sau ACK pin](contracts.md). |
 | J05 | WAN outage/storage exhaustion/power-cut trên BOM thật | J04,R06 | Đo autonomy/RPO/RTO trong scope; kill -9 không thay power-cut; không hứa chống disk loss |
 
 Theo Q6/Q10, edge delivery giữ HTTPS và receipt sau server durable commit; evidence upload/receipt riêng với metadata. Điểm mở rộng EventPublisher nằm ở server downstream, không thay edge uploader. Server persist event và downstream delivery intent trong cùng transaction; worker dùng event identity/revision/idempotency, retry và delivery result. Kafka/RabbitMQ/WebSocket chỉ là adapters tương lai, chưa thêm dependency, worker riêng hoặc no-op publisher báo thành công. Downstream lỗi không làm mất ingestion đã commit; broker ACK/WebSocket send không chứng minh consumer đã xử lý nghiệp vụ. Synthetic/replay vẫn bị chặn trên route notification theo Q7; xem [ADR-0002](../adr/0002-server-downstream-event-publishing.md).
@@ -277,8 +279,8 @@ Giữ transaction revision/current projection/outbox và unique compound index `
 
 | ID | Việc cụ thể | Phụ thuộc | Điều kiện hoàn thành |
 |---|---|---|---|
-| S01 | Device auth baseline, request limits/schema + revision persist/receipt | C03,Q3 | Unique authenticated device/event/revision; same key/different hash conflict; ACK sau durable commit |
-| S02 | Event history/current projection, query/filter/pagination và API evidence/review states | S01 | Older revision không lùi current view/reset review; authorization site/camera áp mọi query |
+| S01 | Device auth baseline, request limits/schema + revision persist/receipt | C03,Q3 | Unique authenticated device/event/revision; same key/different hash conflict; ACK sau durable commit. Contract: [contracts §2 full snapshot/canonical hash; §6 eligibility](contracts.md). |
+| S02 | Event history/current projection, query/filter/pagination và API evidence/review states | S01 | Older revision không lùi current view/reset review; authorization site/camera áp mọi query. Contract: [contracts §2 current max revision; §5 review freshness](contracts.md). |
 | E01 | Evidence init/upload/finalize; server-controlled object ownership/hash/size | S01,C03 | Không overwrite key camera/device khác; pending không giả thành complete |
 | E02 | DB/object-store reconciliation, authorized download/proxy và immutable receipt | E01 | Object missing/corrupt/orphan có trạng thái; raw/proxy lineage rõ; H.265 playback path được thử |
 | E03 | Retention/delete/export policy, backup/restore và storage failure tests | E02,T01 | Không xóa khi trái policy; restore tái dựng metadata↔object state có report RPO/RTO |
@@ -291,9 +293,9 @@ Owner Backend/dev demo: `apps/server/` workflow và HTML/JS tối thiểu. Độ
 
 | ID | Việc cụ thể | Phụ thuộc | Điều kiện hoàn thành |
 |---|---|---|---|
-| W01 | Review FSM/API unreviewed/confirmed/false_positive/resolved + revision audit | S02 | Review không sửa AI confidence; concurrent update conflict rõ; review không bị AI revision reset |
-| W02 | Notification outbox trong transaction, retry/idempotency, assignment/escalation theo protocol | W01,I04 | Synthetic/replay bị chặn trước outbox kể cả revisions/retry; provider thiếu dedup ghi residual duplicate risk |
-| UI01 | Dev demo list/filter/detail, video player, clip states và pipeline/quality status | S02,E01 | Gọi API thật; metadata trước clip, empty/loading/error rõ; polling đáp ứng Q16 |
+| W01 | Review FSM/API unreviewed/confirmed/false_positive/resolved + revision audit | S02 | Review không sửa AI confidence; concurrent update conflict rõ; review không bị AI revision reset. Contract: [contracts §5 viewed revisions/correction/reopen](contracts.md). |
+| W02 | Notification outbox trong transaction, retry/idempotency, assignment/escalation theo protocol | W01,I04 | Synthetic/replay bị chặn trước outbox kể cả revisions/retry; provider thiếu dedup ghi residual duplicate risk. Contract: [contracts §6 disabled/ineligible khác pending; no automatic backfill](contracts.md). |
+| UI01 | Dev demo list/filter/detail, video player, clip states và pipeline/quality status | S02,E01 | Gọi API thật; metadata trước clip, empty/loading/error rõ; polling đáp ứng Q16. Contract: [contracts §4 partial-uploaded/expired; §5 needs_re_review](contracts.md). |
 | UI02 | Nút review cơ bản và API auth/raw/download flow; bàn giao OpenAPI/fixtures | UI01,W01 | Browser list→detail→play→review; API deny unauthorized; đội UI có đủ schemas/examples và conflict/error semantics |
 | UI03 | Đội UI phase sau: annotation feedback + on-vehicle queue + operator workload | UI02,I03,D02 | Không thuộc dev demo; labels tách AI outputs; ambiguous case có context |
 | UI04 | Đội UI phase sau: fleet/retrieval/audit UX | UI02,T03,H02 | Không thuộc dev demo; offline/expired/revoked rõ; raw/export audit và production responsive/accessibility acceptance |
@@ -307,24 +309,24 @@ Owner: ML + Product/QA. Source: dataset manifests và tooling replay/evaluation;
 | ID | Việc cụ thể | Phụ thuộc | Điều kiện hoàn thành |
 |---|---|---|---|
 | D01 | Dataset manifest/quyền sử dụng/splits theo site-camera-time, labels onset/lying/uncertain | F02,F05 | Không leak cùng cảnh giữa train/test; có hard negatives đêm/mưa/yên xe và ca đối chứng |
-| D02 | Liên kết reviewer labels với event/model/config/clip revision; export có quyền | D01,W01 | Không overwrite nhãn gốc; correction/audit và ambiguous labels rõ |
+| D02 | Liên kết reviewer labels với event/model/config/clip revision; export có quyền | D01,W01 | Không overwrite nhãn gốc; correction/audit và ambiguous labels rõ. Contract: [contracts §5 labels dùng exact viewed revisions](contracts.md). |
 | D03 | Negative audit phân tầng clip không có alert; sampling/retention/privacy budget | D01,R04 | Lưu sampling probability/coverage; báo uncertainty và bias, không tuyên bố recall tuyệt đối từ alerts-only |
 | D04 | Event-level matching/dedup, recall/precision/FP camera-day và review minutes | D02,D03,I05 | Định nghĩa denominator/ODD/time coverage; report cả unavailable/out-of-ODD và missed events |
 | D05 | Regression release report, chọn rule/model tuning hoặc training theo lỗi đã đo | D04 | Không fine-tune/action classifier chỉ vì có toolkit; candidate cải thiện trên held-out sites và giữ parity |
 
-### M15 — Model Registry, conversion và RK3588 (P3)
+### M15 — Target conformance/capacity; conversion RKNN có điều kiện (P3)
 
-Owner: ML + Edge. Source: model manifests, `tools/model_conversion/`, native RKNN/RGA adapters. Đây là mở rộng manifest bootstrap, không thêm registry service bắt buộc.
+Owner: ML + Edge. Source: model manifests, `tools/model_conversion/`, native RKNN/RGA adapters. Đây là mở rộng manifest bootstrap, không thêm registry service bắt buộc. A01/A02/A03 là nhánh RKNN; target ONNX dùng C05/N05/P03/I05 trên target thực. A04/A05/O04 áp dụng mọi target, không bỏ capacity gate.
 
 | ID | Việc cụ thể | Phụ thuộc | Điều kiện hoàn thành |
 |---|---|---|---|
 | A01 | Pin conversion SDK/runtime/operator matrix và representative quantization dataset | F05,C05 | Source→ONNX→RKNN có hashes/version/terms; không convert khi edge startup |
 | A02 | RKNN engine + dequant/postprocess detector/pose; RGA transforms | N05,P03,A01 | Shapes/layout/dtype/stride/color đúng; confidence drift có report; không normalize hai lần |
 | A03 | Backend conformance và full replay event regression | A02,I05 | Golden + held-out tolerance đạt; failed/fallback không báo normal |
-| A04 | Profile copies/queue/infer/fsync/upload/thermal; tối ưu hotspot đã đo | A03,O03,R06 | Report đồng thời recording+analytics+upload; zero-copy chỉ ghi đạt khi import/lifetime và copies đo được |
+| A04 | Profile copies/queue/infer/fsync/upload/thermal; tối ưu hotspot đã đo | C05,I05,O03,R06; A03 nếu RKNN | Report đồng thời recording+analytics+upload; zero-copy chỉ ghi đạt khi import/lifetime và copies đo được |
 | A05 | 24–72h lab soak, pose bursts/multi-camera và capacity envelope | A04,O04 | P95/P99, headroom/throttle, evidence gap/coverage đạt preliminary targets; ký lab envelope |
 
-O04 và A05 cùng một integration run sau A03; không coi là hai vòng dependency bắt buộc chờ nhau. Jetson/OpenVINO không nằm trong backlog triển khai mặc định.
+O04 và A05 cùng một integration run sau target conformance (A03 nếu RKNN); không coi là hai vòng dependency bắt buộc chờ nhau. Jetson/OpenVINO không nằm trong backlog triển khai mặc định.
 
 ### M16 — Health, trust, control và rollout (P1 baseline; P4 đầy đủ)
 
@@ -333,9 +335,9 @@ Owner: Edge + Backend + Operations/security. Source: platform/fleet adapters, se
 | ID | Việc cụ thể | Phụ thuộc | Điều kiện hoàn thành |
 |---|---|---|---|
 | H01 | Structured logs + health states + basic frame age/disk/outbox/recorder/backend metrics | B03,J02,R04 | Mask secrets; bounded cardinality/spool; analytics unhealthy không chỉ báo process running |
-| H02 | Synthetic end-to-end probe và alert contracts/runbooks/routing | H01,S01,W02 guard | Probe giữ synthetic taxonomy; deadlock/record gap/pin failure báo fault, không cứu hộ |
+| H02 | Synthetic end-to-end probe và alert contracts/runbooks/routing | H01,S01,W02 guard | Probe giữ synthetic origin; deadlock/record gap/pin failure báo fault, không cứu hộ |
 | T01 | Device enroll/provision/activate/rotate/quarantine/revoke/decommission; site RBAC/audit/privacy record | S01,F06 | Cross-site deny tests, revoked device bị chặn, named approval trước field data pilot |
-| T02 | Signed bundle target/hash/length/sequence/expiry/canonical bytes + bootstrap/trusted keys | T01,A03 | Reject wrong target/bad signature/old sequence/expired/uncertain-clock; persist high-water mark |
+| T02 | Signed bundle target/hash/length/sequence/expiry/canonical bytes + bootstrap/trusted keys | T01,C05,I05; A03 nếu RKNN | Reject wrong target/bad signature/old sequence/expired/uncertain-clock; persist high-water mark |
 | T03 | Outbound HTTPS long-poll command với IDs/auth/expiry/replay guard; retrieval job | T01,J03,R05 | Offline/pending/expired, retry idempotent; không remote shell hoặc arbitrary executable payload |
 | T04 | Canary activation/last-known-good, authorized rollback sequence mới, state/data compatibility | T02,B04 contract | Update failure rollback đúng; không hạ trust sequence hoặc trộn model versions im lặng |
 | T05 | Reproducible image/provisioning, least-privilege services, SBOM/build provenance | T04,A05 | Test device-node/runtime ACL/watchdog heartbeat; deploy/restore bằng runbook lặp lại được |
@@ -359,24 +361,20 @@ Motion compensation tùy chọn chỉ thêm nếu rung gây lỗi đo được: 
 
 ## 5. Gói tích hợp và thứ tự bắt đầu
 
-### 5.1 Batch đầu tiên sau khi thống nhất
+### 5.1 Bắt đầu và theo dõi
 
-1. F01–F06, C01–C03, D01 mẫu: thu facts và khóa yêu cầu/contract theo Q1–Q4 đã xác nhận; ghi target hardware chưa chọn, không chặn replay/ONNX vì thiếu board.
-2. C04–C05; B01–B02; V01/N02/K01: có replay oracle và fixtures để đội khác làm việc.
-3. S01/S02/E01/W01 và UI01 mock theo schema; song song R01/R02/J01. Khóa pin/ownership contract trước V04/R01 implementation.
-4. V02/V03/N01–N05/K02; R03/R04/J02/J03; UI02. Tích hợp O01/O02 và B03.
-5. H01, R06, J04 và kiểm G1. Chỉ mở full person-down/pose sau khi luồng event/evidence/retry đã thông.
+[Tracker slices](../../.scratch/system-build-slices/PRD.md) là nguồn duy nhất của thứ tự thực hiện. Frontier ban đầu #01 event synthetic→server/demo và #02 facts/ODD có thể bắt đầu; từng ticket khóa phần contract cần dùng và kiểm prerequisites trước khi triển khai. Không duy trì batch dependency khác với tracker.
 
-Đường găng lab dự kiến: hardware facts/stream contract → native buffer+detector+tracker → orchestrator → event/evidence integration → G1. Backend/FE và recorder/journal có thể phát triển độc lập sau schema, không chờ ML tối ưu FPS.
+Backend/demo, recorder/journal và oracle/native có thể tiến hành theo blockers sau khi contract handoff đủ. #31/#35 có thêm #30 nếu target RKNN; target ONNX vẫn cần conformance trên target thật, capacity/soak và rollout tests. Một module hoặc task nguồn nhiều phase không được đánh dấu done chỉ vì baseline đã có.
 
 ### 5.2 Demo và bằng chứng cho từng gate
 
 | Gate | Demo bắt buộc | Bằng chứng lưu |
 |---|---|---|
 | G0 | Facts/target/scope và test protocols rõ | Site profile, quyết định người dùng, ADR phù hợp, approved preliminary targets |
-| G1 | File+RTSP→event→pre/post clip→server→review; metadata trước clip; kill analytics + retry | Config/model/dataset hashes, timestamps/ranges, receipts, screen/browser flow, failure traces |
+| G1 | File+RTSP→event→pre/post clip→server→review; metadata trước clip; pin-crash/retry, partial-uploaded và re-review | Config/model/dataset hashes, timestamps/ranges, receipts, screen/browser flow, failure traces |
 | G2 | Ngã nhanh/chậm/missing onset; yên xe/xe đổ/ngã cạnh xe; occlusion/ID switch | Event regression, negative audit design/results, recall/FP/review load và pose coverage |
-| G3 | Oracle/native/RKNN parity; recording+upload trong thermal soak | Conformance report, raw metrics, capacity manifest, pinned OS/SDK/artifact versions |
+| G3 | Oracle/native/target parity; RKNN khi được chọn; recording+upload trong thermal soak | Conformance report, raw metrics, capacity manifest, pinned OS/SDK/artifact versions |
 | G4a | WAN/disk/power/clock/native crash; signed update/revoke; retrieval/RBAC | Failure matrix results, recovery measurements, audit/runbooks, release provenance/privacy approval |
 | G4b | Calibrated vehicle use case có negatives đúng | Calibration uncertainty map, vehicle report; độc lập G4a |
 | G5 | Field pilot theo ngày/đêm/mưa và human-review protocol; central restore | Field acceptance đã ký, final SLO, incident response/restore report và quyết định scale |
@@ -405,14 +403,14 @@ Không ước lượng ngày/person-week hoặc chốt BOM khi chưa biết nhâ
 
 ### Bàn giao từ buổi làm rõ sang triển khai
 
-- Q1–Q19 chốt hướng lab; trước code cần xác nhận bản tổng hợp đã phản ánh đúng ý người dùng. Không materialize source hoặc claim issues từ buổi phỏng vấn này.
+- Thiết kế đã được duyệt; triển khai theo ticket có owner/prerequisites. Việc cập nhật tài liệu không đánh dấu ticket hoặc gate runtime đạt.
 - P0 tự thu facts môi trường lab, samples/license, camera stream nếu có, manifests, clocks và storage sizing; board chưa chọn không chặn ONNX/replay. Target quality/site, stream topology và sản xuất chỉ accepted khi có bằng chứng/owner ở gate tương ứng.
 - P1 bàn giao contracts → replay oracle → native ONNX/tracker + recorder/journal → FastAPI/MongoDB ingestion/review + dev demo → integration/fault tests G1. Compose gồm server phục vụ cả demo và MongoDB replica set một member; edge native/Python service riêng. Không có frontend container bắt buộc.
 - Đăng ký pipeline mới cần factory ID/version, required capabilities, config validation, state/reset, shared semantic input/output và fixtures/event regression; không tạo template pipeline rỗng trước khi có tính năng.
 - Các ngưỡng retry/queue/timeout và schema generation chọn nhỏ nhất theo contract tests; không invent SLA production. RPO/RTO, capacity, site ODD/quality acceptance và production infra là deliverables P0/P2–P5 đã có owner/gate, không silently assumed đã đạt.
 
 - ADR stream ownership/main-sub: chỉ accepted sau F04 có facts và camera test; có thể một ADR nếu là một quyết định chung.
-- ADR storage mode/BOM: sau Q2 và endurance/autonomy budget, ghi giới hạn raw retrieval.
+- Storage/BOM record: event ring đã chốt; hoàn thiện endurance/autonomy/ring-delay budget và giới hạn raw retrieval, không mở lại NVR mặc định.
 - ADR server production: trước field pilot, có data residency/PKI/backup/SLA/owner, không dùng server lab làm quyết định production.
 - ADR native isolation: chỉ khi T06 dẫn tới thay fault boundary thật.
 - Glossary/domain context cập nhật khi taxonomy được chốt; không nhồi SDK/schema/runtime decisions vào định nghĩa thuật ngữ.
@@ -426,6 +424,6 @@ Bộ checklist ngày 2026-10-11 giữ nguyên 18 module/89 task IDs ở trên v�
 - [Mục lục checklist và dependency/ownership](../implementation-checklists/README.md).
 - [Phân tích kiến trúc và làm rõ contract/integration dependencies](../implementation-checklists/architecture-analysis.md).
 - [Kiểm tra xuyên module và release gates](../implementation-checklists/integration-release.md).
-- [PRD và tracker module](../../.scratch/system-build/PRD.md).
+- [Phạm vi và acceptance module](../../.scratch/system-build/PRD.md).
 
 Checklist làm rõ cách phân kỳ B04 local activation/T02 signed rollout, QL03 camera movement/G01 geometry contract và O04/A05 shared integration run; không bỏ các prerequisites nghiệm thu hoặc đổi ADR accepted. S01 downstream intent/guard có baseline P1, W02 worker/provider chỉ khi protocol được bật; lab vẫn dashboard-only.

@@ -1,13 +1,11 @@
 # M13 — Alert/review workflow, dev demo và bàn giao UI
 
-Status: needs-triage
-Execution: not-started
-Scope claimed: chưa claim
+Document role: acceptance/checklist; tiến độ ở tracker slices.
 Owner: Backend/dev demo; đội UI sản phẩm sau; người phụ trách cụ thể chưa gán.
 Phase: P1 UI01/UI02; P4 UI03/UI04
 Updated: 2026-10-11
 
-> Đây là issue/checklist kế hoạch. Không checkbox nào chứng minh runtime đã implement. Triage state khác trạng thái thực hiện; cần gán owner trước khi claim.
+> Checklist nghiệm thu theo module; claim/Execution nằm trong [tracker slices](../../system-build-slices/PRD.md). Chỉ tick khi có evidence từ ticket tương ứng.
 
 [Mục lục và quy tắc](../../../docs/implementation-checklists/README.md) · [Plan nguồn](../../../docs/architecture/implementation-plan.md) · [Kiểm tra tích hợp](../../../docs/implementation-checklists/integration-release.md)
 
@@ -21,10 +19,11 @@ Updated: 2026-10-11
 
 ## Điều kiện bắt đầu
 
-- [ ] Owner cụ thể nhận module và ghi task/phase sẽ làm trong Comments.
-- [ ] Đọc CONTEXT.md, ADR liên quan, kiến trúc và task nguồn; ghi conflict trước khi đổi quyết định.
-- [ ] Các prerequisites ở từng task có artifact hoặc fake/fixture contract đã thống nhất; fake chỉ mở unit/contract work, không thay acceptance tích hợp.
-- [ ] Chốt input/output/error/reset/version semantics với producer/consumer; số chưa đo ghi null/preliminary, không tự đặt threshold sản phẩm.
+Áp dụng [Definition of Ready/Done chung](../../../docs/implementation-checklists/README.md). Claim ticket slices, đọc ADR/contracts, thống nhất inputs/owner và prerequisites; fixture chỉ mở unit work, không thay acceptance thật.
+
+## Contract hiện hành
+
+Đối chiếu [contracts §4 partial-uploaded; §5 correction/re-review; §6 no backfill](../../../docs/architecture/contracts.md). Protocol tại đây thay các diễn giải sơ lược bên dưới; acceptance phải bao phủ producer/consumer liên quan.
 
 ## Các bước triển khai theo task
 
@@ -36,7 +35,7 @@ Phụ thuộc nguồn: `S02`.
 
 - [ ] **W01.01** — Implement review transitions unreviewed→confirmed/false_positive và confirmed→resolved độc lập AI FSM.
 - [ ] **W01.02** — Conditional expected version update và actor/time/reason audit; định nghĩa invalid transition/conflict API.
-- [ ] **W01.03** — Test hai reviewer concurrent và AI revision tới giữa review không ghi đè quyết định/operator confidence.
+- [ ] **W01.03** — Test hai reviewer concurrent và AI revision tới giữa review không ghi đè quyết định/operator confidence. Viewed revisions + needs_re_review và correction/reopen có reason/audit/expected version; metadata-only không trigger.
 - [ ] **W01.AC** — Nghiệm thu: Review không sửa AI confidence; concurrent update conflict rõ; review không bị AI revision reset.
 - [ ] **W01.EV** — Ghi test/fixture ID, expected/actual, lệnh chạy thật và artifact/report path trong Comments; ghi rõ phần chưa chạy hoặc blocked.
 
@@ -46,7 +45,7 @@ Phụ thuộc nguồn: `W01,I04`.
 
 - [ ] **W02.01** — P1 persist downstream intent đúng transaction S01, delivery disabled explicit theo dashboard-only lab.
 - [ ] **W02.02** — Sau I04/protocol bật: triển khai worker/provider cần thiết, key idempotency/retry/dead-letter và assignment/escalation.
-- [ ] **W02.03** — Guard synthetic/replay trước notification outbox ở mọi revision/retry; không tạo no-op publisher báo delivered hoặc thêm broker khi chưa cần.
+- [ ] **W02.03** — Guard synthetic/replay trước notification outbox ở mọi revision/retry; không tạo no-op publisher báo delivered hoặc thêm broker khi chưa cần. Disabled/ineligible terminal theo policy; bật provider không tự backfill, retry có expiry và terminal retention.
 - [ ] **W02.AC** — Nghiệm thu: Synthetic/replay bị chặn trước outbox kể cả revisions/retry; provider thiếu dedup ghi residual duplicate risk.
 - [ ] **W02.EV** — Ghi test/fixture ID, expected/actual, lệnh chạy thật và artifact/report path trong Comments; ghi rõ phần chưa chạy hoặc blocked.
 
@@ -100,16 +99,9 @@ Phụ thuộc nguồn: `UI02,T03,H02`.
 
 Ca tích hợp cần phối hợp: **X16, X17, X18, X19, X23, X31, X37**. Xem bước inject/expected/gate tại [ma trận kiểm lỗi](../../../docs/implementation-checklists/integration-release.md). Chỉ chạy case thuộc phase/scope đang claim; case phase sau giữ not-run.
 
-## Checklist review và hoàn tất module
+## Review và hoàn tất
 
-- [ ] Mỗi nhánh/loop/parser hoặc state transition mới có unit/contract test meaningful; không chỉ test mock được gọi.
-- [ ] Happy path, invalid/missing/stale input, retry/duplicate/concurrency nếu áp dụng, failure và recovery đã được kiểm; ghi N/A có lý do khi không liên quan.
-- [ ] Rà tất cả callers/consumers, schema fixtures, config examples, exports/bindings/migrations và docs chịu ảnh hưởng; không bỏ consumer cũ.
-- [ ] Review SRP/OCP/LSP/ISP/DIP theo seam thật của module; không thêm interface cho helper hoặc generic framework để đạt hình thức.
-- [ ] Integration với producer/consumer thực đã chạy cho phase này; fake/unit pass không tự đánh dấu module hoặc gate đạt.
-- [ ] Logs/errors có correlation và redact secrets; bounds/timeout/release/cleanup/security cần thiết đã kiểm.
-- [ ] Ghi report và giới hạn vào docs/logs; chỉ tick task đã có evidence, task phase sau vẫn mở.
-- [ ] Handoff có schema/config/artifact versions, commands để reproduce, residual risks và owner gate tiếp theo.
+Áp dụng [quy tắc review/Done chung](../../../docs/implementation-checklists/README.md) và [release cases](../../../docs/implementation-checklists/integration-release.md). Lưu artifact/lệnh/expected-actual/giới hạn ở ticket thực thi, liên kết vào evidence record dưới đây; không đánh dấu gate chỉ từ unit tests.
 
 ## Evidence record
 

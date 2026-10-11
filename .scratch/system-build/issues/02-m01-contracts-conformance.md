@@ -1,13 +1,11 @@
 # M01 — Contracts, clock và conformance kit (P0–P1)
 
-Status: needs-triage
-Execution: not-started
-Scope claimed: chưa claim
+Document role: acceptance/checklist; tiến độ ở tracker slices.
 Owner: Domain + Edge + ML + Backend; người phụ trách cụ thể chưa gán.
 Phase: P0–P1
 Updated: 2026-10-11
 
-> Đây là issue/checklist kế hoạch. Không checkbox nào chứng minh runtime đã implement. Triage state khác trạng thái thực hiện; cần gán owner trước khi claim.
+> Checklist nghiệm thu theo module; claim/Execution nằm trong [tracker slices](../../system-build-slices/PRD.md). Chỉ tick khi có evidence từ ticket tương ứng.
 
 [Mục lục và quy tắc](../../../docs/implementation-checklists/README.md) · [Plan nguồn](../../../docs/architecture/implementation-plan.md) · [Kiểm tra tích hợp](../../../docs/implementation-checklists/integration-release.md)
 
@@ -21,10 +19,11 @@ Updated: 2026-10-11
 
 ## Điều kiện bắt đầu
 
-- [ ] Owner cụ thể nhận module và ghi task/phase sẽ làm trong Comments.
-- [ ] Đọc CONTEXT.md, ADR liên quan, kiến trúc và task nguồn; ghi conflict trước khi đổi quyết định.
-- [ ] Các prerequisites ở từng task có artifact hoặc fake/fixture contract đã thống nhất; fake chỉ mở unit/contract work, không thay acceptance tích hợp.
-- [ ] Chốt input/output/error/reset/version semantics với producer/consumer; số chưa đo ghi null/preliminary, không tự đặt threshold sản phẩm.
+Áp dụng [Definition of Ready/Done chung](../../../docs/implementation-checklists/README.md). Claim ticket slices, đọc ADR/contracts, thống nhất inputs/owner và prerequisites; fixture chỉ mở unit work, không thay acceptance thật.
+
+## Contract hiện hành
+
+Đối chiếu [contracts §1–§7 schema/perception/snapshot/pin/evidence/review/eligibility/replay](../../../docs/architecture/contracts.md). Protocol tại đây thay các diễn giải sơ lược bên dưới; acceptance phải bao phủ producer/consumer liên quan.
 
 ## Các bước triển khai theo task
 
@@ -37,7 +36,7 @@ Phụ thuộc nguồn: `F02`.
 - [ ] **C01.01** — Định nghĩa device/camera/session/frame/track epoch/event IDs và phạm vi uniqueness.
 - [ ] **C01.02** — Tách event-time/PTS, receive UTC và local monotonic; định nghĩa clock uncertainty, boot boundary/discontinuity.
 - [ ] **C01.03** — Tạo sequences fast/realtime, clock jump và reconnect có expected duration/reset để mọi module dùng chung.
-- [ ] **C01.AC** — Nghiệm thu: Replay fast/realtime cho cùng temporal outcome; clock jump không tạo motion giả.
+- [ ] **C01.AC** — Nghiệm thu: Semantic replay fast/paced cùng inputs cho cùng temporal outcome; clock jump không tạo motion giả.
 - [ ] **C01.EV** — Ghi test/fixture ID, expected/actual, lệnh chạy thật và artifact/report path trong Comments; ghi rõ phần chưa chạy hoặc blocked.
 
 ### C02 — Khóa FrameMetadata/Buffer lifecycle, transforms, observation statuses và track/pose association
@@ -56,7 +55,7 @@ Phụ thuộc nguồn: `C01`.
 
 - [ ] **C03.01** — Khóa IncidentEvent, pipeline provenance, EvidenceManifest và ba FSM AI/review/evidence độc lập.
 - [ ] **C03.02** — Định nghĩa revision identity, canonical payload/hash, schema compatibility, metadata/evidence receipts và conflicts.
-- [ ] **C03.03** — Tạo valid/malformed/unknown fixtures; kiểm mandatory unknown explicit, giới hạn input và không lộ secret/local path.
+- [ ] **C03.03** — Tạo valid/malformed/unknown fixtures; kiểm mandatory unknown explicit, giới hạn input và không lộ secret/local path. Snapshot3→1→2/origin substitution; durable pin receipts; partial-uploaded; stale review và eligibility examples.
 - [ ] **C03.AC** — Nghiệm thu: Validate unknown provenance tường minh; malformed khác event hợp lệ; no secrets/local paths in public URL.
 - [ ] **C03.EV** — Ghi test/fixture ID, expected/actual, lệnh chạy thật và artifact/report path trong Comments; ghi rõ phần chưa chạy hoặc blocked.
 
@@ -90,16 +89,9 @@ Phụ thuộc nguồn: `C02,C03,F05`.
 
 Ca tích hợp cần phối hợp: **X01, X02, X03, X13, X20, X21**. Xem bước inject/expected/gate tại [ma trận kiểm lỗi](../../../docs/implementation-checklists/integration-release.md). Chỉ chạy case thuộc phase/scope đang claim; case phase sau giữ not-run.
 
-## Checklist review và hoàn tất module
+## Review và hoàn tất
 
-- [ ] Mỗi nhánh/loop/parser hoặc state transition mới có unit/contract test meaningful; không chỉ test mock được gọi.
-- [ ] Happy path, invalid/missing/stale input, retry/duplicate/concurrency nếu áp dụng, failure và recovery đã được kiểm; ghi N/A có lý do khi không liên quan.
-- [ ] Rà tất cả callers/consumers, schema fixtures, config examples, exports/bindings/migrations và docs chịu ảnh hưởng; không bỏ consumer cũ.
-- [ ] Review SRP/OCP/LSP/ISP/DIP theo seam thật của module; không thêm interface cho helper hoặc generic framework để đạt hình thức.
-- [ ] Integration với producer/consumer thực đã chạy cho phase này; fake/unit pass không tự đánh dấu module hoặc gate đạt.
-- [ ] Logs/errors có correlation và redact secrets; bounds/timeout/release/cleanup/security cần thiết đã kiểm.
-- [ ] Ghi report và giới hạn vào docs/logs; chỉ tick task đã có evidence, task phase sau vẫn mở.
-- [ ] Handoff có schema/config/artifact versions, commands để reproduce, residual risks và owner gate tiếp theo.
+Áp dụng [quy tắc review/Done chung](../../../docs/implementation-checklists/README.md) và [release cases](../../../docs/implementation-checklists/integration-release.md). Lưu artifact/lệnh/expected-actual/giới hạn ở ticket thực thi, liên kết vào evidence record dưới đây; không đánh dấu gate chỉ từ unit tests.
 
 ## Evidence record
 

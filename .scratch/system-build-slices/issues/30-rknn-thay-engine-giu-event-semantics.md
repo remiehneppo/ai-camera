@@ -8,6 +8,8 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 **Blocked by:** [#28: Negative audit và quality regression G2](28-negative-audit-va-quality-regression-g2.md); [#29: Build artifact target reproducible](29-build-artifact-target-reproducible.md).
 
+**Activation:** Chỉ thực hiện khi target RK3588/RKNN được chọn; target ONNX ghi deferred, không bắt conversion.
+
 ## Acceptance criteria
 
 - [ ] Shape/layout/dtype/color/stride/dequant/transform/lifetime đạt conformance; failures/fallback explicit.
@@ -17,7 +19,7 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 Task nguồn: A02, A03, C05.
 
-Task IDs là mapping phạm vi baseline/integration/hardening; chỉ Blocked by mới là dependency ticket. Không phải hoàn thành toàn module nguồn trước khi làm lát cắt này.
+Task IDs là mapping phạm vi baseline/integration/hardening; Blocked by là dependency chung; Conditional blockers áp dụng theo target đã chọn. Không phải hoàn thành toàn module nguồn trước khi làm lát cắt này.
 
 ## Evidence và handoff
 

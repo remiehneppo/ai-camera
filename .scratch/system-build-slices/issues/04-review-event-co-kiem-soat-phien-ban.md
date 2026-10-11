@@ -13,11 +13,15 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 - [ ] Hai reviewer cùng expected version có một conflict rõ; UI refetch và chờ thao tác mới.
 - [ ] Review không sửa AI confidence hoặc bị AI revision reset; unauthorized/invalid transition bị reject.
 
+- [ ] Review action lưu viewed event/evidence versions; stale meaningful content conflict; needs_re_review không xóa quyết định cũ; correction/reopen có quyền, reason và audit.
+
+Chuẩn semantic: [Hợp đồng tích hợp](../../../docs/architecture/contracts.md).
+
 ## Traceability
 
 Task nguồn: W01, UI02, S02.
 
-Task IDs là mapping phạm vi baseline/integration/hardening; chỉ Blocked by mới là dependency ticket. Không phải hoàn thành toàn module nguồn trước khi làm lát cắt này.
+Task IDs là mapping phạm vi baseline/integration/hardening; Blocked by là dependency chung; Conditional blockers áp dụng theo target đã chọn. Không phải hoàn thành toàn module nguồn trước khi làm lát cắt này.
 
 ## Evidence và handoff
 
@@ -26,3 +30,5 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 ## Comments
 
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
+
+- 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.

@@ -13,11 +13,15 @@ Owner: QA/operations + Product/security; chưa claim.
 - [ ] G4a trước field data có privacy/license/production infra/restore/operator protocol và đủ fault/soak proofs, named owner ký.
 - [ ] Notification chỉ nếu được bật/duyệt ticket42, vehicle chỉ nếu đạt48; unresolved hoặc thiếu evidence không pass, có pause/rollback protocol.
 
+- [ ] G3 trên target đã chọn có conformance/capacity; ONNX path không cần #29/#30, RKNN path bắt #30. Gate không miễn hardware/fault/soak vì backend deferred.
+
+Chuẩn semantic: [Hợp đồng tích hợp](../../../docs/architecture/contracts.md).
+
 ## Traceability
 
 Task nguồn: F03, F06, T01.
 
-Task IDs là mapping phạm vi baseline/integration/hardening; chỉ Blocked by mới là dependency ticket. Không phải hoàn thành toàn module nguồn trước khi làm lát cắt này.
+Task IDs là mapping phạm vi baseline/integration/hardening; Blocked by là dependency chung; Conditional blockers áp dụng theo target đã chọn. Không phải hoàn thành toàn module nguồn trước khi làm lát cắt này.
 
 ## External prerequisites / activation gate
 
@@ -30,3 +34,5 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 ## Comments
 
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
+
+- 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.

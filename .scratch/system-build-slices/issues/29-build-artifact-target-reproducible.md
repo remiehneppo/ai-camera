@@ -8,6 +8,8 @@ Owner: ML + Edge; chưa claim.
 
 **Blocked by:** [#02: Hồ sơ lab, ODD và protocol nghiệm thu](02-ho-so-lab-odd-va-protocol-nghiem-thu.md); [#11: ONNX oracle xuất detection có provenance](11-onnx-oracle-xuat-detection-co-provenance.md).
 
+**Activation:** Chỉ thực hiện khi target RK3588/RKNN được chọn; target ONNX ghi deferred, không bắt conversion.
+
 ## Acceptance criteria
 
 - [ ] Pin SDK/runtime/operator/quantization data/terms/hashes; unsupported conversion có lỗi rõ.
@@ -17,7 +19,7 @@ Owner: ML + Edge; chưa claim.
 
 Task nguồn: A01, F05.
 
-Task IDs là mapping phạm vi baseline/integration/hardening; chỉ Blocked by mới là dependency ticket. Không phải hoàn thành toàn module nguồn trước khi làm lát cắt này.
+Task IDs là mapping phạm vi baseline/integration/hardening; Blocked by là dependency chung; Conditional blockers áp dụng theo target đã chọn. Không phải hoàn thành toàn module nguồn trước khi làm lát cắt này.
 
 ## External prerequisites / activation gate
 

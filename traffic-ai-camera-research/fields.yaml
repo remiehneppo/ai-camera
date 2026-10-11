@@ -1,0 +1,37 @@
+detail_levels: [brief, moderate, detailed]
+categories:
+  identification:
+    - {name: name_version_sku, description: 'Tên, tag/commit, SKU và biến thể đúng', detail_level: moderate}
+    - {name: source_evidence, description: 'URL gốc, thời điểm đọc; trực tiếp/snippet/quảng bá/benchmark/ước lượng', detail_level: detailed}
+  technical:
+    - {name: operational_domain, description: 'Góc nhìn, pixel đối tượng, ánh sáng, mưa, che khuất và ngoài miền', detail_level: detailed}
+    - {name: event_taxonomy, description: 'Ngã/người nằm, va chạm/near-miss, mức ưu tiên và hành động', detail_level: detailed}
+    - {name: calibration, description: 'Homography, timestamp, drift, sai số, radar và trạng thái đèn', detail_level: detailed}
+    - {name: inference_pipeline, description: 'Model, input, precision, decode, zero-copy, export và dependency', detail_level: detailed}
+    - {name: capacity_latency, description: 'FPS nguồn/phân tích, số camera, bộ nhớ, P95/P99, burst pose và overload', detail_level: detailed}
+    - {name: quality_metrics, description: 'Event precision/recall, false alerts/camera-ngày, latency và CI', detail_level: detailed}
+    - {name: native_camera_analytics, description: 'Event-only/trigger/dense metadata; payload, IDs, rate, coverage và firmware', detail_level: detailed}
+    - {name: camera_local_access, description: 'RTSP local, authentication, no-WAN/reconnect, FPS thực và thông số theo hardware version', detail_level: detailed}
+  commercial:
+    - {name: license_provenance, description: 'Code, weights, dataset, SDK, codec, redistribution, hash và nghĩa vụ', detail_level: detailed}
+    - {name: retail_price, description: 'Giá đang bán đúng SKU, URL, stock, VAT, ship, bảo hành; không dùng MSRP thay quote', detail_level: detailed}
+    - {name: bill_of_materials, description: 'Thiết bị, nguồn, SSD, PoE, camera, tủ, chống sét, UPS, công lắp', detail_level: detailed}
+    - {name: lifecycle_tco, description: 'Devkit/module, EOL, điện, nhân sự, cloud, vệ sinh, thay thế', detail_level: detailed}
+  deployment:
+    - {name: edge_server, description: 'Metadata, pre/post clip, remux, offline outbox, dedup và truy hồi', detail_level: detailed}
+    - {name: fleet_security, description: 'mTLS, VLAN, khóa, OTA rollback, watchdog, health và audit', detail_level: detailed}
+    - {name: governance, description: 'Luật Việt Nam, mục đích/cơ sở pháp lý, retention và human review', detail_level: detailed}
+    - {name: validation, description: 'Split site/time/person, hard negatives, real/staged và soak test', detail_level: detailed}
+    - {name: portability_contract, description: 'PerceptionPipeline, full snapshots/origin, pin receipt/anchor, evidence states, review freshness và target conformance', detail_level: detailed}
+    - {name: backend_conversion, description: 'Artifact riêng, operators/layout/quantization/NMS, golden regression và capability/fallback', detail_level: detailed}
+    - {name: resource_scheduling, description: 'Bounded queues, pose fairness/deadlines, ordered tracking, recorder độc lập inference', detail_level: detailed}
+uncertain:
+  - 'Quyền thương mại của từng pretrained checkpoint và dữ liệu huấn luyện'
+  - 'Thông số tồn kho, VAT và giá checkout có thể khác giá hiển thị'
+  - 'Hiệu năng toàn pipeline chưa đo trên phần cứng đề xuất'
+  - 'Điều kiện kiểm định/chấp nhận chứng cứ cần tư vấn chuyên ngành'
+  - 'Thời điểm website cập nhật có thể không trùng ngày hệ thống 2026-10-09'
+  - 'H1c local RTSP đúng firmware; ONVIF chưa xác minh từ bảng iSpy'
+  - 'Dense object metadata của Hikvision DS-2CD2T43G2-4I chưa xác minh'
+  - 'RKNN checkpoint support và MPP/RGA/NPU zero-copy chưa benchmark'
+  - 'Chưa có giá mới H1c hoặc board RPi5/OrangePi5 tại Việt Nam'

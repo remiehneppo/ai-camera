@@ -13,11 +13,15 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 - [ ] Oracle/native RTMPose crop/affine/SimCC/schema parity; original coordinate/missing keypoints rõ.
 - [ ] Bounded buffer cache; expired/skipped/stale/ID switch không gắn pose nhầm frame; request fixture dùng trước automatic scheduling.
 
+- [ ] Mỗi accepted pose request có terminal outcome; detection-ok/pose-skipped cùng biểu diễn; crash epoch fail outstanding requests, terminal queue không drop im lặng.
+
+Chuẩn semantic: [Hợp đồng tích hợp](../../../docs/architecture/contracts.md).
+
 ## Traceability
 
 Task nguồn: P01, P03, C05.
 
-Task IDs là mapping phạm vi baseline/integration/hardening; chỉ Blocked by mới là dependency ticket. Không phải hoàn thành toàn module nguồn trước khi làm lát cắt này.
+Task IDs là mapping phạm vi baseline/integration/hardening; Blocked by là dependency chung; Conditional blockers áp dụng theo target đã chọn. Không phải hoàn thành toàn module nguồn trước khi làm lát cắt này.
 
 ## Evidence và handoff
 
@@ -26,3 +30,5 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 ## Comments
 
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
+
+- 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.

@@ -5,25 +5,19 @@ Ngày: 2026-10-11. Trạng thái: kế hoạch, chưa implement hoặc nghiệm 
 Bộ này phân rã **18 module, 89 task hiện hành** thành bước thực hiện, acceptance và evidence record. Checklist module nằm trong tracker Markdown `.scratch/system-build/issues/` theo quy ước repo; tài liệu này là điểm vào để theo dõi. [PRD / phạm vi](../../.scratch/system-build/PRD.md).
 
 - [Phân tích kiến trúc, SOLID và dependency](architecture-analysis.md).
-- [Kiểm thử xuyên module, 37 failure cases và G0–G5](integration-release.md).
+- [Kiểm thử xuyên module, 45 failure cases và G0–G5](integration-release.md).
 - [Plan gốc và quyết định Q1–Q19](../architecture/implementation-plan.md).
 - [Kiến trúc semantic/fault boundaries](../architecture/system-architecture.md).
 - [Readiness / mẫu facts và benchmark](../architecture/deployment-readiness.md).
 - [Nhật ký tạo checklist](../logs/2026-10-11-implementation-checklists.md).
 
-## 1. Cách dùng và trạng thái
+## 1. Cách dùng
 
-1. Chọn phase và task đủ prerequisites; đọc analysis, CONTEXT/ADR và checklist module. Một module có nhiều phase, chỉ implement phần hiện tại.
-2. Gán owner cụ thể, scope file và người tích hợp; cập nhật `Status:` theo [triage labels](../agents/triage-labels.md). Mặc định `needs-triage` vì chưa claim/gán nhân sự, không có nghĩa mọi module thiếu thông tin.
-3. Dùng `Execution: not-started | in-progress | blocked | done` để ghi tiến độ module trong phạm vi đã claim. Dependencies chưa xong là blocker thực hiện; `needs-info` chỉ khi thiếu facts/decision cụ thể cần người cung cấp. Không tự biến quyết định đã accepted thành câu hỏi lại.
-4. Trước code, xem callers/consumers bằng CodeGraph và liệt kê schema/config/exports/bindings/fixtures/migrations bị ảnh hưởng. Sửa shared contract phải review cả producer lẫn consumer.
-5. Tick bước `.01`–`.03` khi có artifact; `.AC` khi acceptance pass; `.EV` khi có evidence record. Không tick toàn module vì một task P1 xong trong khi P4 còn mở.
-6. Chạy unit/contract phù hợp rồi integration/regression theo cases trong release checklist. Ghi lệnh thật và phần chưa chạy; mock không thay DB/RTSP/hardware/browser proof.
-7. Cập nhật `## Comments` append-only và docs/logs bằng hành động/quyết định/giới hạn. Gate chỉ pass khi có đủ reports và owner sign-off, không từ phần trăm checkbox.
-
-`Status:` là triage role, không là kiểm thử hay chất lượng sản phẩm. Chỉ ghi `Execution: done` khi toàn phạm vi claim đạt acceptance/evidence; nếu claim P1, ghi rõ `Scope claimed: P1` và các phần sau còn deferred. N/A phải có lý do/owner; không dùng N/A cho branch đang bật nhưng test khó chạy.
-
-Không đánh dấu checklist trong lần tạo này. Không có lệnh runtime đã chạy, actual measurement hoặc release approval mới. Checklist source paths là dự kiến, không yêu cầu tạo sẵn mọi folder/interface.
+1. Claim ticket ở [tracker slices](../../.scratch/system-build-slices/PRD.md); đó là nguồn duy nhất cho Status/Execution, Blocked by và Conditional blockers. Gán owner người thật và scope file trước thực hiện.
+2. Đọc [contracts](../architecture/contracts.md), task nguồn và checklist module bên dưới. Module là phạm vi/acceptance, không là đơn vị claim thứ hai.
+3. Tick bước và AC/EV khi có report từ ticket tương ứng; không tick phần phase sau chưa thực hiện. Lưu evidence một nơi rồi liên kết, không nhân đôi tiến độ.
+4. Shared contract thay đổi phải review producer/consumer/config/schema/bindings/fixtures; tests theo [release checklist](integration-release.md). Gate cần owner sign-off, không từ phần trăm checkbox.
+5. Ghi hành động/quyết định vào docs/logs và Comments append-only. N/A phải có lý do và scope; RKNN deferred không miễn actual-target capacity.
 
 ## 2. Checklist từng module
 
@@ -44,45 +38,15 @@ Không đánh dấu checklist trong lần tạo này. Không có lệnh runtime 
 | [M12 — Backend ingestion, repository và evidence (P1–P4)](../../.scratch/system-build/issues/13-m12-backend-evidence.md) | P1–P4 | S01, S02, E01, E02, E03 | Backend |
 | [M13 — Alert/review workflow, dev demo và bàn giao UI](../../.scratch/system-build/issues/14-m13-review-demo-ui.md) | P1 demo; UI P4 | W01, W02, UI01, UI02, UI03, UI04 | Backend/dev demo; đội UI phase sau |
 | [M14 — Data engine và evaluation (P0 samples; P2 vận hành)](../../.scratch/system-build/issues/15-m14-data-evaluation.md) | P0/P2 | D01, D02, D03, D04, D05 | ML + Product/QA |
-| [M15 — Model Registry, conversion và RK3588 (P3)](../../.scratch/system-build/issues/16-m15-rknn-capacity.md) | P3 | A01, A02, A03, A04, A05 | ML + Edge |
+| [M15 — Target conformance/capacity; RKNN có điều kiện (P3)](../../.scratch/system-build/issues/16-m15-rknn-capacity.md) | P3 | A01, A02, A03, A04, A05 | ML + Edge |
 | [M16 — Health, trust, control và rollout (P1 baseline; P4 đầy đủ)](../../.scratch/system-build/issues/17-m16-health-trust-rollout.md) | P1 baseline/P4 | H01, H02, T01, T02, T03, T04, T05, T06 | Edge + Backend + Operations/security |
 | [M17 — Calibration, GroundProjector và MotionAnalyzer (P4 vehicle branch)](../../.scratch/system-build/issues/18-m17-geometry-vehicle.md) | P4 vehicle | G01, G02, M01, M02, M03 | Domain + ML + Site operations |
 
-## 3. Dependency và phạm vi phối hợp
+## 3. Dependency
 
-Bảng này tổng hợp **tham chiếu task xuyên module**, không là graph build bắt buộc phải hoàn thành toàn module. Dependencies task cụ thể nằm ngay trên từng checklist task. M02/M06/M07/M16 có contract và implementation ở nhiều phase; dùng thứ tự tách tại analysis để tránh chờ vòng.
+Blockers cụ thể nằm trong tracker slices, không suy hard dependency từ quan hệ giữa toàn module. [Hướng dẫn ranh giới](architecture-analysis.md) ghi B04/T02, QL03/G01 và O04/A05 cần phân kỳ. Khi C01–C05 đổi phải rà native/journal/server/UI consumers dù không có edge dependency trực tiếp.
 
-| Module | Nhận đầu vào từ module | Consumers trực tiếp theo backlog |
-|---|---|---|
-| M00 | — | M01, M02, M03, M04, M07, M08, M09, M10, M11, M14, M15, M16, M17 |
-| M01 | M00 | M02, M03, M04, M05, M08, M09, M10, M11, M12, M15 |
-| M02 | M00, M01, M04, M10, M11, M16 | M16 |
-| M03 | M00, M01, M10 | M04 |
-| M04 | M00, M01, M03, M05 | M02, M05, M06, M07, M08, M15 |
-| M05 | M01, M04, M14 | M04, M08, M09, M17 |
-| M06 | M04, M08, M09, M11, M15, M16 | M10, M15 |
-| M07 | M00, M04, M17 | M08, M09, M17 |
-| M08 | M00, M01, M04, M05, M07 | M06, M09, M15 |
-| M09 | M00, M01, M05, M07, M08, M17 | M06, M13, M14, M15, M17 |
-| M10 | M00, M01, M06, M11, M12 | M02, M03, M11, M14, M15, M16 |
-| M11 | M00, M01, M10, M12 | M02, M06, M10, M16 |
-| M12 | M01, M16 | M10, M11, M13, M16 |
-| M13 | M09, M12, M14, M16 | M14, M16 |
-| M14 | M00, M09, M10, M13 | M05, M13, M17 |
-| M15 | M00, M01, M04, M06, M08, M09, M10 | M06, M16 |
-| M16 | M00, M02, M10, M11, M12, M13, M15 | M02, M06, M12, M13 |
-| M17 | M00, M05, M07, M09, M14 | M07, M09 |
-
-Consumers theo bảng dependency chưa bao gồm mọi người dùng semantic schema dùng chung. Khi C01–C05/C03 thay đổi phải rà **tất cả** native bindings, journal/upload, server APIs, fixtures và UI consumers, dù không hiện như dependency trực tiếp trong bảng.
-
-Các điểm không được dùng làm hard prerequisite sai phase:
-
-- F04/C03 khóa ownership/pin contract → R01 recorder → V04 correlation.
-- B04 local activation có trước T02/T04 signed remote integration; remote không bypass trust gate.
-- QL03 camera-moved P2; G01/QL03 validity contract P4 → G02 projection.
-- O04/A05 cùng một benchmark integration sau A03, không chờ vòng nhau.
-- W02 intent/schema + synthetic guard có baseline P1; worker/provider/assignment/escalation khi protocol được bật, lab dashboard-only.
-- M17/G4b chỉ khi vehicle scope bật; person-down G4a/G5 không phải đợi vehicle disabled.
+#31/#35 có conditional blocker #30 khi target RKNN. Target ONNX đi qua native/oracle/event conformance và actual-target soak. Vehicle/notification disabled không chặn person-down pilot; mọi branch được bật vẫn phải qua gate của nó.
 
 ## 4. Ownership để tránh conflict
 
@@ -112,7 +76,7 @@ Review SOLID theo analysis và đoạn riêng của từng module. Review tính 
 | Nội dung | Đã xác nhận cho lab | Còn phải đo/chốt theo gate |
 |---|---|---|
 | Use case | Person-down, camera cố định/ROI lòng đường trước | ODD/pixel-on-target/quality thresholds/site dataset |
-| Baseline | ONNX/software decode; tracker C++ P1, native pose P2 | Target board/codec/buffer/SDK thực và RKNN P3 |
+| Baseline | ONNX/software decode; tracker C++ P1, native pose P2 | Target board/codec/buffer/SDK thực và RKNN P3 nếu chọn target |
 | Evidence | Pre 10s/post 20s; ring 10 phút; server clips 7 ngày | Bitrate/event rate/quota/endurance và actual completeness |
 | WAN budget | 24h sizing cho clip chưa ACK | Autonomy đo thực; không là TTL xóa pinned/unACK |
 | Latency lab | P95 durable edge commit→dashboard ≤5s trên LAN | Clock correlation/uncertainty, sample count và browser render timings |
@@ -122,21 +86,6 @@ Review SOLID theo analysis và đoạn riêng của từng module. Review tính 
 
 Lựa chọn filesystem evidence lab và polling demo là triển khai tối thiểu có thể đổi; không tự biến thành production ADR. Production cloud/on-prem, topology storage/HA, trust/privacy và license clearance vẫn theo readiness.
 
-## 7. Theo dõi tiến độ
+## 7. Tiến độ và nghiệm thu
 
-Mọi task/gate hiện `not-run/not-started`. Không điền % tiến độ dựa trên tài liệu đã viết. Khi thực hiện, cập nhật bảng sau bằng evidence thật; nếu module làm nhiều phase, thêm dòng cho từng scope claim.
-
-| Scope | Owner người thật | Execution | Task AC+EV xong / tổng scope | Gate/evidence | Blocker / bước tiếp |
-|---|---|---|---|---|---|
-| P0 | Chưa gán | not-started | 0 / chưa claim | G0 chưa nghiệm thu | Facts/contracts và người ký |
-| P1 | Chưa gán | not-started | 0 / chưa claim | G1 chưa nghiệm thu | G0 + vertical slice |
-| P2 | Chưa gán | not-started | 0 / chưa claim | G2 chưa nghiệm thu | Person-down datasets/quality |
-| P3 | Chưa gán | not-started | 0 / chưa claim | G3 chưa nghiệm thu | Target hardware + parity/capacity |
-| P4 | Chưa gán | not-started | 0 / chưa claim | G4a/G4b chưa nghiệm thu | Reliability/trust/UI/vehicle scope |
-| P5 | Chưa gán | not-started | 0 / chưa claim | G5 chưa nghiệm thu | Field acceptance/restore/scale |
-
-Thay đổi source/config/tests chưa thuộc lần xây checklist này; không stage/commit/push. Các issue mới là backlog cần triage, không tự claim cho agent hay hứa lịch triển khai.
-
-## 8. Tracker theo lát cắt đã publish
-
-Người dùng đã duyệt breakdown và [50 ticket tracer-bullet đã publish](../../.scratch/system-build-slices/PRD.md), bao phủ đủ 89 task nguồn. Mỗi ticket có blocker/acceptance riêng; frontier ban đầu là #01 và #02. Dùng tracker slices để claim/thực hiện, checklist module để đối chiếu contract/chi tiết/evidence; parent PRD/issues theo module giữ nguyên. Tất cả ticket vẫn not-started, chưa implement hoặc nghiệm thu runtime.
+Xem [tracker thực thi](../../.scratch/system-build-slices/PRD.md). Hiện mọi ticket not-started, các acceptance/runtime gates chưa chạy. Checklist module chỉ giữ task scope và evidence references; không duy trì bảng % hoặc Execution song song.

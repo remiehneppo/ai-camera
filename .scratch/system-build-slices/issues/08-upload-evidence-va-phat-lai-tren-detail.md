@@ -13,11 +13,15 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 - [ ] Upload retry/resume cùng evidence identity, verify hash/size trước receipt; metadata/clip ACK tách.
 - [ ] Server kiểm object ownership/authz, range/content type; pending/failed rõ, H.265 có playback path được kiểm hoặc lỗi rõ.
 
+- [ ] Partial clip upload/ACK vẫn partial; expired/corrupt location không bị receipt lịch sử làm available; hash/bytes finalized bất biến.
+
+Chuẩn semantic: [Hợp đồng tích hợp](../../../docs/architecture/contracts.md).
+
 ## Traceability
 
 Task nguồn: J03, E01, E02, UI01, UI02.
 
-Task IDs là mapping phạm vi baseline/integration/hardening; chỉ Blocked by mới là dependency ticket. Không phải hoàn thành toàn module nguồn trước khi làm lát cắt này.
+Task IDs là mapping phạm vi baseline/integration/hardening; Blocked by là dependency chung; Conditional blockers áp dụng theo target đã chọn. Không phải hoàn thành toàn module nguồn trước khi làm lát cắt này.
 
 ## Evidence và handoff
 
@@ -26,3 +30,5 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 ## Comments
 
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
+
+- 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.

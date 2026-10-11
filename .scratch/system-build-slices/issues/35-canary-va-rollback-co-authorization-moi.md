@@ -6,18 +6,26 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 **What to build:** Canary bundle, theo dõi observed version rồi rollback artifact cũ bằng authorization sequence mới.
 
-**Blocked by:** [#34: Config local và signed activation giữ LKG](34-config-local-va-signed-activation-giu-lkg.md); [#30: RKNN thay engine giữ event semantics](30-rknn-thay-engine-giu-event-semantics.md).
+**Blocked by:** [#34: Config local và signed activation giữ LKG](34-config-local-va-signed-activation-giu-lkg.md); [#28: Negative audit và quality regression G2](28-negative-audit-va-quality-regression-g2.md).
+
+**Conditional blockers (RKNN):** [#30: RKNN thay engine giữ event semantics](30-rknn-thay-engine-giu-event-semantics.md).
+
+Target ONNX dùng C05/N05/P03/I05 và actual-target conformance; target chưa chọn hoặc thiếu report thì acceptance chưa đạt.
 
 ## Acceptance criteria
 
 - [ ] Failed activation giữ LKG; state/schema/model compatibility policy rõ, không trộn lineage im lặng.
 - [ ] Rollback không bypass signature/downgrade trust sequence; retry và reboot giữa activation có tests.
 
+- [ ] Bundle trên target đã chọn có conformance report; ONNX không chờ RKNN, còn RKNN bắt #30 trước activation/canary.
+
+Chuẩn semantic: [Hợp đồng tích hợp](../../../docs/architecture/contracts.md).
+
 ## Traceability
 
 Task nguồn: T04, B04.
 
-Task IDs là mapping phạm vi baseline/integration/hardening; chỉ Blocked by mới là dependency ticket. Không phải hoàn thành toàn module nguồn trước khi làm lát cắt này.
+Task IDs là mapping phạm vi baseline/integration/hardening; Blocked by là dependency chung; Conditional blockers áp dụng theo target đã chọn. Không phải hoàn thành toàn module nguồn trước khi làm lát cắt này.
 
 ## Evidence và handoff
 
@@ -26,3 +34,5 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 ## Comments
 
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
+
+- 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.
