@@ -9,7 +9,6 @@ Bộ này phân rã **18 module, 89 task hiện hành** thành bước thực hi
 - [Plan gốc và quyết định Q1–Q19](../architecture/implementation-plan.md).
 - [Kiến trúc semantic/fault boundaries](../architecture/system-architecture.md).
 - [Readiness / mẫu facts và benchmark](../architecture/deployment-readiness.md).
-- [Nhật ký tạo checklist](../logs/2026-10-11-implementation-checklists.md).
 
 ## 1. Cách dùng
 

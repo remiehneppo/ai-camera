@@ -24,7 +24,3 @@ ADR/quyết định accepted xác định lựa chọn; architecture/contracts �
 Chỉ claim/cập nhật Execution ở ticket slices. Module checklist giữ task IDs và link evidence; không claim/đóng như một backlog thứ hai. Gate chỉ accepted khi report và owner sign-off đủ; thiết kế được duyệt không phải runtime đã pass.
 
 Các quyết định còn mở chỉ gồm facts/site/target/protocol production được nêu trong readiness và mục 15 kiến trúc. Không hỏi lại event ring, MongoDB hoặc native C++ P1 đã chốt. RKNN là nhánh theo target; G3 conformance/capacity vẫn bắt buộc cho mọi target.
-
-## Lịch sử
-
-[Nhật ký](logs/README.md) và [review 2026-10-11](architecture/design-review-2026-10-11.md) giữ lý do thay đổi, không dùng làm spec hiện hành. [Breakdown cũ](implementation-checklists/ticket-breakdown-draft.md) chỉ dẫn tới tracker, không duy trì bản sao 50 ticket.

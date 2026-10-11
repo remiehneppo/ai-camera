@@ -4,13 +4,13 @@ Ngày: 2026-10-11. Breakdown đã được người dùng duyệt bằng “đ�
 
 ## Phạm vi và nguồn chuẩn
 
-- [Breakdown đã duyệt](../../docs/implementation-checklists/ticket-breakdown-draft.md).
+- [Plan triển khai](../../docs/architecture/implementation-plan.md).
 - [Checklist theo module](../../docs/implementation-checklists/README.md).
 - [Kiến trúc/SOLID/dependencies](../../docs/implementation-checklists/architecture-analysis.md).
 - [Plan và quyết định Q1–Q19](../../docs/architecture/implementation-plan.md).
 - [Integration/failure cases và G0–G5](../../docs/implementation-checklists/integration-release.md).
 
-Ticket là đơn vị claim/thực hiện. Checklist module giữ acceptance chi tiết và traceability; không claim/đóng parent như một đơn vị thực thi khác. Cập nhật contract/acceptance module khi thiết kế thay đổi. Không nhân đôi tiến độ: cập nhật ticket và gắn evidence cho task nguồn tương ứng khi thật sự đạt.
+Ticket trong tracker này là đơn vị claim/thực hiện và nguồn duy nhất cho Status/Execution/blockers. Checklist module giữ acceptance chi tiết và traceability; không claim/đóng parent như một đơn vị thực thi khác. Cập nhật contract/acceptance module khi thiết kế thay đổi. Không nhân đôi tiến độ: cập nhật ticket và gắn evidence cho task nguồn tương ứng khi thật sự đạt.
 
 ## Cách chọn việc
 
