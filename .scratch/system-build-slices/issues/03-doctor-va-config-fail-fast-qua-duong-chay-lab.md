@@ -1,7 +1,7 @@
 # 03: Doctor và config fail-fast qua đường chạy lab
 
 Status: ready-for-agent
-Execution: in-progress
+Execution: blocked
 Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
 
 **What to build:** Người triển khai kiểm config/artifact rồi start analytics; enabled config sai dừng rõ, disabled có reason và không lộ secrets.
@@ -27,3 +27,5 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
 - 2026-10-12: Bắt đầu implementation cho server lab: dùng chung validator fail-fast trong startup, snapshot config frozen với SHA-256 fingerprint không chứa secret values, thêm `python -m apps.server.doctor` để ping Mongo và báo analytics/recorder capabilities hiện có. Còn thiếu analytics pipeline/factory/model manifest + verification và recorder lifecycle độc lập; không đánh dấu acceptance các phần này. Xem [implementation log](../../../docs/logs/2026-10-12-ticket-03.md).
+
+- 2026-10-12: Tiếp tục rà soát #03; test suite hiện có 15/15 pass và server config modules compile. Chưa thể hoàn thiện các tiêu chí còn mở: chưa có analytics runtime/factory hoặc artifact manifest/backend target (model/license selection còn pending), và chưa có recorder lifecycle để chứng minh analytics config lỗi không dừng recording. Giữ phần server config/doctor đã implement; Execution chuyển blocked đến khi các runtime/target facts tương ứng có mặt. Không tạo factory/artifact/recorder giả.
