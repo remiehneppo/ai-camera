@@ -13,7 +13,7 @@ Owner: Edge/platform; chưa claim.
 - [x] Segment hoàn tất được finalize và công bố trong khi ingest tiếp tục; metadata sidecar là điểm commit hiển thị atomic, `segments()`/`actual_range()` không chờ EOF.
 - [x] `pin()` trong lúc ingest đang chạy trả receipt theo coverage thật, không ACK post-roll chưa tới; `finalize_pin()` yêu cầu đủ post-roll trừ khi được yêu cầu finalize partial.
 - [x] Kill/timeout ingest giữ segment đã finalize, bỏ part dở, không tạo receipt hoàn tất giả; crash giữa rename media và sidecar được `reconcile()` xử lý idempotent.
-- [x] Replay đọc timestamp ffprobe tăng dần, không giữ list frame phía Python; callback synchronous giữ backpressure, subprocess dọn khi callback lỗi. `ffprobe -show_frames` vẫn có thể buffer JSON nội bộ, nên chưa khẳng định hard bound tổng bộ nhớ probe.
+- [x] Replay đọc timestamp ffprobe tăng dần, không giữ list frame phía Python; callback synchronous giữ backpressure, subprocess dọn khi callback lỗi. Replay dùng CSV; 12 phép đo synthetic 10–10.000s xác nhận callback trước EOF, không thấy RSS tăng theo độ dài trong envelope này. Probe metadata segment dùng JSON riêng; chưa khẳng định hard bound tổng bộ nhớ.
 - [x] File replay/ring/pin regression giữ semantics; synthetic FIFO tests chứng minh query/pin trước EOF, kill/restart và replay khi ffprobe producer vẫn chạy.
 
 ## Non-goals and gates
@@ -25,6 +25,14 @@ Owner: Edge/platform; chưa claim.
 ## Traceability
 
 Discovered while decomposing user-requested live RTSP recorder+analytics path. Existing #06 acceptance covers file replay and RTSP camera acceptance remains open, but its finalize-after-EOF behavior prevents a live ring/pin; this prerequisite is explicitly separated here.
+
+## Hardening follow-up — 2026-10-13
+
+User confirmed probe-failure hardening before native/live-camera work. `probe_timeout_seconds` bounds metadata calls and replay output inactivity, excludes callback/pacing time, and is not a production SLO. System/unknown failures preserve media for retry; only affirmative malformed/incomplete diagnostics allow removal. Lead full numerical suite: 138 tests OK; targeted mypy clean; independent standards/spec review found no blocking mismatch in this scope.
+
+Replay CSV measurements on synthetic 320x180 H.264 10–10,000s: 12/12 callbacks before EOF, sampled Python RSS 21,320–22,316 KiB and ffprobe RSS 50,612–53,324 KiB. No process-wide bound claimed; old assumption about replay whole-frame JSON buffering is corrected. Segment metadata JSON is a separate unmeasured path.
+
+Execution remains partial: storage/fsync stalls cannot be forcibly cancelled; publisher may outlive an error, and normal ingest has no global deadline. This does not open #15/G1 or native gates. See [hardening evidence](../../../docs/logs/2026-10-13-ticket-51-hardening.md).
 
 ## Evidence and handoff
 

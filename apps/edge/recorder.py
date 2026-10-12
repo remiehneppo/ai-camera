@@ -8,6 +8,7 @@ import itertools
 import json
 import math
 import os
+import select
 import shutil
 import sqlite3
 import subprocess
@@ -55,9 +56,13 @@ class FileRecorder:
     # Grace before SIGKILL when a caller abandons ingest mid-stream.
     STOP_GRACE_SECONDS = 0.5
 
-    def __init__(self, root: str | Path, ring_seconds: float = 600) -> None:
+    def __init__(self, root: str | Path, ring_seconds: float = 600,
+                 *, probe_timeout_seconds: float = 30) -> None:
         if ring_seconds <= 0:
             raise ValueError("ring_seconds must be positive")
+        if not math.isfinite(probe_timeout_seconds) or probe_timeout_seconds <= 0:
+            raise ValueError("probe_timeout_seconds must be finite and positive")
+        self.probe_timeout_seconds = probe_timeout_seconds
         if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
             raise RuntimeError("ffmpeg and ffprobe are required")
         self.root = Path(root)
@@ -322,9 +327,12 @@ class FileRecorder:
                 raise
             finally:
                 returncode = self._reap(process, publisher, poll_seconds)
-                # Bounded by construction: the publisher returns as soon as it observes the
-                # reaped producer, and a failed publisher has already stopped that producer.
-                publisher.join()
+                # Allow each remaining part its own probe budget, not a whole-ingest deadline.
+                remaining = len(list(directory.glob(self.PART_GLOB)))
+                publisher.join((remaining + 1) * self.probe_timeout_seconds
+                               + 2 * self.STOP_GRACE_SECONDS + poll_seconds)
+                if publisher.is_alive():
+                    raise TimeoutError("recorder publisher did not stop after producer exit")
                 if failures:
                     # The publisher died before it could classify what was left, so re-run the
                     # same probe gate here: a part that is still provably complete is published,
@@ -363,6 +371,7 @@ class FileRecorder:
             process.wait(timeout=self.STOP_GRACE_SECONDS)
         except subprocess.TimeoutExpired:
             process.kill()
+            process.wait(timeout=self.STOP_GRACE_SECONDS)
 
     def _publish_closed(self, directory: Path, session_id: str, process: subprocess.Popen,
                         poll_seconds: float, failures: list[BaseException]) -> None:
@@ -575,13 +584,23 @@ class FileRecorder:
         error output -- and `-v error` prints nothing but errors. That trailer is the only
         reliable completeness signal: a producer killed mid-segment leaves a readable part whose
         timestamp range looks plausible, so its metadata cannot tell it apart from a closed one.
-        Error output therefore means "not a whole segment", and the caller must not publish it.
+        Known premature-EOF, malformed EBML-header and invalid-input diagnostics prove
+        incomplete or corrupt media. Unknown diagnostics, IO failures and killed probes
+        are not a verdict on the media.
         """
         command = ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_streams",
                    "-show_frames", "-of", "json", str(path)]
-        probe = subprocess.run(command, capture_output=True, text=True)
+        probe = subprocess.run(command, capture_output=True, text=True,
+                               timeout=self.probe_timeout_seconds)
         if probe.returncode or probe.stderr.strip():
-            raise IncompleteSegment(f"segment is not closed: {path.name}")
+            diagnostics = probe.stderr.strip().splitlines()
+            if probe.returncode >= 0 and diagnostics and all(
+                line.endswith(("File ended prematurely", "EBML header parsing failed",
+                               "Invalid data found when processing input")) for line in diagnostics
+            ):
+                raise IncompleteSegment(f"segment is not closed: {path.name}")
+            raise subprocess.CalledProcessError(probe.returncode, command,
+                                                output=probe.stdout, stderr=probe.stderr)
         result = json.loads(probe.stdout)
         stream = result["streams"][0]
         frames = result.get("frames", [])
@@ -613,34 +632,47 @@ class FileRecorder:
         command = ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
                    "frame=pts,best_effort_timestamp", "-of", "csv=p=0", str(source)]
         with tempfile.TemporaryFile() as errors:
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors, text=True)
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors)
             stdout = process.stdout
             if stdout is None:
-                process.kill()
-                process.wait()
+                self._stop(process)
                 raise RuntimeError("ffprobe stdout pipe unavailable")
             try:
-                for line in stdout:
-                    pts = self._frame_timestamp(line)
+                pending = b""
+                while True:
+                    if not select.select([stdout], [], [], self.probe_timeout_seconds)[0]:
+                        raise subprocess.TimeoutExpired(command, self.probe_timeout_seconds)
+                    chunk = os.read(stdout.fileno(), 4096)
+                    if not chunk:
+                        break
+                    pending += chunk
+                    while b"\n" in pending:
+                        line, pending = pending.split(b"\n", 1)
+                        pts = self._frame_timestamp(line.decode())
+                        if pts is not None:
+                            yield {"pts": pts, "time_base": time_base,
+                                   "time_base_num": numerator, "time_base_den": denominator}
+                    if len(pending) > 4096:
+                        raise ValueError("ffprobe frame timestamp line is too long")
+                if pending:
+                    pts = self._frame_timestamp(pending.decode())
                     if pts is not None:
                         yield {"pts": pts, "time_base": time_base,
                                "time_base_num": numerator, "time_base_den": denominator}
+                returncode = process.wait(timeout=self.probe_timeout_seconds)
             finally:
-                if process.poll() is None:
-                    process.kill()  # the consumer stopped early: bound the producer
-                returncode = process.wait()
+                self._stop(process)
                 stdout.close()
             if returncode:
                 errors.seek(0)
                 raise subprocess.CalledProcessError(returncode, command,
                                                     stderr=errors.read().decode(errors="replace"))
 
-    @staticmethod
-    def _stream_time_base(source: Path) -> str:
+    def _stream_time_base(self, source: Path) -> str:
         probe = json.loads(subprocess.run([
             "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=time_base",
             "-of", "json", str(source),
-        ], check=True, capture_output=True, text=True).stdout)
+        ], check=True, capture_output=True, text=True, timeout=self.probe_timeout_seconds).stdout)
         return probe["streams"][0]["time_base"]
 
     @staticmethod

@@ -4,6 +4,7 @@ import shutil
 import signal
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -330,6 +331,50 @@ class FileRecorderTests(unittest.TestCase):
         self.assertTrue(orphan.is_file(), "an unclassified probe failure must not destroy the media")
         self.assertFalse(orphan.with_suffix(".json").exists())
 
+    def test_reconcile_preserves_media_on_probe_system_or_unknown_errors(self):
+        for returncode, stderr in ((1, "Permission denied"), (1, "Input/output error"),
+                                   (-9, ""), (1, "unknown probe failure"),
+                                   (0, "unrecognized diagnostic")):
+            with self.subTest(returncode=returncode, stderr=stderr):
+                session = f"system-error-{abs(returncode)}-{len(stderr)}"
+                orphan = self.crash_window(session)
+                original = orphan.read_bytes()
+                result = subprocess.CompletedProcess(["ffprobe"], returncode, "{}", stderr)
+                with mock.patch("apps.edge.recorder.subprocess.run", return_value=result):
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        self.recorder.reconcile(session)
+                self.assertEqual(orphan.read_bytes(), original)
+                self.assertFalse(orphan.with_suffix(".json").exists())
+                self.assertEqual(len(self.recorder.reconcile(session)), 1,
+                                 "retry with a healthy probe must recover preserved media")
+
+    def test_reconcile_timeout_preserves_part_and_reaps_probe_for_retry(self):
+        session = "probe-timeout"
+        parts = self.seed_parts(self.root / "ring" / session)
+        before = {part: part.read_bytes() for part in parts}
+        recorder = FileRecorder(self.root / "ring", probe_timeout_seconds=0.1)
+        popen = subprocess.Popen
+        children = []
+
+        def blocked(command, *args, **kwargs):
+            child = popen([sys.executable, "-c", "import time; time.sleep(60)"], *args, **kwargs)
+            children.append(child)
+            return child
+
+        def attempt():
+            try:
+                recorder.reconcile(session)
+            except BaseException as exc:
+                return exc
+            return None
+
+        with mock.patch("apps.edge.recorder.subprocess.Popen", side_effect=blocked):
+            error = self.run_bounded(attempt, "probe timeout must bound reconcile", timeout=3)
+        self.assertIsInstance(error, subprocess.TimeoutExpired)
+        self.assertTrue(children and all(child.poll() is not None for child in children))
+        self.assertEqual({part: part.read_bytes() for part in parts}, before)
+        self.assertEqual(len(recorder.reconcile(session)), len(parts))
+
     def test_reconcile_publishes_a_whole_part_left_by_a_dead_ingest(self):
         session_dir = self.root / "ring" / "left-part"
         parts = self.seed_parts(session_dir)
@@ -484,6 +529,38 @@ class FileRecorderTests(unittest.TestCase):
                         "a part the publisher could not classify is preserved, not destroyed")
         self.assertEqual(self.recorder.segments("publisher-down"), [], "a preserved part is still not ring data")
 
+    def test_ingest_probe_timeout_stops_children_preserves_parts_and_recovers(self):
+        recorder = FileRecorder(self.root / "ring", probe_timeout_seconds=0.1)
+        directory = self.root / "ring" / "timed-ingest"
+        popen = subprocess.Popen
+        children = []
+
+        def blocked(command, *args, **kwargs):
+            if command[0] == "ffprobe":
+                command = [sys.executable, "-c", "import time; time.sleep(60)"]
+            child = popen(command, *args, **kwargs)
+            children.append(child)
+            self.addCleanup(child.wait, 3)
+            self.addCleanup(child.kill)
+            return child
+
+        def attempt():
+            try:
+                with recorder.ingest(self.source, "timed-ingest", poll_seconds=0.02):
+                    pass
+            except BaseException as exc:
+                return exc
+            return None
+
+        with mock.patch("apps.edge.recorder.subprocess.Popen", side_effect=blocked):
+            error = self.run_bounded(attempt, "ingest must exit after probe timeout", timeout=3)
+        self.assertIsInstance(error, subprocess.TimeoutExpired)
+        self.assertTrue(children and all(child.poll() is not None for child in children))
+        parts = sorted(directory.glob(FileRecorder.PART_GLOB))
+        self.assertTrue(parts, "unclassified media must survive the failed ingest")
+        self.assertEqual(recorder.segments("timed-ingest"), [])
+        self.assertEqual(len(recorder.reconcile("timed-ingest")), len(parts))
+
     @unittest.skipUnless(Path("/proc").is_dir(), "requires /proc to observe the producer")
     def test_replay_delivers_frames_while_the_producer_is_still_reading(self):
         # 12000 frames emit ~170 KiB of PTS metadata, well past the 64 KiB pipe buffer, so a
@@ -507,6 +584,53 @@ class FileRecorderTests(unittest.TestCase):
                         "ffprobe must still be reading and blocked on the pipe while frames are delivered")
         self.assertEqual(delivered[0], 3.0)
         self.assertEqual(list(self.process_pids(source)), [], "replay must reap its producer")
+
+    def test_replay_stalled_probes_exit_boundedly_and_can_retry(self):
+        recorder = FileRecorder(self.root / "ring", probe_timeout_seconds=0.1)
+        popen = subprocess.Popen
+        for stage in ("metadata", "frames", "partial-line", "after-eof"):
+            with self.subTest(stage=stage):
+                children = []
+
+                def blocked(command, *args, **kwargs):
+                    is_metadata = "stream=time_base" in command
+                    if (stage == "metadata") != is_metadata:
+                        return popen(command, *args, **kwargs)
+                    prefix = {
+                        "partial-line": "import os; os.write(1, b'30,'); ",
+                        "after-eof": "import os; os.close(1); ",
+                    }.get(stage, "")
+                    child = popen([sys.executable, "-c", prefix + "import time; time.sleep(60)"],
+                                  *args, **kwargs)
+                    children.append(child)
+                    self.addCleanup(child.wait, 3)
+                    self.addCleanup(child.kill)
+                    return child
+
+                def attempt():
+                    try:
+                        recorder.replay(self.source, "stalled", lambda frame: None, sample_fps=1)
+                    except BaseException as exc:
+                        return exc
+                    return None
+
+                with mock.patch("apps.edge.recorder.subprocess.Popen", side_effect=blocked):
+                    error = self.run_bounded(attempt, "stalled replay must terminate", timeout=3)
+                self.assertIsInstance(error, subprocess.TimeoutExpired)
+                self.assertTrue(children and all(child.poll() is not None for child in children))
+                self.assertEqual(recorder.replay(self.source, "retry-" + stage,
+                                                 lambda frame: None, sample_fps=1), 6)
+
+    def test_replay_probe_timeout_excludes_slow_consumer_and_realtime_pacing(self):
+        recorder = FileRecorder(self.root / "ring", probe_timeout_seconds=0.2)
+        delivered = []
+
+        def slow(frame):
+            time.sleep(0.25)
+            delivered.append(frame.event_time)
+
+        self.assertEqual(recorder.replay(self.source, "slow", slow, sample_fps=1, mode="realtime"), 6)
+        self.assertEqual(delivered, [3, 4, 5, 6, 7, 8])
 
     def test_replay_sampling_plan_and_watermark_survive_a_failing_consumer(self):
         plan = [3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0, 7.5, 8.0, 8.5]
