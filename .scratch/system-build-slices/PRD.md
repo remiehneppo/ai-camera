@@ -178,3 +178,4 @@ Một task có thể được hoàn thiện dần qua nhiều ticket; task mappi
 
 - 2026-10-11: Publish 50 tickets theo breakdown đã duyệt, kiểm blockers-first DAG và coverage 89 task. Không claim/implement/đóng parent issues hoặc commit/push.
 - 2026-10-12: Bổ sung #51 live-ring sau khi phân tích #15 cho thấy recorder hiện chỉ publish segment sau EOF, nên không thể query/pin trong lúc ingest. #51 phụ thuộc #06; #15 phụ thuộc thêm #51. Chưa claim implementation hoặc nghiệm thu live RTSP.
+- 2026-10-13: #51 software ingest/reconcile/replay và probe-failure hardening đã implement qua `e747b55` và `ea3c808`; Execution giữ partial. Full numerical suite 138 tests OK; replay CSV đo callback trước EOF trong 12/12 runs của fixture envelope. Storage-stall cancellation, process-wide memory bound và RTSP/G1 chưa đạt; #06/#07 vẫn partial, #15 vẫn gated. Evidence: [hardening log](../../docs/logs/2026-10-13-ticket-51-hardening.md).

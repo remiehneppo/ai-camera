@@ -31,6 +31,8 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 
 ## Comments
 
+- 2026-10-13 docs sync: #51 hardening (`ea3c808`) adds configurable probe timeouts and preserves media on system/unknown failures; software replay CSV measurements show callbacks before EOF in 12/12 runs, not a production memory bound. #06 remains partial: domain outcomes, runtime workload, RTSP and hardware acceptance are unchanged. See [hardening log](../../../docs/logs/2026-10-13-ticket-51-hardening.md).
+
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
 
 - 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.
