@@ -96,6 +96,19 @@ class EdgeOutboxTests(unittest.TestCase):
         with self.assertRaises(EventConflict):
             self.outbox.enqueue(changed)
 
+    def test_retry_keeps_the_same_snapshot_and_message_identity(self) -> None:
+        event = event_fixture()
+        self.outbox.enqueue(event)
+        initial = self.outbox.pending()[0]
+
+        self.outbox.record_attempt(initial["message_id"], "TimeoutError")
+        retried = self.outbox.pending()[0]
+
+        self.assertEqual(retried["message_id"], initial["message_id"])
+        self.assertEqual(retried["event_hash"], initial["event_hash"])
+        self.assertEqual(retried["event"], initial["event"])
+        self.assertEqual(retried["attempts"], 1)
+
     def test_event_and_delivery_intent_rollback_together(self) -> None:
         with sqlite3.connect(self.db_path) as db:
             db.execute(
@@ -133,10 +146,25 @@ class EdgeOutboxTests(unittest.TestCase):
     def test_source_identity_cannot_change_on_a_later_revision(self) -> None:
         first = event_fixture()
         self.outbox.enqueue(first)
-        next_event = dict(first)
-        next_event.update(revision=2, message_id="msg-2", origin="live", produced_at="2026-10-12T00:00:02Z")
-        with self.assertRaisesRegex(EventValidationError, "origin is immutable"):
-            self.outbox.enqueue(next_event)
+        for field, value in (
+            ("camera_id", "other-camera"),
+            ("stream_session_id", "00000000-0000-4000-8000-000000000003"),
+            ("origin", "live"),
+        ):
+            next_event = dict(first)
+            next_event.update(revision=2, message_id="msg-2", produced_at="2026-10-12T00:00:02Z", **{field: value})
+            with self.subTest(field=field), self.assertRaisesRegex(EventValidationError, f"{field} is immutable"):
+                self.outbox.enqueue(next_event)
+
+    def test_out_of_order_revisions_are_durable_and_identity_checked(self) -> None:
+        for revision in (3, 1, 2):
+            event = event_fixture()
+            event.update(revision=revision, message_id=f"msg-{revision}")
+            self.outbox.enqueue(event)
+
+        with sqlite3.connect(self.db_path) as db:
+            revisions = db.execute("SELECT revision FROM event_revisions ORDER BY revision").fetchall()
+        self.assertEqual([row[0] for row in revisions], [1, 2, 3])
 
 
 if __name__ == "__main__":

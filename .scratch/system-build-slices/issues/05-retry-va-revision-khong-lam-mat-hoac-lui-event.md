@@ -1,8 +1,8 @@
 # 05: Retry và revision không làm mất hoặc lùi event
 
 Status: ready-for-agent
-Execution: not-started
-Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
+Execution: done
+Owner: Codex (Edge / Backend verification).
 
 **What to build:** Edge retry sau mất response; dashboard vẫn giữ một lịch sử event đúng và current view mới nhất.
 
@@ -10,11 +10,11 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 ## Acceptance criteria
 
-- [ ] Duplicate/reorder/cùng revision khác hash được xử lý rõ; crash sau server commit trước response không tạo duplicate side effect.
-- [ ] Downstream intent bền vững nhưng disabled ở lab; pending chỉ cho eligible intent; không no-op delivered hoặc notification synthetic.
+- [x] Duplicate/reorder/cùng revision khác hash được xử lý rõ; crash sau server commit trước response không tạo duplicate side effect.
+- [x] Downstream intent bền vững nhưng disabled ở lab; pending chỉ cho eligible intent; không no-op delivered hoặc notification synthetic.
 
-- [ ] Nhận 3→1→2 hoặc chỉ revision3 vẫn dựng current đúng; camera/session/origin substitution bị reject; retry đổi sent_at không đổi content hash.
-- [ ] Disabled/ineligible là terminal eligibility decision, khác pending eligible; bật provider không tự phát backlog.
+- [x] Nhận 3→1→2 hoặc chỉ revision3 vẫn dựng current đúng; camera/session/origin substitution bị reject; retry đổi sent_at không đổi content hash.
+- [x] Disabled/ineligible là terminal eligibility decision, khác pending eligible; bật provider không tự phát backlog.
 
 Chuẩn semantic: [Hợp đồng tích hợp](../../../docs/architecture/contracts.md).
 
@@ -31,5 +31,7 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 ## Comments
 
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
+
+- 2026-10-12: Hoàn tất #05; behavior edge/server đã tồn tại, bổ sung regression tests cho retry giữ nguyên message/snapshot/hash, revisions out-of-order và camera/session/origin substitution. Mongo smoke xác nhận current=max revision, retry dùng lại receipt và không nhân intent, cùng revision khác hash conflict, intent live bị disabled ở lab là terminal ineligible. Chi tiết: [implementation log](../../../docs/logs/2026-10-12-ticket-05.md).
 
 - 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.
