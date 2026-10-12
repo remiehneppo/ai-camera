@@ -1,4 +1,5 @@
 .venv/
+.venv-oracle/
 __pycache__/
 *.py[cod]
 data/

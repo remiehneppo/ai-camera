@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "fixture_id": "wikimedia-shibuya-people",
+  "path": "data/oracle/shibuya_people.jpg",
+  "source_url": "https://upload.wikimedia.org/wikipedia/commons/b/bc/Shibuya_people.JPG",
+  "rights_url": "https://commons.wikimedia.org/wiki/File:Shibuya_people.JPG",
+  "author": "Ukiyoe",
+  "copyright_status": "public_domain",
+  "sha256": "ba065936abc9655486a28570023a383137406d795fd595b720b78c63b3aee980",
+  "size_bytes": 1129693,
+  "width": 1704,
+  "height": 2272,
+  "rights": {
+    "lab_use_approved": true,
+    "production_use_approved": false,
+    "privacy_personality_clearance": "unresolved"
+  }
+}

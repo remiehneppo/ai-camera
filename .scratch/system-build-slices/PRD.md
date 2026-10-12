@@ -36,7 +36,7 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [08: Upload evidence và phát lại trên detail](issues/08-upload-evidence-va-phat-lai-tren-detail.md) | ready-for-agent | #07 | — | not-started |
 | [09: Khôi phục event/evidence sau process crash](issues/09-khoi-phuc-event-evidence-sau-process-crash.md) | ready-for-agent | #05, #08 | — | not-started |
 | [10: File replay đi qua native boundary an toàn](issues/10-file-replay-di-qua-native-boundary-an-toan.md) | ready-for-agent | #03, #06 | — | not-started |
-| [11: ONNX oracle xuất detection có provenance](issues/11-onnx-oracle-xuat-detection-co-provenance.md) | ready-for-agent | #02 | — | not-started |
+| [11: ONNX oracle xuất detection có provenance](issues/11-onnx-oracle-xuat-detection-co-provenance.md) | ready-for-agent | #02 | — | done (software lab; production clearance open) |
 | [12: Native detector đạt parity với oracle](issues/12-native-detector-dat-parity-voi-oracle.md) | ready-for-agent | #10, #11 | — | not-started |
 | [13: Native tracks có time và session semantics](issues/13-native-tracks-co-time-va-session-semantics.md) | ready-for-agent | #12 | — | not-started |
 | [14: Pipeline baseline biến observations thành event](issues/14-pipeline-baseline-bien-observations-thanh-event.md) | ready-for-agent | #05, #07, #13 | — | not-started |

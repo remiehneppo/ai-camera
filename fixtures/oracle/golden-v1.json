@@ -1,0 +1,407 @@
+{
+  "schema_version": 1,
+  "pins": {
+    "model_sha256": "427cc366d34e27ff7a03e2899b5e3671425c262ea2291f88bb942bc1cc70b0f7",
+    "manifest_sha256": "62b69e8209fdb4a892bc8ee7436cff5c59bdc4c2cfbac21f7f54101492aea9a5",
+    "original_sha256": "ba065936abc9655486a28570023a383137406d795fd595b720b78c63b3aee980",
+    "reference_sources": {
+      "preprocess": {
+        "source_url": "https://raw.githubusercontent.com/Megvii-BaseDetection/YOLOX/6ddff4824372906469a7fae2dc3206c7aa4bbaee/yolox/data/data_augment.py",
+        "commit": "6ddff4824372906469a7fae2dc3206c7aa4bbaee",
+        "sha256": "f99b0b1568dafde0acd99f0a1e27a33644885349834d55a9dc632fe691ee352d"
+      },
+      "postprocess": {
+        "source_url": "https://raw.githubusercontent.com/Megvii-BaseDetection/YOLOX/e1052df71842031413f6030723c3607b839c80ce/yolox/utils/demo_utils.py",
+        "commit": "e1052df71842031413f6030723c3607b839c80ce",
+        "sha256": "5b9ce8dd92920c7cddb9cf645ede346af6d7b0d2833092615735fab8063c8cbd"
+      },
+      "license": {
+        "source_url": "https://raw.githubusercontent.com/Megvii-BaseDetection/YOLOX/e1052df71842031413f6030723c3607b839c80ce/LICENSE",
+        "commit": "e1052df71842031413f6030723c3607b839c80ce",
+        "sha256": "577c03d505ec80f667ebf96ebd0cc4f6825c817ca1088ee348c48aaabd51bd92"
+      },
+      "adaptation": {
+        "copyright": "Megvii 2014-2021; Apache-2.0; adapted official preprocessing/grid/NMS, changed RGB boundary and final filtering/clipping/sorting",
+        "fixture_source": "https://commons.wikimedia.org/wiki/File:Shibuya_people.JPG",
+        "fixture_author": "Ukiyoe",
+        "fixture_rights": "Author public-domain release; lab user approved; not privacy/production clearance",
+        "crop": "[y757:2272,x426:1278]",
+        "negative": "authored RGB uint8 zeros480x640"
+      }
+    },
+    "implementation_sha256": "373e304ea52e45aa23af7057e135c12445b23873aab21282b38da1d6a64b6c76",
+    "runtime": {
+      "python": "3.12.3",
+      "numpy": "1.26.4",
+      "onnxruntime": "1.20.1",
+      "opencv": "4.10.0.84"
+    }
+  },
+  "fixtures": {
+    "shibuya_original": {
+      "rgb_sha256": "51af1121bcfd69c6a378e34e0ed7e997e6f60639bfa67e4eb943b2f8f9a9f3ed",
+      "shape": [
+        2272,
+        1704,
+        3
+      ],
+      "batch": {
+        "detection_status": "ok",
+        "detections": [
+          {
+            "class_id": 0,
+            "label": "person",
+            "score": 0.7805797457695007,
+            "bbox_xyxy": [
+              521.839111328125,
+              1376.078857421875,
+              709.6865844726562,
+              1932.8221435546875
+            ]
+          },
+          {
+            "class_id": 0,
+            "label": "person",
+            "score": 0.7359588146209717,
+            "bbox_xyxy": [
+              882.6450805664062,
+              1329.9888916015625,
+              1049.17041015625,
+              1840.0855712890625
+            ]
+          },
+          {
+            "class_id": 0,
+            "label": "person",
+            "score": 0.721276044845581,
+            "bbox_xyxy": [
+              708.819580078125,
+              1355.0341796875,
+              885.5932006835938,
+              1854.4415283203125
+            ]
+          },
+          {
+            "class_id": 5,
+            "label": "bus",
+            "score": 0.7108657360076904,
+            "bbox_xyxy": [
+              826.9484252929688,
+              67.06258392333984,
+              1416.447265625,
+              502.87506103515625
+            ]
+          },
+          {
+            "class_id": 0,
+            "label": "person",
+            "score": 0.6268495321273804,
+            "bbox_xyxy": [
+              1143.468994140625,
+              1453.0157470703125,
+              1295.04150390625,
+              1978.44091796875
+            ]
+          },
+          {
+            "class_id": 0,
+            "label": "person",
+            "score": 0.6208186149597168,
+            "bbox_xyxy": [
+              1494.6170654296875,
+              1416.2122802734375,
+              1655.3360595703125,
+              1905.70361328125
+            ]
+          },
+          {
+            "class_id": 0,
+            "label": "person",
+            "score": 0.6077039837837219,
+            "bbox_xyxy": [
+              333.68524169921875,
+              1182.6187744140625,
+              502.4224853515625,
+              1645.038818359375
+            ]
+          },
+          {
+            "class_id": 0,
+            "label": "person",
+            "score": 0.556797444820404,
+            "bbox_xyxy": [
+              30.352516174316406,
+              1318.685791015625,
+              218.58607482910156,
+              1895.111083984375
+            ]
+          },
+          {
+            "class_id": 0,
+            "label": "person",
+            "score": 0.5273007750511169,
+            "bbox_xyxy": [
+              1226.2149658203125,
+              479.0157470703125,
+              1336.873291015625,
+              743.7315673828125
+            ]
+          },
+          {
+            "class_id": 24,
+            "label": "backpack",
+            "score": 0.44959908723831177,
+            "bbox_xyxy": [
+              442.4486389160156,
+              1261.781494140625,
+              525.2225952148438,
+              1446.2618408203125
+            ]
+          },
+          {
+            "class_id": 0,
+            "label": "person",
+            "score": 0.4230208694934845,
+            "bbox_xyxy": [
+              537.4173583984375,
+              1079.357177734375,
+              681.9124755859375,
+              1464.4625244140625
+            ]
+          },
+          {
+            "class_id": 0,
+            "label": "person",
+            "score": 0.4176419675350189,
+            "bbox_xyxy": [
+              1435.2105712890625,
+              1221.5487060546875,
+              1584.86328125,
+              1653.359619140625
+            ]
+          },
+          {
+            "class_id": 26,
+            "label": "handbag",
+            "score": 0.35760095715522766,
+            "bbox_xyxy": [
+              494.46795654296875,
+              1645.4183349609375,
+              551.8287963867188,
+              1789.1370849609375
+            ]
+          }
+        ],
+        "provenance": {
+          "model_id": "yolox-tiny-0.1.1rc0",
+          "model_sha256": "427cc366d34e27ff7a03e2899b5e3671425c262ea2291f88bb942bc1cc70b0f7",
+          "config_sha256": "ffa6d5f30d680687503b804581960c2d09359c2eeb5ca8339d2c494ab11fbcff",
+          "runtime": {
+            "name": "onnxruntime",
+            "version": "1.20.1"
+          },
+          "provider": "CPUExecutionProvider"
+        },
+        "transform": {
+          "original_size": [
+            2272,
+            1704
+          ],
+          "model_size": [
+            416,
+            416
+          ],
+          "scale": 0.18309859154929578,
+          "pad": [
+            0,
+            0
+          ]
+        }
+      }
+    },
+    "shibuya_lower_center": {
+      "rgb_sha256": "a1a831ff2a6d186fa9f64e33844c97eafd9a22cce7e9ceb8574b56f6a51fc895",
+      "shape": [
+        1515,
+        852,
+        3
+      ],
+      "batch": {
+        "detection_status": "ok",
+        "detections": [
+          {
+            "class_id": 0,
+            "label": "person",
+            "score": 0.8650933504104614,
+            "bbox_xyxy": [
+              288.83062744140625,
+              603.81640625,
+              458.4805603027344,
+              1083.4642333984375
+            ]
+          },
+          {
+            "class_id": 0,
+            "label": "person",
+            "score": 0.8226721882820129,
+            "bbox_xyxy": [
+              716.72021484375,
+              733.18017578125,
+              847.1856079101562,
+              1225.779541015625
+            ]
+          },
+          {
+            "class_id": 0,
+            "label": "person",
+            "score": 0.8118273019790649,
+            "bbox_xyxy": [
+              93.3867416381836,
+              611.986083984375,
+              303.7477111816406,
+              1179.945556640625
+            ]
+          },
+          {
+            "class_id": 0,
+            "label": "person",
+            "score": 0.8097708225250244,
+            "bbox_xyxy": [
+              452.138427734375,
+              569.4633178710938,
+              620.6974487304688,
+              1076.812744140625
+            ]
+          },
+          {
+            "class_id": 0,
+            "label": "person",
+            "score": 0.6081328988075256,
+            "bbox_xyxy": [
+              0.8968629837036133,
+              435.0243225097656,
+              85.5520248413086,
+              896.2039794921875
+            ]
+          },
+          {
+            "class_id": 26,
+            "label": "handbag",
+            "score": 0.3912814259529114,
+            "bbox_xyxy": [
+              65.69114685058594,
+              888.493408203125,
+              122.67044830322266,
+              1031.641845703125
+            ]
+          },
+          {
+            "class_id": 0,
+            "label": "person",
+            "score": 0.37307387590408325,
+            "bbox_xyxy": [
+              116.36991119384766,
+              328.9769592285156,
+              261.9004211425781,
+              687.4578857421875
+            ]
+          },
+          {
+            "class_id": 0,
+            "label": "person",
+            "score": 0.32529112696647644,
+            "bbox_xyxy": [
+              337.15911865234375,
+              365.2496337890625,
+              481.5242614746094,
+              718.1685791015625
+            ]
+          },
+          {
+            "class_id": 27,
+            "label": "tie",
+            "score": 0.3053993880748749,
+            "bbox_xyxy": [
+              814.887939453125,
+              474.4302062988281,
+              845.4735107421875,
+              607.4415893554688
+            ]
+          }
+        ],
+        "provenance": {
+          "model_id": "yolox-tiny-0.1.1rc0",
+          "model_sha256": "427cc366d34e27ff7a03e2899b5e3671425c262ea2291f88bb942bc1cc70b0f7",
+          "config_sha256": "ffa6d5f30d680687503b804581960c2d09359c2eeb5ca8339d2c494ab11fbcff",
+          "runtime": {
+            "name": "onnxruntime",
+            "version": "1.20.1"
+          },
+          "provider": "CPUExecutionProvider"
+        },
+        "transform": {
+          "original_size": [
+            1515,
+            852
+          ],
+          "model_size": [
+            416,
+            416
+          ],
+          "scale": 0.2745874587458746,
+          "pad": [
+            0,
+            0
+          ]
+        }
+      }
+    },
+    "authored_black": {
+      "rgb_sha256": "0b150fd32588b1daca5569992ebe559c0102c837306b1af4c44d35128ec58366",
+      "shape": [
+        480,
+        640,
+        3
+      ],
+      "batch": {
+        "detection_status": "ok_empty",
+        "detections": [],
+        "provenance": {
+          "model_id": "yolox-tiny-0.1.1rc0",
+          "model_sha256": "427cc366d34e27ff7a03e2899b5e3671425c262ea2291f88bb942bc1cc70b0f7",
+          "config_sha256": "ffa6d5f30d680687503b804581960c2d09359c2eeb5ca8339d2c494ab11fbcff",
+          "runtime": {
+            "name": "onnxruntime",
+            "version": "1.20.1"
+          },
+          "provider": "CPUExecutionProvider"
+        },
+        "transform": {
+          "original_size": [
+            480,
+            640
+          ],
+          "model_size": [
+            416,
+            416
+          ],
+          "scale": 0.65,
+          "pad": [
+            0,
+            0
+          ]
+        }
+      }
+    }
+  },
+  "policy": {
+    "candidate": ">0.1",
+    "final": ">=0.3",
+    "nms": 0.45,
+    "inclusive_pixel_offset": 1,
+    "ties": "NumPy1.26.4 argsort default reversed",
+    "canonical": "clip after NMS; sort(-score,class_id,*bbox)",
+    "bbox_atol": 0.001,
+    "score_atol": 1e-06
+  }
+}

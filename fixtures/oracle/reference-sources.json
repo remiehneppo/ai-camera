@@ -1,0 +1,25 @@
+{
+  "preprocess": {
+    "source_url": "https://raw.githubusercontent.com/Megvii-BaseDetection/YOLOX/6ddff4824372906469a7fae2dc3206c7aa4bbaee/yolox/data/data_augment.py",
+    "commit": "6ddff4824372906469a7fae2dc3206c7aa4bbaee",
+    "sha256": "f99b0b1568dafde0acd99f0a1e27a33644885349834d55a9dc632fe691ee352d"
+  },
+  "postprocess": {
+    "source_url": "https://raw.githubusercontent.com/Megvii-BaseDetection/YOLOX/e1052df71842031413f6030723c3607b839c80ce/yolox/utils/demo_utils.py",
+    "commit": "e1052df71842031413f6030723c3607b839c80ce",
+    "sha256": "5b9ce8dd92920c7cddb9cf645ede346af6d7b0d2833092615735fab8063c8cbd"
+  },
+  "license": {
+    "source_url": "https://raw.githubusercontent.com/Megvii-BaseDetection/YOLOX/e1052df71842031413f6030723c3607b839c80ce/LICENSE",
+    "commit": "e1052df71842031413f6030723c3607b839c80ce",
+    "sha256": "577c03d505ec80f667ebf96ebd0cc4f6825c817ca1088ee348c48aaabd51bd92"
+  },
+  "adaptation": {
+    "copyright": "Megvii 2014-2021; Apache-2.0; adapted official preprocessing/grid/NMS, changed RGB boundary and final filtering/clipping/sorting",
+    "fixture_source": "https://commons.wikimedia.org/wiki/File:Shibuya_people.JPG",
+    "fixture_author": "Ukiyoe",
+    "fixture_rights": "Author public-domain release; lab user approved; not privacy/production clearance",
+    "crop": "[y757:2272,x426:1278]",
+    "negative": "authored RGB uint8 zeros480x640"
+  }
+}

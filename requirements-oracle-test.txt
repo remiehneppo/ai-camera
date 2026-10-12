@@ -1,0 +1,4 @@
+# Optional oracle runtime plus numeric-fixture generation and type verification.
+-r requirements-oracle.txt
+onnx==1.17.0
+mypy==1.15.0

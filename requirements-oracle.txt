@@ -1,0 +1,4 @@
+# Optional lab runtime; never required by default replay/server commands.
+onnxruntime==1.20.1
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
