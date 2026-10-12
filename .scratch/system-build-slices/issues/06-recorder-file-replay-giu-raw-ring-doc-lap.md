@@ -1,8 +1,8 @@
 # 06: Recorder file replay giữ raw ring độc lập
 
 Status: ready-for-agent
-Execution: not-started
-Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
+Execution: partial
+Owner: Codex (Edge recorder/replay baseline); target/hardware acceptance chưa claim.
 
 **What to build:** Chạy recorder từ file cleared theo thời gian nội dung; dừng analytics vẫn query được raw segments và actual ranges.
 
@@ -10,10 +10,12 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 ## Acceptance criteria
 
-- [ ] Compressed segments có codec/keyframe/PTS/session metadata và ring lifecycle; raw không overlay.
-- [ ] Fast/realtime giữ semantic time; pre-roll chưa có báo rõ, không giả RTSP camera test đã chạy.
+- [x] File replay tạo compressed stream-copy segments có codec/keyframe/PTS/session metadata, queryable raw ring, watermark và actual range; raw không overlay.
+- [x] Actual range báo `missing_preroll`, `missing_postroll` và continuity gaps trên metadata segment.
+- [ ] Pin/post-roll lifecycle và recovery chưa có; chưa có RTSP camera test.
 
-- [ ] Semantic replay dùng fixed sampling/virtual clock và watermark recorder–consumer; paced/fast cùng input cho cùng outcome. Realtime stress kiểm drops/coverage, không ép cùng event set.
+- [x] Semantic file replay dùng fixed PTS sampling/virtual event time, synchronous consumer backpressure và monotonic watermark; fixture fast/realtime có cùng PTS.
+- [ ] Cùng domain outcomes cần analytics consumer; realtime stress/drop/coverage cần runtime workload, hiện chưa có để kiểm.
 
 Chuẩn semantic: [Hợp đồng tích hợp](../../../docs/architecture/contracts.md).
 

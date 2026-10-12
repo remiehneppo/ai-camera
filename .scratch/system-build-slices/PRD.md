@@ -31,7 +31,7 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [03: Doctor và config fail-fast qua đường chạy lab](issues/03-doctor-va-config-fail-fast-qua-duong-chay-lab.md) | ready-for-agent | #01, #06, #11 | — | blocked |
 | [04: Review event có kiểm soát phiên bản](issues/04-review-event-co-kiem-soat-phien-ban.md) | ready-for-agent | #01, #08 evidence manifest lifecycle | — | partial |
 | [05: Retry và revision không làm mất hoặc lùi event](issues/05-retry-va-revision-khong-lam-mat-hoac-lui-event.md) | ready-for-agent | #01 | — | not-started |
-| [06: Recorder file replay giữ raw ring độc lập](issues/06-recorder-file-replay-giu-raw-ring-doc-lap.md) | ready-for-agent | #02 | — | not-started |
+| [06: Recorder file replay giữ raw ring độc lập](issues/06-recorder-file-replay-giu-raw-ring-doc-lap.md) | ready-for-agent | #02 | — | partial |
 | [07: Event pin được clip pre/post từ ring](issues/07-event-pin-duoc-clip-pre-post-tu-ring.md) | ready-for-agent | #01, #06 | — | not-started |
 | [08: Upload evidence và phát lại trên detail](issues/08-upload-evidence-va-phat-lai-tren-detail.md) | ready-for-agent | #07 | — | not-started |
 | [09: Khôi phục event/evidence sau process crash](issues/09-khoi-phuc-event-evidence-sau-process-crash.md) | ready-for-agent | #05, #08 | — | not-started |
