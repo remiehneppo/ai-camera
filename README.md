@@ -1,6 +1,6 @@
 # AI Camera lab slice
 
-This repository currently implements tracker ticket [#01](.scratch/system-build-slices/issues/01-event-synthetic-xuat-hien-tren-dashboard.md): persist one synthetic event and its delivery intent on edge, commit its full snapshot on the server, then display metadata from the API.
+This repository implements tracker ticket [#01](.scratch/system-build-slices/issues/01-event-synthetic-xuat-hien-tren-dashboard.md) and has a partial implementation of [#03](.scratch/system-build-slices/issues/03-doctor-va-config-fail-fast-qua-duong-chay-lab.md): persist and display a synthetic event, validate server configuration, and inspect lab server reachability. Analytics/model and recorder runtimes are not implemented.
 
 ## Run the lab stack
 
@@ -11,6 +11,14 @@ export DEVICE_TOKENS='{"replace-with-device-token":"lab-edge-01"}'
 export DASHBOARD_TOKEN='replace-with-dashboard-token'
 docker compose up --build
 ```
+
+After the server starts, validate the effective server configuration and probe MongoDB from inside the server container:
+
+```sh
+docker compose exec server python -m apps.server.doctor
+```
+
+The doctor prints a redacted config fingerprint that excludes credential values; rotating secrets alone does not change it. It reports analytics as disabled and recorder as unavailable until those runtimes exist.
 
 The server binds to loopback on port 8000. Open `http://127.0.0.1:8000`, choose **Set dashboard token**, and enter `DASHBOARD_TOKEN`.
 

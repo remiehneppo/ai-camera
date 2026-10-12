@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hmac
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +13,7 @@ from pymongo.errors import PyMongoError
 from starlette.concurrency import run_in_threadpool
 
 from domain.event_contract import EventValidationError, MAX_EVENT_BYTES, validate_event
+from apps.server.config import load_server_config
 from apps.server.store import EventHashConflict, EventIdentityConflict, EventStore
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -103,22 +103,20 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def create_app() -> FastAPI:
     try:
-        device_tokens = json.loads(os.environ["DEVICE_TOKENS"])
-        dashboard_token = os.environ["DASHBOARD_TOKEN"]
-        mongo_uri = os.environ["MONGO_URI"]
-    except (KeyError, json.JSONDecodeError) as exc:
-        raise RuntimeError("DEVICE_TOKENS JSON, DASHBOARD_TOKEN, and MONGO_URI are required") from exc
-    if not isinstance(device_tokens, dict) or not device_tokens or any(not isinstance(k, str) or not k or not isinstance(v, str) or not v for k, v in device_tokens.items()):
-        raise RuntimeError("DEVICE_TOKENS must map non-empty bearer tokens to device IDs")
-    if not dashboard_token:
-        raise RuntimeError("DASHBOARD_TOKEN must not be empty")
+        config = load_server_config()
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
 
-    store = EventStore(mongo_uri, os.getenv("MONGO_DATABASE", "camera_lab"))
+    try:
+        store = EventStore(config.mongo_uri, config.mongo_database)
+    except PyMongoError:
+        raise RuntimeError("MONGO_URI is invalid") from None
     app = FastAPI(title="AI Camera Lab API", version="1.0.0")
     app.add_middleware(EventBodyLimitMiddleware)
     app.state.event_store = store
-    app.state.device_tokens = device_tokens
-    app.state.dashboard_token = dashboard_token
+    app.state.device_tokens = config.device_tokens
+    app.state.dashboard_token = config.dashboard_token
+    app.state.config_hash = config.config_hash
 
     @app.on_event("startup")
     def startup() -> None:
