@@ -12,7 +12,7 @@ Owner: Codex (Edge recorder/replay baseline); target/hardware acceptance chưa c
 
 - [x] File replay tạo compressed stream-copy segments có codec/keyframe/PTS/session metadata, queryable raw ring, watermark và actual range; raw không overlay.
 - [x] Actual range báo `missing_preroll`, `missing_postroll` và continuity gaps trên metadata segment.
-- [ ] Pin/post-roll lifecycle và recovery chưa có; chưa có RTSP camera test.
+- [ ] Pin/post-roll lifecycle và software recovery có bằng chứng ở #07; RTSP camera test vẫn chưa nghiệm thu.
 
 - [x] Semantic file replay dùng fixed PTS sampling/virtual event time, synchronous consumer backpressure và monotonic watermark; fixture fast/realtime có cùng PTS.
 - [ ] Cùng domain outcomes cần analytics consumer; realtime stress/drop/coverage cần runtime workload, hiện chưa có để kiểm.
@@ -35,3 +35,5 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 
 - 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.
 - 2026-10-12: Bổ sung recorder pin registry bền vững cho request ID/owner/interval; cùng request trả receipt cũ, nội dung khác conflict, cleanup giữ segment giao với pin active, release idempotent. Restart recorder vẫn đọc ownership; `pin_status` cập nhật coverage theo segment hiện có. Execution tiếp tục `partial`: chưa có finalized clip/post-roll manifest và reconciliation file/DB crash; RTSP, analytics consumer, realtime workload và hardware chưa nghiệm thu. Chi tiết: [implementation log](../../../docs/logs/2026-10-12-ticket-06.md).
+
+- 2026-10-12 follow-up: User duyệt software lab harness/report và public seams replay/raw coverage, delayed pin/outbox reconciliation. Thêm CLI `apps.edge.replay_lab`, regression sau raw pruning thực và immutable requested interval. Full suite 43/43 pass; semantic traces không thay analytics/domain parity, realtime queue/drop stress hoặc maximum verification/handoff/recovery sizing proof. Execution giữ partial; #08 vẫn blocked. Evidence: [follow-up log](../../../docs/logs/2026-10-12-ticket-06-07-followup.md).

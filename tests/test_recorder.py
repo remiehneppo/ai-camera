@@ -179,6 +179,81 @@ class FileRecorderTests(unittest.TestCase):
         self.assertEqual(restarted.evidence_requests()[0], result)
         self.assertEqual(restarted.evidence_requests()[1]["receipt"]["supersedes_request_id"], "intent")
 
+    def test_late_pin_reports_partial_after_watermark_prunes_raw_segments(self):
+        self.recorder.ring_seconds = 2
+        self.recorder.advance_watermark("late-session", 3)
+        written = self.recorder.record_file(self.source, "late-session", segment_seconds=2)
+        self.assertEqual([item.start_seconds for item in written], [3, 5, 7])
+        self.assertTrue(Path(written[0].path).is_file())
+        self.recorder.advance_watermark("late-session", 9)
+        self.assertFalse(Path(written[0].path).exists())
+        self.assertTrue(Path(written[1].path).is_file())
+        self.assertEqual([item.start_seconds for item in self.recorder.segments("late-session")], [5, 7])
+
+        within = self.recorder.pin("within", "late-session", 7, 8, "event-1")
+        self.assertEqual((within["requested_start"], within["requested_end"],
+                          within["actual_start"], within["actual_end"], within["completeness"]),
+                         (7, 8, 7, 8.9, "complete"))
+        expired = self.recorder.pin("expired", "late-session", 3, 8, "event-2")
+        self.assertEqual((expired["requested_start"], expired["requested_end"],
+                          expired["actual_start"], expired["actual_end"],
+                          expired["completeness"], expired["reason"]),
+                         (3, 8, 5, 8.9, "partial", "missing_preroll"))
+        with self.assertRaisesRegex(ValueError, "different content"):
+            self.recorder.pin("expired", "late-session", 7, 8, "event-2")
+        self.assertEqual(self.recorder.pin("expired", "late-session", 3, 8, "event-2"), expired)
+
+    def test_worker_preserves_policy_interval_when_late_pin_follows_raw_pruning(self):
+        from apps.edge.outbox import EventOutbox
+        from domain.evidence_contract import make_evidence_request
+        from tests.test_event_delivery import event_fixture
+
+        source = self.root / "long-fixture.mp4"
+        subprocess.run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+            "testsrc=size=64x64:rate=10", "-t", "40", "-c:v", "mpeg4", "-g", "10",
+            "-output_ts_offset", "3", str(source),
+        ], check=True, capture_output=True)
+        for retention, expected_start, completeness, reason in (
+            (32, 11, "complete", None),
+            (12, 29, "partial", "missing_preroll"),
+        ):
+            with self.subTest(lab_retention_seconds=retention):
+                recorder = FileRecorder(self.root / f"late-ring-{retention}", ring_seconds=retention)
+                outbox = EventOutbox(self.root / f"late-events-{retention}.sqlite3")
+                event = event_fixture()
+                request = make_evidence_request("late-intent", event["stream_session_id"], "onset", 22)
+                event["payload"]["evidence_requests"] = [request]
+                outbox.enqueue(event)
+                session = request["session_id"]
+                recorder.advance_watermark(session, 3)
+                written = recorder.record_file(source, session, segment_seconds=2)
+                self.assertTrue(Path(written[0].path).is_file())
+                recorder.advance_watermark(session, 43)
+                self.assertFalse(Path(written[0].path).exists())
+                onset_segment = next(item for item in written if item.start_seconds == 11)
+                self.assertEqual(Path(onset_segment.path).is_file(), retention == 32)
+                self.assertEqual(recorder.segments(session)[0].start_seconds, 9 if retention == 32 else 29)
+
+                self.assertEqual(outbox.reconcile_evidence(recorder, finish_sessions=[session]), 1)
+                result = outbox.evidence_requests()[0]
+                receipt = result["receipt"]
+                self.assertEqual(result["state"], "fulfilled" if retention == 32 else "partial")
+                self.assertEqual((receipt["requested_start"], receipt["requested_end"]), (12, 42))
+                self.assertEqual((receipt["actual_start"], receipt["actual_end"]), (expected_start, 42.9))
+                self.assertEqual((receipt["completeness"], receipt["reason"]), (completeness, reason))
+                self.assertEqual((receipt["evidence_anchor_kind"], receipt["evidence_anchor_time"]), ("onset", 22))
+                self.assertEqual(receipt["build_state"], "finalized")
+                clip = Path(receipt["artifact"]["path"])
+                self.assertTrue(clip.is_file())
+                recorder.ring_seconds = 1
+                recorder.release_pin("late-intent")
+                self.assertFalse(Path(receipt["segments"][0]["path"]).exists())
+                self.assertTrue(clip.is_file())
+                self.assertEqual(recorder.pin_status("late-intent")["availability"], "available")
+                self.assertEqual(outbox.reconcile_evidence(recorder), 0)
+                self.assertEqual(outbox.evidence_requests()[0], result)
+
     def test_request_outside_ring_is_missing_not_complete(self):
         self.recorder.record_file(self.source, "session-1")
         coverage = self.recorder.actual_range("session-1", 10, 20)
