@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -85,16 +86,74 @@ class FileRecorder:
 
     def pin_status(self, request_id: str) -> dict | None:
         with sqlite3.connect(self._pins) as db:
-            row = db.execute("SELECT session_id, owner, start, end, released FROM pins WHERE request_id=?", (request_id,)).fetchone()
+            row = db.execute("SELECT session_id, owner, start, end, released, receipt FROM pins WHERE request_id=?", (request_id,)).fetchone()
         if not row:
             return None
-        session_id, owner, start, end, released = row
+        session_id, owner, start, end, released, saved_receipt = row
+        saved_receipt = json.loads(saved_receipt)
+        if saved_receipt.get("manifest"):
+            return {**saved_receipt, "state": "released" if released else "held"}
         coverage = self.actual_range(session_id, start, end)
         state = "released" if released else (
             "collecting" if coverage["actual_end"] is None or coverage["actual_end"] < end else "held"
         )
         return {"request_id": request_id, "session_id": session_id, "owner": owner,
                 "requested_start": start, "requested_end": end, **coverage, "state": state}
+
+    def finalize_pin(self, request_id: str, *, allow_partial: bool = False) -> dict:
+        """Persist a manifest for a completed pin without changing its requested interval."""
+        with sqlite3.connect(self._pins, timeout=30, isolation_level="IMMEDIATE") as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT session_id, owner, start, end, released, receipt FROM pins WHERE request_id=?",
+                (request_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(request_id)
+            session_id, owner, start, end, released, receipt_json = row
+            receipt = json.loads(receipt_json)
+            if receipt.get("manifest"):
+                return receipt
+            if released:
+                raise ValueError("cannot finalize a released pin")
+            coverage = self.actual_range(session_id, start, end)
+            if coverage["actual_end"] is None or coverage["actual_end"] < end:
+                if not allow_partial:
+                    raise ValueError("pin is still collecting post-roll")
+                coverage["completeness"] = "partial"
+                coverage["reason"] = coverage["reason"] or "incomplete_postroll"
+            segments = [item for item in self.segments(session_id)
+                        if item.end_seconds >= start and item.start_seconds <= end]
+            artifacts = []
+            for item in segments:
+                path = Path(item.path)
+                with path.open("rb") as source:
+                    digest = hashlib.file_digest(source, "sha256").hexdigest()
+                artifacts.append({"path": str(path), "size_bytes": path.stat().st_size, "sha256": digest})
+            manifest = {
+                "request_id": request_id, "session_id": session_id, "owner": owner,
+                "requested_start": start, "requested_end": end, **coverage,
+                "build_state": "finalized", "state": "held", "segments": artifacts,
+            }
+            directory = self.root / "manifests"
+            directory.mkdir(exist_ok=True)
+            name = hashlib.sha256(request_id.encode()).hexdigest() + ".json"
+            target = directory / name
+            temp = target.with_suffix(".json.tmp")
+            with temp.open("w") as output:
+                json.dump(manifest, output, separators=(",", ":"))
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temp, target)
+            dir_fd = os.open(directory, os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+            receipt = {**manifest, "manifest": str(target)}
+            db.execute("UPDATE pins SET receipt=? WHERE request_id=?",
+                       (json.dumps(receipt, separators=(",", ":")), request_id))
+            return receipt
 
     def _session_dir(self, session_id: str) -> Path:
         if not session_id or session_id in {".", ".."} or Path(session_id).name != session_id:
