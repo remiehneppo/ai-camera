@@ -27,7 +27,7 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | Ticket | Status | Blocked by | Conditional blockers | Execution |
 |---|---|---|---|---|
 | [01: Event synthetic xuất hiện trên dashboard](issues/01-event-synthetic-xuat-hien-tren-dashboard.md) | ready-for-agent | None | — | done |
-| [02: Hồ sơ lab, ODD và protocol nghiệm thu](issues/02-ho-so-lab-odd-va-protocol-nghiem-thu.md) | ready-for-agent | None | — | not-started |
+| [02: Hồ sơ lab, ODD và protocol nghiệm thu](issues/02-ho-so-lab-odd-va-protocol-nghiem-thu.md) | ready-for-agent | None | — | done |
 | [03: Doctor và config fail-fast qua đường chạy lab](issues/03-doctor-va-config-fail-fast-qua-duong-chay-lab.md) | ready-for-agent | #01 | — | not-started |
 | [04: Review event có kiểm soát phiên bản](issues/04-review-event-co-kiem-soat-phien-ban.md) | ready-for-agent | #01 | — | not-started |
 | [05: Retry và revision không làm mất hoặc lùi event](issues/05-retry-va-revision-khong-lam-mat-hoac-lui-event.md) | ready-for-agent | #01 | — | not-started |

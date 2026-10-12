@@ -4,6 +4,8 @@
 
 ## Hồ sơ cần khóa
 
+Inventory workstation và ODD/protocol snapshot hiện tại: [hồ sơ lab](lab-profile.md). Facts host này không phải edge capacity evidence.
+
 Owner dưới đây là vai trò đề xuất; chủ dự án phải gán người cụ thể, ngày và link bằng chứng trước khi đánh dấu đạt. `TBD`, `null`, `REQUIRED` là thiếu dữ liệu, không phải giá trị nghiệm thu.
 
 Quyết định vòng 1 ngày 2026-10-11: chưa chọn board; ONNX/software decode làm baseline lab, event ring + clip sự kiện, một server lab nội bộ. G1 lab không đòi hardware đích; inventory lab ghi thực tế, mục target chưa chọn ghi rõ pending. Trước nghiệm thu target capacity/pilot vẫn cần facts, decoder/buffer và benchmark trên thiết bị thật; kết quả x86 không chứng minh Raspberry Pi hoặc RKNN đã đạt. Tracker C++ ở P1, pose native ở P2; backend mới phải giữ contract semantic và vượt conformance/event regression.
