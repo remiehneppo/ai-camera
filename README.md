@@ -53,6 +53,14 @@ DEVICE_ID=lab-edge-01 python -m apps.edge.send_synthetic --no-send \
 
 Evidence requests live in the full event payload. Source-event-time anchor policy is pre10/post20; trigger time does not shift it. Ended replay sessions are persisted so recovery terminates incomplete evidence explicitly. Independent immutable MKV clips and manifests live under the recorder root; `EventOutbox.reconcile_evidence` retries durable intents and records per-request operational failures. Actual ranges are keyframe/segment aligned, not exact trims. Transfer receipt state is independent of completeness; actual server upload/playback is ticket #08.
 
+## Concurrent ring ingestion and incremental replay (#51)
+
+`FileRecorder.ingest()` accepts an existing local file or named pipe and publishes each closed segment while ingestion continues. Query `segments()` / `actual_range()` and create pins during the context; post-roll remains `collecting` until coverage arrives. On exit, call `finalize_pin()` after coverage or pass `allow_partial=True` to retain an honest partial receipt. Existing segment data is reconciled after a crash between media rename and sidecar commit. Remote URLs, including RTSP, are intentionally rejected here so credentials cannot reach ffmpeg argv; no live camera integration is implemented.
+
+`replay()` streams ffprobe frame timestamps incrementally with synchronous callback backpressure and advances watermark only after each successful callback. This avoids retaining a Python frame list; ffprobe itself still runs `-show_frames` and may buffer its JSON internally, so this is not a hard bound on total probe memory. Replay remains file-based, not a reconnecting camera session or live analytics pipeline.
+
+The #51 regression tests use a synthetic Matroska FIFO to hold the producer open while querying/pinning, then exercise kill, crash-window reconciliation and consumer failure. These software tests do not establish camera session limits, RTSP ownership, timestamp uncertainty, reconnect/codec-change behavior, target performance, or G1 acceptance. See [ticket #51](.scratch/system-build-slices/issues/51-live-ring-publish-segments-during-ingest.md) and [implementation evidence](docs/logs/2026-10-12-ticket-51.md).
+
 ## Software replay lab (#06/#07 follow-up)
 
 Measure a small cleared video through fast, paced realtime and slow-callback replay:

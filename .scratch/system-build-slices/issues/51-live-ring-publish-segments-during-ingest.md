@@ -1,7 +1,7 @@
 # 51: Live ring publish segments during ingest
 
 Status: ready-for-agent
-Execution: not-started
+Execution: partial
 Owner: Edge/platform; chưa claim.
 
 **What to build:** Cho phép recorder công bố segment đã đóng trong khi nguồn còn tiếp tục ingest, để segment/range queryable và event pin có thể bao phủ pre/post-roll trước EOF; giữ semantics hiện có của file replay.
@@ -10,11 +10,11 @@ Owner: Edge/platform; chưa claim.
 
 ## Acceptance criteria
 
-- [ ] Segment hoàn tất được finalize và công bố nguyên tử ngay trong khi ingest tiếp tục; `segments()`/`actual_range()` phản ánh watermark/coverage tới hiện tại, không chờ EOF.
-- [ ] `pin()` trong lúc ingest đang chạy trả receipt theo coverage thật và không ACK phần post-roll chưa tới; finalize/reconcile sau watermark cho ra completeness đúng.
-- [ ] Kill/timeout ingest giữa chừng giữ được segment đã finalize, không để `.part` thành dữ liệu hợp lệ, không tạo receipt hoàn tất giả; kiểm tra restart/reconcile trong phạm vi được hỗ trợ.
-- [ ] Replay frame decode/delivery tăng dần, không giữ toàn bộ timeline/frame list trong RAM; backpressure/error có bound và behavior rõ.
-- [ ] Existing file replay/ring/pin tests giữ nguyên semantics; concurrency regression chứng minh query/pin trong lúc producer chạy bằng synthetic finite/live-like source, không bắt buộc camera thật.
+- [x] Segment hoàn tất được finalize và công bố trong khi ingest tiếp tục; metadata sidecar là điểm commit hiển thị atomic, `segments()`/`actual_range()` không chờ EOF.
+- [x] `pin()` trong lúc ingest đang chạy trả receipt theo coverage thật, không ACK post-roll chưa tới; `finalize_pin()` yêu cầu đủ post-roll trừ khi được yêu cầu finalize partial.
+- [x] Kill/timeout ingest giữ segment đã finalize, bỏ part dở, không tạo receipt hoàn tất giả; crash giữa rename media và sidecar được `reconcile()` xử lý idempotent.
+- [x] Replay đọc timestamp ffprobe tăng dần, không giữ list frame phía Python; callback synchronous giữ backpressure, subprocess dọn khi callback lỗi. `ffprobe -show_frames` vẫn có thể buffer JSON nội bộ, nên chưa khẳng định hard bound tổng bộ nhớ probe.
+- [x] File replay/ring/pin regression giữ semantics; synthetic FIFO tests chứng minh query/pin trước EOF, kill/restart và replay khi ffprobe producer vẫn chạy.
 
 ## Non-goals and gates
 
@@ -33,3 +33,4 @@ Ghi focused regression commands, concurrent-ingest query/pin receipt, mid-ingest
 ## Comments
 
 - 2026-10-12: Tạo theo quyết định người dùng: blocker live-ring được theo dõi bằng ticket riêng phụ thuộc #06, không mở rộng acceptance file-replay #06. Căn cứ: `apps/edge/recorder.py` công bố segment sau EOF và `_frames()` materialize toàn bộ nguồn trước replay; xem `docs/logs/2026-10-12-rtsp-dispatch.md`.
+- 2026-10-12: Software slice implemented with synthetic FIFO sources only. `FileRecorder.ingest()` publishes closed segments as ingest continues; `pin()`/outbox retain honest collecting/post-roll status until coverage is complete; `reconcile()` repairs crash window between media rename and metadata sidecar; `replay()` streams ffprobe frame timestamps incrementally without retaining a Python frame list (ffprobe itself may buffer internally; no process-wide memory bound claimed). Focused recorder suite 36 pass; related replay/oracle suites 22 pass, 4 skipped; full suite 133 pass, 22 skipped; targeted mypy for `apps/edge/recorder.py` clean. Acceptance is software-only; RTSP/session topology, camera reconnect/codec change/time correlation, concurrency limits and G1 live remain untested and #15 stays blocked. See [implementation log](../../../docs/logs/2026-10-12-ticket-51.md).

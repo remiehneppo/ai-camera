@@ -76,7 +76,7 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [48: Nghiệm thu vehicle riêng G4b](issues/48-nghiem-thu-vehicle-rieng-g4b.md) | ready-for-human | #47 | — | not-started |
 | [49: Nghiệm thu person-down pilot readiness G4a](issues/49-nghiem-thu-person-down-pilot-readiness-g4a.md) | ready-for-human | #19, #28, #31, #36, #37, #39, #40, #41, #43, #44, #45 | — | not-started |
 | [50: Field pilot và final acceptance G5](issues/50-field-pilot-va-final-acceptance-g5.md) | ready-for-human | #49 | — | not-started |
-| [51: Live ring publish segments during ingest](issues/51-live-ring-publish-segments-during-ingest.md) | ready-for-agent | #06 | — | not-started |
+| [51: Live ring publish segments during ingest](issues/51-live-ring-publish-segments-during-ingest.md) | ready-for-agent | #06 | — | partial |
 
 ## Mapping 89 task nguồn → tickets
 

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import Literal
 
 from apps.edge.recorder import FileRecorder
 
@@ -33,8 +34,11 @@ def run_lab(source: str | Path, *, sample_fps: float = 2,
             raise ValueError("source needs at least two distinct video timestamps for raw coverage")
         coverage = raw.actual_range("raw", start, end)
         runs = {}
-        for name, mode, delay in (("fast", "fast", 0), ("realtime", "realtime", 0),
-                                  ("slow_realtime", "realtime", slow_callback_seconds)):
+        runs_to_execute: tuple[tuple[str, Literal["fast", "realtime"], float], ...] = (
+            ("fast", "fast", 0), ("realtime", "realtime", 0),
+            ("slow_realtime", "realtime", slow_callback_seconds),
+        )
+        for name, mode, delay in runs_to_execute:
             recorder = FileRecorder(root / name)
             trace = []
             queries = 0
@@ -71,7 +75,7 @@ def run_lab(source: str | Path, *, sample_fps: float = 2,
             "runs": runs,
             "trace_parity": all(run["trace"] == runs["fast"]["trace"] for run in runs.values()),
             "limitations": ["not analytics/domain parity", "not realtime queue/drop stress",
-                            "raw recorded completely before replay; not concurrent ingestion",
+                            "raw recorded completely before replay; this lab does not measure concurrent ingestion",
                             "lag relative to first callback; excludes initial probe startup",
                             "last_consumer_event_time is observed callback progress, not a queried recorder watermark",
                             "temporary artifacts removed after report; input metadata/traces are materialized"],
