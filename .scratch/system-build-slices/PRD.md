@@ -1,6 +1,6 @@
 # Tracker triển khai theo tracer-bullet slices
 
-Ngày: 2026-10-11. Breakdown đã được người dùng duyệt bằng “đồng ý”; 50 ticket đã publish local, mọi ticket vẫn not-started.
+Breakdown 50 ticket được duyệt và publish ngày 2026-10-11. Trạng thái đồng bộ ngày 2026-10-12 sau commit `e47d6cf`; từng issue là nguồn execution/blocker chuẩn, không dùng trạng thái lúc publish làm tiến độ hiện tại.
 
 ## Phạm vi và nguồn chuẩn
 
@@ -14,9 +14,9 @@ Ticket trong tracker này là đơn vị claim/thực hiện và nguồn duy nh�
 
 ## Cách chọn việc
 
-Frontier ban đầu: **#01 và #02**, không có ticket blockers và ready-for-agent. Chưa có ticket nào done. Những ticket khác chỉ mở thực hiện khi Blocked by đã done, Conditional blockers của target áp dụng đã done và external/activation gates được đáp ứng.
+Frontier lúc publish là #01/#02. Hiện #01/#02/#05 đã done; #11 done trong software lab, production clearance vẫn mở. #03 blocked, #04/#06/#07 partial; #08 chưa bắt đầu và vẫn bị chặn bởi #07. #11 không tự mở #10/#12: #03/#06 và #10 vẫn còn blocker. Những ticket khác chỉ mở khi Blocked by/Conditional blockers đã đạt và external/activation gates được đáp ứng.
 
-Status là triage role; Execution theo not-started/in-progress/blocked/done. ready-for-agent không có nghĩa dependencies đã xong. needs-info chỉ dùng facts/provider/target còn thiếu (#15/#29/#42); ready-for-human cho power-cut/survey/field/sign-off (#37/#46/#48/#49/#50). Ghi rõ lý do trong ticket; sau khi có dữ liệu cập nhật triage, không bỏ gate.
+Status là triage role; Execution theo not-started/in-progress/partial/blocked/done. ready-for-agent không có nghĩa dependencies đã xong. needs-info chỉ dùng facts/provider/target còn thiếu (#15/#29/#42); ready-for-human cho power-cut/survey/field/sign-off (#37/#46/#48/#49/#50). Ghi rõ lý do trong ticket; sau khi có dữ liệu cập nhật triage, không bỏ gate.
 
 RKNN #29/#30 chỉ khi chọn RK3588; #31/#35 cần thêm #30 khi target RKNN, target ONNX vẫn phải conformance/capacity thật. Notification #42 và vehicle #46–#48 có điều kiện. Person-down #49/#50 chỉ cần #42 hoặc #48 khi nhánh tương ứng được bật; lab dashboard-only không tự phát notification. G4a trước field pilot, G5 sau khi thu đủ dữ liệu field và ký final acceptance.
 
@@ -30,7 +30,7 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [02: Hồ sơ lab, ODD và protocol nghiệm thu](issues/02-ho-so-lab-odd-va-protocol-nghiem-thu.md) | ready-for-agent | None | — | done |
 | [03: Doctor và config fail-fast qua đường chạy lab](issues/03-doctor-va-config-fail-fast-qua-duong-chay-lab.md) | ready-for-agent | #01, #06, #11 | — | blocked |
 | [04: Review event có kiểm soát phiên bản](issues/04-review-event-co-kiem-soat-phien-ban.md) | ready-for-agent | #01, #08 evidence manifest lifecycle | — | partial |
-| [05: Retry và revision không làm mất hoặc lùi event](issues/05-retry-va-revision-khong-lam-mat-hoac-lui-event.md) | ready-for-agent | #01 | — | not-started |
+| [05: Retry và revision không làm mất hoặc lùi event](issues/05-retry-va-revision-khong-lam-mat-hoac-lui-event.md) | ready-for-agent | #01 | — | done |
 | [06: Recorder file replay giữ raw ring độc lập](issues/06-recorder-file-replay-giu-raw-ring-doc-lap.md) | ready-for-agent | #02 | — | partial |
 | [07: Event pin được clip pre/post từ ring](issues/07-event-pin-duoc-clip-pre-post-tu-ring.md) | ready-for-agent | #01, #06 | — | partial |
 | [08: Upload evidence và phát lại trên detail](issues/08-upload-evidence-va-phat-lai-tren-detail.md) | ready-for-agent | #07 | — | not-started |

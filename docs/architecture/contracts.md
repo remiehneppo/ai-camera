@@ -1,6 +1,6 @@
 # Hợp đồng tích hợp hệ thống
 
-Cập nhật 2026-10-11 theo yêu cầu áp dụng review. Đây là đặc tả hiện hành; schema/runtime và các tests tương ứng chưa được triển khai. [Kiến trúc](system-architecture.md) xác định module và fault boundary; tài liệu này xác định semantics tại các ranh giới. [Plan](implementation-plan.md) và [tracker](../../.scratch/system-build-slices/PRD.md) giao việc thực hiện.
+Đặc tả cập nhật 2026-10-11; ghi chú implementation đồng bộ 2026-10-12. Một số schema/runtime/tests đã được nghiệm thu theo slices #01/#05/#06/#07/#11; không có nghĩa toàn bộ hợp đồng hoặc release gates đã đạt. [Kiến trúc](system-architecture.md) xác định module và fault boundary; tài liệu này xác định semantics tại các ranh giới. [Plan](implementation-plan.md) và [tracker](../../.scratch/system-build-slices/PRD.md) giao việc thực hiện.
 
 ## 1. PerceptionPipeline
 
@@ -14,6 +14,8 @@ Application sử dụng một port `PerceptionPipeline` cho cả native core và
 - Startup config là nguồn ROI/FPS ban đầu. Runtime `set_analysis_fps/set_roi`, nếu dùng, phải đi qua activation boundary với observed config version; không sửa ROI lặng lẽ giữa hai observations.
 
 Conformance chạy cùng application consumer với hai implementation: original coordinates/status, một tracker update/frame, mixed detection-ok/pose-skipped, late pose, queue pressure, stop/reopen và stale epoch. Không ép tensor ABI hoặc numeric equality tuyệt đối giữa backends.
+
+Implementation note (#11, `e47d6cf`): `OracleDetector` và pixel file replay là detector-stage oracle/conformance tool, không phải implementation đầy đủ của port lifecycle `PerceptionPipeline`. Canonical output có camera/session/epoch/frame, source PTS/event-time, original-coordinate boxes, transform/model/config/runtime provenance và detection status. Tracking/pose/lifecycle/queue-pressure/native conformance còn mở. Bằng chứng: [log #11](../logs/2026-10-12-ticket-11.md).
 
 ## 2. Event snapshot và identity
 

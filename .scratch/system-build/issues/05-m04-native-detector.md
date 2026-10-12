@@ -102,3 +102,5 @@ Ca tích hợp cần phối hợp: **X03, X05, X06, X25**. Xem bước inject/ex
 ## Comments
 
 - 2026-10-11: Tạo checklist từ kiến trúc/ADR/plan hiện hành; chưa claim, chưa implement, chưa chạy test runtime.
+
+- 2026-10-12 docs sync: N02 software-lab detector stage delivered in #11, commit `e47d6cf`. Exact official model/labels/runtime pins, raw-BGR preprocessing with separate source provenance, original-coordinate NMS/transform/status/timings and independent versioned goldens. Full pinned85/85 tests; original13detections/10person, crop9/7, negative0; border/threshold synthetic vectors separately identified. Evidence: [#11 log](../../../docs/logs/2026-10-12-ticket-11.md). N02 checkboxes/module gate remain open where broader source dependencies/production clearance or native conformance are not accepted; no claim N01/N03/N04 complete. Slice tracker remains execution authority.

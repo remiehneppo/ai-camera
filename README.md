@@ -1,6 +1,6 @@
 # AI Camera lab slice
 
-This repository implements tracker ticket [#01](.scratch/system-build-slices/issues/01-event-synthetic-xuat-hien-tren-dashboard.md) and has a partial implementation of [#03](.scratch/system-build-slices/issues/03-doctor-va-config-fail-fast-qua-duong-chay-lab.md): persist and display a synthetic event, validate server configuration, and inspect lab server reachability. Analytics/model and recorder runtimes are not implemented.
+Implemented software-lab slices: synthetic event/dashboard (#01), lab facts/protocol (#02), retry/revision delivery (#05), and pinned ONNX detector oracle (#11). Config/doctor (#03), event review (#04), file recorder/replay (#06), and durable pinned evidence (#07) remain partial or blocked as recorded in the [tracker](.scratch/system-build-slices/PRD.md). File-based recorder and detector-stage oracle commands exist; a composed live analytics/recorder runtime, native tracking/pose, server evidence upload/playback (#08), and production/target acceptance are not implemented or not yet accepted.
 
 ## Run the lab stack
 

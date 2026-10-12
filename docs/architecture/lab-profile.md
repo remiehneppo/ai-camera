@@ -17,9 +17,15 @@
 | Camera device | Không có `/dev/video*` tại thời điểm probe | RTSP camera/SKU/firmware/codec/session chưa được cung cấp hoặc kiểm tra |
 | Network | Ethernet và Wi-Fi interfaces up; có default route | WAN/uplink throughput, latency, outage và clock correlation chưa đo |
 | Lab stack | Docker CLI có; `docker compose ps` không phân giải được cấu hình vì `DASHBOARD_TOKEN` và `DEVICE_TOKENS` thiếu | Probe không khởi động hay thay đổi service; credentials không ghi vào hồ sơ |
-| Repo fixtures | Không tìm thấy model, dataset/sample video theo tên thư mục/đuôi phổ biến trong repo | Không chứng minh không có artifact ngoài repo; exact manifest/rights vẫn pending |
+| Repo fixtures tại probe #02 | Chưa có model/sample trong inventory ban đầu | Snapshot lịch sử; cập nhật #11 bên dưới, không suy production clearance |
 
 Nguồn: read-only probes `uname -a`, `lscpu`, `free -h`, `lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS`, `nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader`, `df -hT / /media/tieubaoca/HDD1`, `find /dev -maxdepth 1 -name 'video*' -print`, `ip -brief link`, `ip route`, `docker compose ps`, và inventory repo bằng `rg --files`. Full command/result record: [ticket #02 log](../logs/2026-10-12-ticket-02.md).
+
+## Cập nhật software lab #11 — 2026-10-12
+
+- Commit `e47d6cf`: manifests/attribution tại `models/yolox-tiny/`, independent goldens tại `fixtures/oracle/`; binary/photo ở ignored `data/oracle/`. Hash đầy đủ và rights scope nằm trong manifests, không dùng mutable release URL thay pin bytes.
+- Python3.12.3, ORT1.20.1 CPU, NumPy1.26.4, OpenCV-headless4.10.0.84. Raw-BGR preprocessor source pin riêng với released binary và per-class postprocessor; mismatch old-tag preprocessing đã được user duyệt hiệu chỉnh.
+- Pinned runtime full suite85/85 pass, no-record golden original13detections/10person, crop9/7, negative0. Đây là conformance fixtures, không đo recall/FP/capacity/field quality. [Evidence #11](../logs/2026-10-12-ticket-11.md).
 
 ## Scope, workload và ODD
 
@@ -31,7 +37,7 @@ Nguồn: read-only probes `uname -a`, `lscpu`, `free -h`, `lsblk -o NAME,SIZE,TY
 | Person pixel minimum, camera pose/ROI cụ thể, ánh sáng/thời tiết/occlusion bounds | `pending` | Product/operations + ML cần định nghĩa từ site và data được phép dùng |
 | Quality thresholds, recall/FP denominator, sample sufficiency và review minutes/alert | `pending` | Product/ML/QA cần duyệt protocol trước khi ký G2 |
 | Vehicle, PTZ/multi-plane và calibrated motion | Ngoài scope baseline | Vehicle cần calibration và G4b riêng khi được bật |
-| Samples, model weights, dataset lineage/license/privacy approval | Exact artifact, hash, grant/site/scope, approver/date đều `pending` | ML + Product/legal; không suy clearance từ code trong repo |
+| Samples/model lab #11 | YOLOX-Tiny ONNX và Shibuya public-domain fixture đã pin SHA/size/source/runtime; user duyệt lab ngày 2026-10-12 | Exact released-weight/training-data rights, privacy/personality và site/production clearance vẫn pending; không suy từ source Apache-2.0 |
 | Site owner, named acceptance signer | `pending` | Product/operations gán tên và ngày trước site acceptance |
 
 ### Đã chọn làm target, chưa phải phép đo
@@ -65,7 +71,7 @@ Mỗi case lưu `pass/fail/blocked/not-run`, expected/actual, command thật, ti
 
 - Product/operations: gán site/use-case signer, ODD bounds và quality/review targets.
 - Edge/platform: xác nhận camera/board, stream ownership, timestamp, storage mount/quota, uplink và workload thật.
-- ML + Product/legal: chọn fixture/model/dataset cụ thể, manifest/hash và quyền sử dụng/privacy clearance.
+- ML + Product/legal: giữ model/fixture pins lab #11; hoàn thiện released-weight/training-data/privacy/site clearance và held-out dataset trước production/quality acceptance.
 - QA/operations: xác định RPO/RTO, recorder gap budget, fault scope, recovery device/owner và cách đo.
 
 Các mục trên là gate mở, không cản synthetic/demo hoặc replay software hiện có; chúng chặn kết luận live-site, target capacity, quality sign-off và field readiness tương ứng.
