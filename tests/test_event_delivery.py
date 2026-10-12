@@ -82,6 +82,38 @@ class EdgeOutboxTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
+    def test_evidence_intent_is_atomic_and_anchored_not_triggered(self):
+        from domain.evidence_contract import make_evidence_request
+
+        event = event_fixture()
+        request = make_evidence_request("request-1", event["stream_session_id"], "onset", 0)
+        event["payload"]["evidence_requests"] = [request]
+        self.outbox.enqueue(event)
+        restarted = EventOutbox(self.db_path)
+        intent = restarted.evidence_requests()[0]
+        self.assertEqual((intent["requested_start"], intent["requested_end"]), (-10, 20))
+        self.assertEqual(intent["state"], "requested")
+        self.assertEqual(restarted.pending()[0]["event"]["payload"]["evidence_requests"], [request])
+        changed = event_fixture()
+        changed.update(revision=2, message_id="msg-2")
+        changed["payload"]["evidence_requests"] = [{**request, "requested_end": 21}]
+        with self.assertRaises(ValueError):
+            restarted.enqueue(changed)
+        self.assertEqual(len(restarted.pending()), 1)
+        self.assertEqual(restarted.evidence_requests()[0], intent)
+
+    def test_evidence_failure_rolls_back_event_and_metadata_delivery(self):
+        from domain.evidence_contract import make_evidence_request
+        event = event_fixture()
+        event["payload"]["evidence_requests"] = [make_evidence_request("intent", event["stream_session_id"], "synthetic", 0)]
+        with sqlite3.connect(self.db_path) as db:
+            db.execute("CREATE TRIGGER reject_evidence BEFORE INSERT ON evidence_requests BEGIN SELECT RAISE(ABORT, 'intent failure'); END")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.outbox.enqueue(event)
+        self.assertFalse(self.outbox.has_revision(event["device_id"], event["event_id"]))
+        self.assertEqual(self.outbox.pending(), [])
+        self.assertEqual(self.outbox.evidence_requests(), [])
+
     def test_memory_database_is_rejected_to_preserve_durability(self) -> None:
         with self.assertRaisesRegex(ValueError, "file-backed"):
             EventOutbox(":memory:")

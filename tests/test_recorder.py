@@ -1,5 +1,6 @@
 import json
 import shutil
+import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -73,6 +74,138 @@ class FileRecorderTests(unittest.TestCase):
         self.assertTrue(restarted.release_pin("request-1"))
         self.assertFalse(restarted.release_pin("request-1"))
         self.assertEqual(restarted.pin_status("request-1")["state"], "released")
+
+    def test_worker_records_bad_clip_failure_without_starving_other_requests(self):
+        from apps.edge.outbox import EventOutbox
+        from domain.evidence_contract import make_evidence_request
+        from tests.test_event_delivery import event_fixture
+        outbox = EventOutbox(self.root / "events.sqlite3")
+        bad = event_fixture()
+        bad["payload"]["evidence_requests"] = [make_evidence_request("bad", bad["stream_session_id"], "synthetic", 0)]
+        outbox.enqueue(bad)
+        self.recorder.record_file(self.source, bad["stream_session_id"])
+        for segment in self.recorder.segments(bad["stream_session_id"]):
+            Path(segment.path).write_bytes(b"invalid video")
+        good = event_fixture()
+        good.update(event_id="00000000-0000-4000-8000-000000000099", stream_session_id="00000000-0000-4000-8000-000000000098", message_id="good")
+        good["payload"]["evidence_requests"] = [make_evidence_request("good", good["stream_session_id"], "synthetic", 0)]
+        outbox.enqueue(good)
+        self.recorder.record_file(self.source, good["stream_session_id"])
+        self.assertEqual(outbox.reconcile_evidence(self.recorder, finish_sessions=[bad["stream_session_id"], good["stream_session_id"]]), 1)
+        self.assertEqual([item["state"] for item in outbox.evidence_requests()], ["failed", "partial"])
+        self.assertTrue(outbox.evidence_requests()[0]["last_error"])
+        self.assertEqual(EventOutbox(self.root / "events.sqlite3").reconcile_evidence(self.recorder), 0)
+
+    def test_full_pre10_post20_clip(self):
+        from apps.edge.outbox import EventOutbox
+        from domain.evidence_contract import make_evidence_request
+        from tests.test_event_delivery import event_fixture
+        source = self.root / "long.mp4"
+        subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                        "testsrc=size=64x64:rate=10", "-t", "40", "-c:v", "mpeg4", "-g", "10",
+                        "-output_ts_offset", "3", str(source)], check=True, capture_output=True)
+        event = event_fixture()
+        request = make_evidence_request("full", event["stream_session_id"], "synthetic", 13)
+        event["payload"]["evidence_requests"] = [request]
+        outbox = EventOutbox(self.root / "events.sqlite3")
+        outbox.enqueue(event)
+        outbox.reconcile_evidence(self.recorder)
+        self.recorder.record_file(source, request["session_id"])
+        self.assertEqual(outbox.reconcile_evidence(self.recorder), 1)
+        result = outbox.evidence_requests()[0]["receipt"]
+        self.assertEqual((result["requested_start"], result["requested_end"], result["completeness"]), (3, 33, "complete"))
+        self.assertGreaterEqual(result["actual_end"] - result["actual_start"], 30)
+
+    def test_overlap_owner_survives_release_and_missing_build_fails(self):
+        self.recorder.ring_seconds = 1
+        self.recorder.pin("first", "shared", 3, 6, "owner-1")
+        self.recorder.pin("second", "shared", 3, 6, "owner-2")
+        self.recorder.record_file(self.source, "shared")
+        self.recorder.release_pin("first")
+        self.assertEqual(self.recorder.pin_status("second")["completeness"], "complete")
+        self.recorder.pin("absent", "empty", -10, 20, "owner-3")
+        result = self.recorder.finalize_pin("absent", allow_partial=True)
+        self.assertEqual((result["build_state"], result["completeness"], result["artifact"]), ("failed", "unknown", None))
+
+    def test_finalize_recovers_renamed_manifest_after_database_failure(self):
+        self.recorder.pin("recovery", "session-1", 3, 8, "event-1")
+        self.recorder.record_file(self.source, "session-1")
+        database = self.root / "ring" / "pins.sqlite3"
+        with sqlite3.connect(database) as db:
+            db.execute("CREATE TRIGGER fail_finalize BEFORE UPDATE OF receipt ON pins BEGIN SELECT RAISE(ABORT, 'crash window'); END")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.recorder.finalize_pin("recovery")
+        manifest_path = next((self.root / "ring" / "manifests").glob("*.json"))
+        committed = manifest_path.read_bytes()
+        with sqlite3.connect(database) as db:
+            db.execute("DROP TRIGGER fail_finalize")
+        for segment in self.recorder.segments("session-1"):
+            Path(segment.path).unlink()
+        restarted = FileRecorder(self.root / "ring")
+        receipt = restarted.finalize_pin("recovery")
+        self.assertEqual(manifest_path.read_bytes(), committed)
+        self.assertEqual(receipt["artifact"], json.loads(committed)["artifact"])
+
+    def test_worker_retries_pin_ack_and_preserves_anchor_lineage(self):
+        from apps.edge.outbox import EventOutbox
+        from domain.evidence_contract import make_evidence_request
+        from tests.test_event_delivery import event_fixture
+
+        event = event_fixture()
+        request = make_evidence_request("intent", event["stream_session_id"], "onset", 0)
+        event["payload"]["evidence_requests"] = [request]
+        outbox = EventOutbox(self.root / "events.sqlite3")
+        outbox.enqueue(event)
+        self.recorder.record_file(self.source, request["session_id"])
+        self.assertEqual(outbox.reconcile_evidence(self.recorder), 0)
+        self.assertEqual(outbox.evidence_requests()[0]["state"], "collecting")
+        restarted = EventOutbox(self.root / "events.sqlite3")
+        self.assertEqual(restarted.reconcile_evidence(self.recorder, finish_sessions=[request["session_id"]]), 1)
+        result = restarted.evidence_requests()[0]
+        self.assertEqual((result["state"], result["receipt"]["requested_start"], result["receipt"]["requested_end"]), ("partial", -10, 20))
+        self.assertEqual(result["receipt"]["evidence_anchor_kind"], "onset")
+        artifact = result["receipt"]["artifact"]
+        self.recorder.acknowledge_transfer("intent", {
+            "request_id": "intent", "sha256": artifact["sha256"], "size_bytes": artifact["size_bytes"],
+            "location": "server/clip-1"})
+        status = self.recorder.pin_status("intent")
+        self.assertEqual((status["build_state"], status["completeness"], status["transfer_state"]),
+                         ("finalized", "partial", "acknowledged"))
+        changed = event_fixture()
+        changed.update(revision=2, message_id="msg-2")
+        changed["payload"]["evidence_requests"] = [make_evidence_request("replacement", request["session_id"], "first_qualifying_observation", 4, supersedes_request_id="intent")]
+        restarted.enqueue(changed)
+        restarted.reconcile_evidence(self.recorder, finish_sessions=[request["session_id"]])
+        self.assertEqual(restarted.evidence_requests()[0], result)
+        self.assertEqual(restarted.evidence_requests()[1]["receipt"]["supersedes_request_id"], "intent")
+
+    def test_request_outside_ring_is_missing_not_complete(self):
+        self.recorder.record_file(self.source, "session-1")
+        coverage = self.recorder.actual_range("session-1", 10, 20)
+        self.assertEqual(coverage["completeness"], "missing")
+        self.assertIsNone(coverage["actual_start"])
+
+    def test_finalized_clip_survives_release_and_reports_corruption(self):
+        self.recorder.pin("clip-1", "clip-session", 3, 8, "event-1")
+        self.recorder.record_file(self.source, "clip-session")
+        receipt = self.recorder.finalize_pin("clip-1")
+        self.assertEqual(receipt["build_state"], "finalized")
+        self.assertEqual(receipt["completeness"], "complete")
+        clip = Path(receipt["artifact"]["path"])
+        probe = json.loads(subprocess.run([
+            "ffprobe", "-v", "error", "-show_frames", "-of", "json", str(clip)
+        ], check=True, capture_output=True, text=True).stdout)
+        pts = [float(frame["pts_time"]) for frame in probe["frames"]]
+        self.assertAlmostEqual(pts[-1] - pts[0], 5.9)
+        self.assertTrue(all(abs(right - left - 0.1) < 0.001 for left, right in zip(pts, pts[1:])))
+        self.recorder.ring_seconds = 1
+        self.recorder.release_pin("clip-1")
+        restarted = FileRecorder(self.root / "ring", ring_seconds=1)
+        self.assertEqual(restarted.finalize_pin("clip-1"), receipt)
+        self.assertEqual(restarted.pin_status("clip-1")["availability"], "available")
+        clip.write_bytes(b"corrupt")
+        self.assertEqual(restarted.pin_status("clip-1")["integrity"], "corrupt")
+        self.assertEqual(restarted.finalize_pin("clip-1"), receipt)
 
 
 if __name__ == "__main__":

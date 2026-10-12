@@ -41,6 +41,18 @@ The edge SQLite database defaults to `data/edge-events.sqlite3`. Event and outbo
 
 The server authenticates each device token to one `device_id`, rejects mismatches, enforces a 256 KiB event body limit, validates the versioned snapshot, and commits the immutable revision, higher-only current projection, and ineligible downstream decision in one majority-journaled Mongo transaction. Identical retries return the stored receipt; the same identity with different content returns conflict. Synthetic and replay events never become notification work.
 
+## Synthetic recorder evidence (#07)
+
+Generate a cleared fixture, persist event/outbox/evidence intent atomically, and stream-copy a pinned clip:
+
+```sh
+ffmpeg -f lavfi -i testsrc=size=64x64:rate=10 -t 40 -c:v mpeg4 -g 10 /tmp/camera-fixture.mp4
+DEVICE_ID=lab-edge-01 python -m apps.edge.send_synthetic --no-send \
+  --record-file /tmp/camera-fixture.mp4 --anchor-time 10
+```
+
+Evidence requests live in the full event payload. Source-event-time anchor policy is pre10/post20; trigger time does not shift it. Ended replay sessions are persisted so recovery terminates incomplete evidence explicitly. Independent immutable MKV clips and manifests live under the recorder root; `EventOutbox.reconcile_evidence` retries durable intents and records per-request operational failures. Actual ranges are keyframe/segment aligned, not exact trims. Transfer receipt state is independent of completeness; actual server upload/playback is ticket #08.
+
 ## Checks
 
 Run the local contract and SQLite tests with `python -m unittest discover -s tests`. MongoDB transaction, HTTP auth, and browser checks require the Compose lab to be running; they are separate from this unit suite.

@@ -52,6 +52,7 @@ class FileRecorder:
         self._pins = self.root / "pins.sqlite3"
         with sqlite3.connect(self._pins) as db:
             db.execute("PRAGMA synchronous=FULL")
+            db.execute("CREATE TABLE IF NOT EXISTS transfers (request_id TEXT PRIMARY KEY, receipt TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS pins (request_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, owner TEXT NOT NULL, start REAL NOT NULL, end REAL NOT NULL, released INTEGER NOT NULL DEFAULT 0, receipt TEXT NOT NULL)")
 
     def pin(self, request_id: str, session_id: str, start: float, end: float, owner: str) -> dict:
@@ -69,6 +70,7 @@ class FileRecorder:
             coverage = self.actual_range(session_id, start, end)
             receipt = {"request_id": request_id, "session_id": session_id, "owner": owner,
                        "requested_start": start, "requested_end": end, **coverage,
+                       "build_state": "pending",
                        "state": "collecting" if coverage["actual_end"] is None or coverage["actual_end"] < end else "held"}
             db.execute("INSERT INTO pins(request_id,session_id,owner,start,end,receipt) VALUES(?,?,?,?,?,?)",
                        (request_id, session_id, owner, start, end, json.dumps(receipt, separators=(",", ":"))))
@@ -92,16 +94,59 @@ class FileRecorder:
         session_id, owner, start, end, released, saved_receipt = row
         saved_receipt = json.loads(saved_receipt)
         if saved_receipt.get("manifest"):
-            return {**saved_receipt, "state": "released" if released else "held"}
+            artifact = saved_receipt.get("artifact")
+            location = {"availability": "missing", "integrity": "unverified"}
+            if artifact and Path(artifact["path"]).is_file():
+                location = {"availability": "available", "integrity": "verified"}
+                if not self._verify_artifact(artifact):
+                    location = {"availability": "quarantined", "integrity": "corrupt"}
+            with sqlite3.connect(self._pins) as db:
+                transfer = db.execute("SELECT receipt FROM transfers WHERE request_id=?", (request_id,)).fetchone()
+            return {**saved_receipt, **location, "state": "released" if released else "held",
+                    "transfer_state": "acknowledged" if transfer else "not_started",
+                    "transfer_receipt": json.loads(transfer[0]) if transfer else None}
         coverage = self.actual_range(session_id, start, end)
-        state = "released" if released else (
-            "collecting" if coverage["actual_end"] is None or coverage["actual_end"] < end else "held"
-        )
+        latest = max((item.end_seconds for item in self.segments(session_id)), default=float("-inf"))
+        state = "released" if released else ("collecting" if latest < end else "held")
         return {"request_id": request_id, "session_id": session_id, "owner": owner,
                 "requested_start": start, "requested_end": end, **coverage, "state": state}
 
-    def finalize_pin(self, request_id: str, *, allow_partial: bool = False) -> dict:
-        """Persist a manifest for a completed pin without changing its requested interval."""
+    def acknowledge_transfer(self, request_id: str, receipt: dict) -> None:
+        status = self.pin_status(request_id)
+        if not status or not status.get("artifact"):
+            raise ValueError("finalized artifact required")
+        expected = {"request_id": request_id, "sha256": status["artifact"]["sha256"],
+                    "size_bytes": status["artifact"]["size_bytes"]}
+        if any(receipt.get(key) != value for key, value in expected.items()) or not isinstance(receipt.get("location"), str) or not receipt["location"]:
+            raise ValueError("transfer receipt does not match artifact")
+        encoded = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+        with sqlite3.connect(self._pins) as db:
+            db.execute("BEGIN IMMEDIATE")
+            prior = db.execute("SELECT receipt FROM transfers WHERE request_id=?", (request_id,)).fetchone()
+            if prior and prior[0] != encoded:
+                raise ValueError("transfer receipt conflict")
+            db.execute("INSERT OR IGNORE INTO transfers VALUES(?,?)", (request_id, encoded))
+
+    @staticmethod
+    def _verify_artifact(artifact: dict) -> bool:
+        path = Path(artifact["path"])
+        if not path.is_file() or path.stat().st_size != artifact["size_bytes"]:
+            return False
+        with path.open("rb") as source:
+            return hashlib.file_digest(source, "sha256").hexdigest() == artifact["sha256"]
+
+    @staticmethod
+    def _sync_dir(directory: Path) -> None:
+        fd = os.open(directory, os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def finalize_pin(self, request_id: str, *, allow_partial: bool = False, request_metadata: dict | None = None) -> dict:
+        """Materialize immutable stream-copy evidence; retry reconciles file/DB commits."""
+        if request_metadata and request_metadata.keys() - {"evidence_anchor_kind", "evidence_anchor_time", "mapping_uncertainty", "policy_version", "supersedes_request_id"}:
+            raise ValueError("invalid request metadata")
         with sqlite3.connect(self._pins, timeout=30, isolation_level="IMMEDIATE") as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute(
@@ -116,29 +161,64 @@ class FileRecorder:
                 return receipt
             if released:
                 raise ValueError("cannot finalize a released pin")
+            directory = self.root / "manifests"
+            directory.mkdir(exist_ok=True)
+            self._sync_dir(self.root)
+            name = hashlib.sha256(request_id.encode()).hexdigest()
+            target = directory / (name + ".json")
+            # Renamed manifest survives rollback of the SQLite finalize receipt.
+            if target.exists():
+                manifest = json.loads(target.read_text())
+                if (manifest["request_id"], manifest["session_id"], manifest["owner"],
+                    manifest["requested_start"], manifest["requested_end"]) != (request_id, session_id, owner, start, end):
+                    raise ValueError("orphan manifest identity conflict")
+                if manifest.get("artifact") and not self._verify_artifact(manifest["artifact"]):
+                    raise ValueError("orphan artifact missing or corrupt")
+                receipt = {**manifest, "manifest": str(target)}
+                db.execute("UPDATE pins SET receipt=? WHERE request_id=?",
+                           (json.dumps(receipt, separators=(",", ":")), request_id))
+                return receipt
             coverage = self.actual_range(session_id, start, end)
-            if coverage["actual_end"] is None or coverage["actual_end"] < end:
+            latest = max((item.end_seconds for item in self.segments(session_id)), default=float("-inf"))
+            if latest < end:
                 if not allow_partial:
                     raise ValueError("pin is still collecting post-roll")
-                coverage["completeness"] = "partial"
                 coverage["reason"] = coverage["reason"] or "incomplete_postroll"
             segments = [item for item in self.segments(session_id)
                         if item.end_seconds >= start and item.start_seconds <= end]
+            artifact = None
+            if segments:
+                clip = directory / (name + ".mkv")
+                clip_temp = directory / (name + ".tmp.mkv")
+                playlist = directory / (name + ".concat")
+                playlist.write_text("".join("file '" + str(Path(item.path).resolve()).replace("'", "'\\''") + "'\nduration " + str(item.end_seconds - item.start_seconds + item.frame_interval_seconds) + "\n" for item in segments))
+                subprocess.run([
+                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat",
+                    "-safe", "0", "-i", str(playlist), "-map", "0:v:0", "-c:v", "copy", str(clip_temp),
+                ], check=True, capture_output=True, timeout=20)
+                with clip_temp.open("rb") as source:
+                    os.fsync(source.fileno())
+                    digest = hashlib.file_digest(source, "sha256").hexdigest()
+                artifact = {"path": str(clip), "size_bytes": clip_temp.stat().st_size,
+                            "sha256": digest, "content_type": "video/x-matroska", "codec": segments[0].codec}
+                os.replace(clip_temp, clip)
+                self._sync_dir(directory)
+                playlist.unlink(missing_ok=True)
             artifacts = []
             for item in segments:
                 path = Path(item.path)
                 with path.open("rb") as source:
                     digest = hashlib.file_digest(source, "sha256").hexdigest()
                 artifacts.append({"path": str(path), "size_bytes": path.stat().st_size, "sha256": digest})
+            if not artifact:
+                coverage["completeness"] = "unknown"
             manifest = {
                 "request_id": request_id, "session_id": session_id, "owner": owner,
                 "requested_start": start, "requested_end": end, **coverage,
-                "build_state": "finalized", "state": "held", "segments": artifacts,
+                "build_state": "finalized" if artifact else "failed", "state": "held", "segments": artifacts,
+                "artifact": artifact, "transfer_state": "not_started",
+                **(request_metadata or {}),
             }
-            directory = self.root / "manifests"
-            directory.mkdir(exist_ok=True)
-            name = hashlib.sha256(request_id.encode()).hexdigest() + ".json"
-            target = directory / name
             temp = target.with_suffix(".json.tmp")
             with temp.open("w") as output:
                 json.dump(manifest, output, separators=(",", ":"))
@@ -202,7 +282,8 @@ class FileRecorder:
     def actual_range(self, session_id: str, requested_start: float, requested_end: float) -> dict:
         if requested_end <= requested_start:
             raise ValueError("requested_end must be after requested_start")
-        segments = self.segments(session_id)
+        segments = [item for item in self.segments(session_id)
+                    if item.end_seconds >= requested_start and item.start_seconds <= requested_end]
         if not segments:
             return {
                 "actual_start": None, "actual_end": None, "actual_ranges": [], "gaps": [],

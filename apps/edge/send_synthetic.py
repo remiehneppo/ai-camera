@@ -89,7 +89,12 @@ def main() -> int:
     parser.add_argument("--db", default=os.getenv("EDGE_DB", "data/edge-events.sqlite3"))
     parser.add_argument("--event-id", type=UUID, help="reuse an event UUID for an idempotency demonstration")
     parser.add_argument("--no-send", action="store_true", help="persist the fixture without attempting delivery")
+    parser.add_argument("--record-file", help="record a cleared synthetic replay source and finalize its evidence")
+    parser.add_argument("--anchor-time", type=float, help="declared source-event-time anchor, not trigger time")
+    parser.add_argument("--recorder-root", default="data/recorder")
     args = parser.parse_args()
+    if bool(args.record_file) != (args.anchor_time is not None):
+        parser.error("--record-file and --anchor-time must be supplied together")
     outbox = EventOutbox(args.db)
     device_id = os.environ["DEVICE_ID"]
     should_enqueue = (
@@ -97,8 +102,24 @@ def main() -> int:
     ) or (args.event_id is None and (args.no_send or not outbox.pending()))
     if should_enqueue:
         event = make_event(device_id, os.getenv("CAMERA_ID", "lab-camera-01"), args.event_id)
+        if args.record_file:
+            from domain.evidence_contract import make_evidence_request
+            event["payload"]["evidence_requests"] = [make_evidence_request(
+                str(uuid4()), event["stream_session_id"], "synthetic", args.anchor_time)]
         outbox.enqueue(event)
         print(f"queued event_id={event['event_id']}")
+    if args.record_file:
+        from apps.edge.recorder import FileRecorder
+        recorder = FileRecorder(args.recorder_root)
+        sessions = {item["session_id"] for item in outbox.evidence_requests()
+                    if item["state"] in {"requested", "collecting"}}
+        # Pin before writing/pruning; restart retries the same durable intent.
+        outbox.reconcile_evidence(recorder)
+        for session in sessions:
+            if not recorder.segments(session):
+                recorder.record_file(args.record_file, session)
+        count = outbox.reconcile_evidence(recorder, finish_sessions=sessions)
+        print(f"evidence_finalized={count}")
     if args.no_send:
         print(f"pending={len(outbox.pending())}")
         return 0

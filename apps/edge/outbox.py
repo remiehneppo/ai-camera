@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sqlite3
+import subprocess
 from typing import Any
 
 from domain.event_contract import canonical_event_hash, validate_event, validate_revision_identity
@@ -24,6 +25,17 @@ class EventOutbox:
         with self._connect() as db:
             db.executescript(
                 """
+                CREATE TABLE IF NOT EXISTS ended_recorder_sessions (session_id TEXT PRIMARY KEY);
+                CREATE TABLE IF NOT EXISTS evidence_requests (
+                    request_id TEXT PRIMARY KEY,
+                    device_id TEXT NOT NULL,
+                    event_id TEXT NOT NULL,
+                    revision INTEGER NOT NULL,
+                    request_json TEXT NOT NULL,
+                    state TEXT NOT NULL DEFAULT 'requested',
+                    receipt_json TEXT,
+                    last_error TEXT
+                );
                 CREATE TABLE IF NOT EXISTS event_revisions (
                     device_id TEXT NOT NULL,
                     event_id TEXT NOT NULL,
@@ -59,6 +71,7 @@ class EventOutbox:
 
     def enqueue(self, raw_event: dict[str, Any]) -> str:
         event = validate_event(raw_event)
+        requests = event["payload"].get("evidence_requests", [])
         digest = canonical_event_hash(event)
         event_json = json.dumps(event, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
         identity = (event["device_id"], event["event_id"], event["revision"])
@@ -78,6 +91,19 @@ class EventOutbox:
             ).fetchone()
             if first:
                 validate_revision_identity(json.loads(first["snapshot_json"]), event)
+            for request in requests:
+                encoded = json.dumps(request, sort_keys=True, separators=(",", ":"))
+                saved = db.execute("SELECT device_id,event_id,request_json FROM evidence_requests WHERE request_id=?",
+                                   (request["request_id"],)).fetchone()
+                if saved and tuple(saved) != (*identity[:2], encoded):
+                    raise EventConflict("evidence request ID already has different content or owner")
+                supersedes = request["supersedes_request_id"]
+                if supersedes:
+                    parent = db.execute("SELECT device_id,event_id FROM evidence_requests WHERE request_id=?", (supersedes,)).fetchone()
+                    if parent is None or tuple(parent) != identity[:2]:
+                        raise EventConflict("superseded request must belong to the same event")
+                db.execute("INSERT OR IGNORE INTO evidence_requests(request_id,device_id,event_id,revision,request_json) VALUES(?,?,?,?,?)",
+                           (request["request_id"], *identity, encoded))
             db.execute(
                 "INSERT INTO event_revisions VALUES (?, ?, ?, ?, ?, ?)",
                 (*identity, event["message_id"], digest, event_json),
@@ -87,6 +113,48 @@ class EventOutbox:
                 (event["message_id"], *identity, datetime.now(timezone.utc).isoformat()),
             )
         return event["message_id"]
+
+    def evidence_requests(self) -> list[dict[str, Any]]:
+        with self._connect() as db:
+            rows = db.execute("SELECT * FROM evidence_requests ORDER BY rowid").fetchall()
+        return [{**json.loads(row["request_json"]), "device_id": row["device_id"],
+                 "event_id": row["event_id"], "revision": row["revision"], "state": row["state"],
+                 "receipt": json.loads(row["receipt_json"]) if row["receipt_json"] else None,
+                 "last_error": row["last_error"]} for row in rows]
+
+    def reconcile_evidence(self, recorder, *, finish_sessions=()) -> int:
+        """Retry durable intents; ended replay sessions explicitly finalize partial/missing."""
+        with self._connect() as db:
+            db.executemany("INSERT OR IGNORE INTO ended_recorder_sessions VALUES(?)", [(session,) for session in finish_sessions])
+            ended = {row[0] for row in db.execute("SELECT session_id FROM ended_recorder_sessions")}
+        completed = 0
+        for request in self.evidence_requests():
+            if request["state"] in {"fulfilled", "partial"}:
+                continue
+            request_id = request["request_id"]
+            owner = f'{request["device_id"]}/{request["event_id"]}/{request["revision"]}'
+            try:
+                pin = recorder.pin(request_id, request["session_id"], request["requested_start"], request["requested_end"], owner)
+                with self._connect() as db:
+                    db.execute("UPDATE evidence_requests SET state='collecting',receipt_json=?,last_error=NULL WHERE request_id=?",
+                               (json.dumps(pin), request_id))
+                status = recorder.pin_status(request_id)
+                if status["state"] == "collecting" and request["session_id"] not in ended:
+                    continue
+                receipt = recorder.finalize_pin(request_id, allow_partial=request["session_id"] in ended,
+                                                request_metadata={key: request[key] for key in (
+                                                    "evidence_anchor_kind", "evidence_anchor_time", "mapping_uncertainty",
+                                                    "policy_version", "supersedes_request_id")})
+                state = "failed" if receipt["build_state"] == "failed" else (
+                    "fulfilled" if receipt["completeness"] == "complete" else "partial")
+                with self._connect() as db:
+                    db.execute("UPDATE evidence_requests SET state=?,receipt_json=?,last_error=NULL WHERE request_id=?",
+                               (state, json.dumps(receipt), request_id))
+                completed += 1
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, sqlite3.Error) as exc:
+                with self._connect() as db:
+                    db.execute("UPDATE evidence_requests SET state='failed',last_error=? WHERE request_id=?", (str(exc)[:512], request_id))
+        return completed
 
     def pending(self) -> list[dict[str, Any]]:
         with self._connect() as db:

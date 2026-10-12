@@ -8,6 +8,8 @@ import json
 from typing import Any
 from uuid import UUID
 
+from domain.evidence_contract import validate_evidence_request
+
 SCHEMA_VERSION = 1
 CANONICALIZATION = "canonical-json-python-v1"
 MAX_EVENT_BYTES = 256 * 1024
@@ -112,6 +114,17 @@ def validate_event(value: Any) -> dict[str, Any]:
         raise EventValidationError("model_lineage must be an array with at most 16 entries")
     if not isinstance(value["payload"], dict):
         raise EventValidationError("payload must be a JSON object")
+
+    requests = value["payload"].get("evidence_requests", [])
+    if not isinstance(requests, list) or len(requests) > 16:
+        raise EventValidationError("evidence_requests must be an array of at most 16 requests")
+    try:
+        for request in requests:
+            checked = validate_evidence_request(request)
+            if checked["session_id"] != value["stream_session_id"]:
+                raise ValueError("evidence request session must match event")
+    except ValueError as exc:
+        raise EventValidationError(str(exc)) from exc
 
     normalized = dict(value)
     normalized["event_time"] = _timestamp(value["event_time"], "event_time")
