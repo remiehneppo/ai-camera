@@ -1,6 +1,6 @@
 # Tracker triển khai theo tracer-bullet slices
 
-Breakdown 50 ticket được duyệt và publish ngày 2026-10-11. Trạng thái đồng bộ ngày 2026-10-12 sau commit `e47d6cf`; từng issue là nguồn execution/blocker chuẩn, không dùng trạng thái lúc publish làm tiến độ hiện tại.
+Breakdown 50 ticket ban đầu được duyệt và publish ngày 2026-10-11; ticket #51 được bổ sung ngày 2026-10-12 theo quyết định tách live-ring prerequisite. Từng issue là nguồn execution/blocker chuẩn, không dùng trạng thái lúc publish làm tiến độ hiện tại.
 
 ## Phạm vi và nguồn chuẩn
 
@@ -40,7 +40,7 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [12: Native detector đạt parity với oracle](issues/12-native-detector-dat-parity-voi-oracle.md) | ready-for-agent | #10, #11 | — | not-started |
 | [13: Native tracks có time và session semantics](issues/13-native-tracks-co-time-va-session-semantics.md) | ready-for-agent | #12 | — | not-started |
 | [14: Pipeline baseline biến observations thành event](issues/14-pipeline-baseline-bien-observations-thanh-event.md) | ready-for-agent | #05, #07, #13 | — | not-started |
-| [15: Camera RTSP live giữ correlation với recorder](issues/15-camera-rtsp-live-giu-correlation-voi-recorder.md) | needs-info | #02, #14 | — | not-started |
+| [15: Camera RTSP live giữ correlation với recorder](issues/15-camera-rtsp-live-giu-correlation-voi-recorder.md) | needs-info | #02, #14, #51 | — | not-started |
 | [16: Startup/shutdown giữ recorder và state đúng](issues/16-startup-shutdown-giu-recorder-va-state-dung.md) | ready-for-agent | #09, #14 | — | not-started |
 | [17: Health phản ánh khả năng quan sát thực](issues/17-health-phan-anh-kha-nang-quan-sat-thuc.md) | ready-for-agent | #14 | — | not-started |
 | [18: Quota bảo vệ pinned evidence và journal](issues/18-quota-bao-ve-pinned-evidence-va-journal.md) | ready-for-agent | #09, #17 | — | not-started |
@@ -76,6 +76,7 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [48: Nghiệm thu vehicle riêng G4b](issues/48-nghiem-thu-vehicle-rieng-g4b.md) | ready-for-human | #47 | — | not-started |
 | [49: Nghiệm thu person-down pilot readiness G4a](issues/49-nghiem-thu-person-down-pilot-readiness-g4a.md) | ready-for-human | #19, #28, #31, #36, #37, #39, #40, #41, #43, #44, #45 | — | not-started |
 | [50: Field pilot và final acceptance G5](issues/50-field-pilot-va-final-acceptance-g5.md) | ready-for-human | #49 | — | not-started |
+| [51: Live ring publish segments during ingest](issues/51-live-ring-publish-segments-during-ingest.md) | ready-for-agent | #06 | — | not-started |
 
 ## Mapping 89 task nguồn → tickets
 
@@ -176,3 +177,4 @@ Một task có thể được hoàn thiện dần qua nhiều ticket; task mappi
 ## Comments
 
 - 2026-10-11: Publish 50 tickets theo breakdown đã duyệt, kiểm blockers-first DAG và coverage 89 task. Không claim/implement/đóng parent issues hoặc commit/push.
+- 2026-10-12: Bổ sung #51 live-ring sau khi phân tích #15 cho thấy recorder hiện chỉ publish segment sau EOF, nên không thể query/pin trong lúc ingest. #51 phụ thuộc #06; #15 phụ thuộc thêm #51. Chưa claim implementation hoặc nghiệm thu live RTSP.
