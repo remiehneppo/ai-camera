@@ -58,6 +58,22 @@ class FileRecorderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "cannot move backwards"):
             self.recorder.advance_watermark("session-1", 3)
 
+    def test_durable_pin_protects_ring_until_idempotent_release(self):
+        self.recorder.ring_seconds = 2
+        initial = self.recorder.pin("request-1", "pinned", 3, 6, "event-1")
+        self.assertEqual(initial["state"], "collecting")
+        self.recorder.record_file(self.source, "pinned", segment_seconds=2)
+        restarted = FileRecorder(self.root / "ring", ring_seconds=2)
+        retained = restarted.segments("pinned")
+        self.assertTrue(any(item.start_seconds <= 3 <= item.end_seconds for item in retained))
+        self.assertEqual(restarted.pin_status("request-1")["state"], "held")
+        self.assertEqual(restarted.pin("request-1", "pinned", 3, 6, "event-1"), initial)
+        with self.assertRaisesRegex(ValueError, "different content"):
+            restarted.pin("request-1", "pinned", 4, 7, "event-1")
+        self.assertTrue(restarted.release_pin("request-1"))
+        self.assertFalse(restarted.release_pin("request-1"))
+        self.assertEqual(restarted.pin_status("request-1")["state"], "released")
+
 
 if __name__ == "__main__":
     unittest.main()

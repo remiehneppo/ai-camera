@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
+import sqlite3
 import subprocess
 import time
 from dataclasses import asdict, dataclass
@@ -46,6 +48,53 @@ class FileRecorder:
         self.root.mkdir(parents=True, exist_ok=True)
         self.ring_seconds = ring_seconds
         self._watermarks: dict[str, float] = {}
+        self._pins = self.root / "pins.sqlite3"
+        with sqlite3.connect(self._pins) as db:
+            db.execute("PRAGMA synchronous=FULL")
+            db.execute("CREATE TABLE IF NOT EXISTS pins (request_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, owner TEXT NOT NULL, start REAL NOT NULL, end REAL NOT NULL, released INTEGER NOT NULL DEFAULT 0, receipt TEXT NOT NULL)")
+
+    def pin(self, request_id: str, session_id: str, start: float, end: float, owner: str) -> dict:
+        """Durably hold the requested ring interval and return an idempotent receipt."""
+        self._session_dir(session_id)
+        if not request_id or not owner or any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) for value in (start, end)) or end <= start:
+            raise ValueError("request_id and owner are required and end must follow start")
+        with sqlite3.connect(self._pins, timeout=30, isolation_level="IMMEDIATE") as db:
+            db.execute("BEGIN IMMEDIATE")
+            prior = db.execute("SELECT session_id, owner, start, end, receipt FROM pins WHERE request_id=?", (request_id,)).fetchone()
+            if prior:
+                if prior[:4] != (session_id, owner, start, end):
+                    raise ValueError("pin request ID already has different content")
+                return json.loads(prior[4])
+            coverage = self.actual_range(session_id, start, end)
+            receipt = {"request_id": request_id, "session_id": session_id, "owner": owner,
+                       "requested_start": start, "requested_end": end, **coverage,
+                       "state": "collecting" if coverage["actual_end"] is None or coverage["actual_end"] < end else "held"}
+            db.execute("INSERT INTO pins(request_id,session_id,owner,start,end,receipt) VALUES(?,?,?,?,?,?)",
+                       (request_id, session_id, owner, start, end, json.dumps(receipt, separators=(",", ":"))))
+            return receipt
+
+    def release_pin(self, request_id: str) -> bool:
+        with sqlite3.connect(self._pins, timeout=30, isolation_level="IMMEDIATE") as db:
+            changed = db.execute("UPDATE pins SET released=1 WHERE request_id=? AND released=0", (request_id,)).rowcount
+        if changed:
+            with sqlite3.connect(self._pins) as db:
+                row = db.execute("SELECT session_id FROM pins WHERE request_id=?", (request_id,)).fetchone()
+            if row:
+                self._prune(row[0])
+        return bool(changed)
+
+    def pin_status(self, request_id: str) -> dict | None:
+        with sqlite3.connect(self._pins) as db:
+            row = db.execute("SELECT session_id, owner, start, end, released FROM pins WHERE request_id=?", (request_id,)).fetchone()
+        if not row:
+            return None
+        session_id, owner, start, end, released = row
+        coverage = self.actual_range(session_id, start, end)
+        state = "released" if released else (
+            "collecting" if coverage["actual_end"] is None or coverage["actual_end"] < end else "held"
+        )
+        return {"request_id": request_id, "session_id": session_id, "owner": owner,
+                "requested_start": start, "requested_end": end, **coverage, "state": state}
 
     def _session_dir(self, session_id: str) -> Path:
         if not session_id or session_id in {".", ".."} or Path(session_id).name != session_id:
@@ -217,7 +266,13 @@ class FileRecorder:
             return
         cutoff = max(item.end_seconds for item in segments) - self.ring_seconds
         watermark = self._watermarks.get(session_id, float("inf"))
-        for item in segments:
-            if item.end_seconds < cutoff and item.end_seconds < watermark:
-                Path(item.path).unlink(missing_ok=True)
-                Path(item.path).with_suffix(".json").unlink(missing_ok=True)
+        # Hold SQLite's write lock while deleting, so a concurrent pin cannot ACK
+        # ownership after cleanup has decided the same segment is unowned.
+        with sqlite3.connect(self._pins, timeout=30, isolation_level="IMMEDIATE") as db:
+            db.execute("BEGIN IMMEDIATE")
+            pins = db.execute("SELECT start, end FROM pins WHERE session_id=? AND released=0", (session_id,)).fetchall()
+            for item in segments:
+                pinned = any(item.start_seconds <= end and item.end_seconds >= start for start, end in pins)
+                if item.end_seconds < cutoff and item.end_seconds < watermark and not pinned:
+                    Path(item.path).unlink(missing_ok=True)
+                    Path(item.path).with_suffix(".json").unlink(missing_ok=True)

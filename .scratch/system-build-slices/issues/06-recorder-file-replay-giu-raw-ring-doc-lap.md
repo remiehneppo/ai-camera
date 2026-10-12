@@ -34,3 +34,4 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
 
 - 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.
+- 2026-10-12: Bổ sung recorder pin registry bền vững cho request ID/owner/interval; cùng request trả receipt cũ, nội dung khác conflict, cleanup giữ segment giao với pin active, release idempotent. Restart recorder vẫn đọc ownership; `pin_status` cập nhật coverage theo segment hiện có. Execution tiếp tục `partial`: chưa có finalized clip/post-roll manifest và reconciliation file/DB crash; RTSP, analytics consumer, realtime workload và hardware chưa nghiệm thu. Chi tiết: [implementation log](../../../docs/logs/2026-10-12-ticket-06.md).
