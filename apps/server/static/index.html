@@ -25,6 +25,7 @@
   <script>
     (() => {
       let token = "";
+      let reviewerToken = "";
       const status = document.querySelector("#status");
       const list = document.querySelector("#events");
       document.querySelector("#auth").addEventListener("click", () => {
@@ -63,11 +64,79 @@
             const time = add(card, "time", event.event_time);
             time.dateTime = event.event_time;
             add(card, "p", `Event ${event.event_id}`, "muted");
+            const review = row.review;
+            add(card, "p", `Review: ${review.decision} · version ${review.review_version}${review.needs_re_review ? " · needs re-review" : ""}`);
+            if (data.review_enabled) {
+              const controls = document.createElement("p");
+              const addReviewButton = (action, label) => {
+                const button = add(controls, "button", label);
+                button.type = "button";
+                button.addEventListener("click", () => submitReview(row, action));
+              };
+              if (review.needs_re_review) {
+                addReviewButton("reopen", "Reopen for re-review");
+              } else if (review.decision === "unreviewed") {
+                addReviewButton("confirm", "Confirm");
+                addReviewButton("false_positive", "False positive");
+              } else if (review.decision === "confirmed") {
+                addReviewButton("resolve", "Resolve");
+                addReviewButton("reopen", "Reopen");
+              } else {
+                addReviewButton("reopen", "Reopen");
+              }
+              card.append(controls);
+            }
+            if (review.audit.length) {
+              const history = document.createElement("details");
+              add(history, "summary", `Review audit (${review.audit.length})`);
+              for (const entry of review.audit) {
+                add(history, "p", `v${entry.review_version} ${entry.action} → ${entry.decision} · ${entry.actor} · ${entry.created_at} · ${entry.reason}`);
+              }
+              card.append(history);
+            }
+            const detail = document.createElement("details");
+            add(detail, "summary", "Event snapshot");
+            add(detail, "pre", JSON.stringify(event, null, 2));
+            card.append(detail);
             list.append(card);
           }
           status.textContent = `Showing ${data.events.length} event${data.events.length === 1 ? "" : "s"}. Refreshes every 3 seconds.`;
         } catch (error) {
           status.textContent = `${error.message} Check the API and try again.`;
+        }
+      }
+      async function submitReview(row, action) {
+        if (!reviewerToken) reviewerToken = window.prompt("Reviewer bearer token") || "";
+        if (!reviewerToken) return;
+        const reason = window.prompt(`Reason for ${action.replaceAll("_", " ")}`) || "";
+        if (!reason.trim()) return;
+        const event = row.event;
+        try {
+          const response = await fetch(`/v1/events/${encodeURIComponent(event.device_id)}/${encodeURIComponent(event.event_id)}/review`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${reviewerToken}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action,
+              expected_review_version: row.review.review_version,
+              viewed_event_revision: event.revision,
+              viewed_event_hash: row.event_hash,
+              viewed_evidence_versions: event.payload.evidence_versions || {},
+              reason: reason.trim(),
+            }),
+          });
+          if (response.status === 409) {
+            await refresh();
+            status.textContent = "Review conflict: the event or review changed. Inspect the refreshed event, then choose again.";
+            return;
+          }
+          if (response.status === 401) reviewerToken = "";
+          if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || `Review failed (${response.status}).`);
+          }
+          await refresh();
+        } catch (error) {
+          status.textContent = `${error.message} Review was not applied.`;
         }
       }
       refresh();

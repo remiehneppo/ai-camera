@@ -55,6 +55,33 @@ class ServerConfigTests(unittest.TestCase):
             load_server_config(env)
         self.assertNotIn("top-secret", str(error.exception))
 
+    def test_reviewer_id_affects_hash_but_reviewer_secret_does_not(self) -> None:
+        env = valid_environment()
+        env["REVIEWER_TOKENS"] = '{"alice":"review-secret"}'
+        first = load_server_config(env)
+        env["REVIEWER_TOKENS"] = '{"alice":"rotated-secret"}'
+        second = load_server_config(env)
+        env["REVIEWER_TOKENS"] = '{"bob":"rotated-secret"}'
+        third = load_server_config(env)
+
+        self.assertEqual(first.config_hash, second.config_hash)
+        self.assertNotEqual(second.config_hash, third.config_hash)
+        with self.assertRaises(TypeError):
+            first.reviewer_tokens["bob"] = "another-secret"
+
+    def test_invalid_reviewer_tokens_fail_without_echoing_secret(self) -> None:
+        env = valid_environment()
+        env["REVIEWER_TOKENS"] = '{"alice":"do-not-leak","":""}'
+        with self.assertRaisesRegex(ValueError, "REVIEWER_TOKENS") as error:
+            load_server_config(env)
+        self.assertNotIn("do-not-leak", str(error.exception))
+
+    def test_reviewer_secret_cannot_reuse_device_credential(self) -> None:
+        env = valid_environment()
+        env["REVIEWER_TOKENS"] = '{"alice":"device-secret"}'
+        with self.assertRaisesRegex(ValueError, "REVIEWER_TOKENS"):
+            load_server_config(env)
+
 
 if __name__ == "__main__":
     unittest.main()

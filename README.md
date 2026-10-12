@@ -9,6 +9,8 @@ The MongoDB 7.0.43 service is a one-member replica set with a persistent Docker 
 ```sh
 export DEVICE_TOKENS='{"replace-with-device-token":"lab-edge-01"}'
 export DASHBOARD_TOKEN='replace-with-dashboard-token'
+# Optional: distinct reviewer identities and credentials for event decisions.
+export REVIEWER_TOKENS='{"reviewer-1":"replace-with-reviewer-token-1","reviewer-2":"replace-with-reviewer-token-2"}'
 docker compose up --build
 ```
 
@@ -19,6 +21,9 @@ docker compose exec server python -m apps.server.doctor
 ```
 
 The doctor prints a redacted config fingerprint that excludes credential values; rotating secrets alone does not change it. It reports analytics as disabled and recorder as unavailable until those runtimes exist.
+The review API is disabled until `REVIEWER_TOKENS` is configured. Reviewer IDs are audit identities; bearer values are never returned or included in the config fingerprint.
+
+The chosen perception baseline is ONNX Runtime CPU on x86 with file replay. Future RKNN support uses its own target artifact and the same `PerceptionPipeline` semantics; RTSP replaces the video source configuration without changing event contracts. These future paths still require their target conformance checks.
 
 The server binds to loopback on port 8000. Open `http://127.0.0.1:8000`, choose **Set dashboard token**, and enter `DASHBOARD_TOKEN`.
 

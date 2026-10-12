@@ -44,6 +44,7 @@ def main() -> int:
         "capabilities": {
             "server_api": "available",
             "mongo": "reachable",
+            "review": "available" if config.reviewer_tokens else {"status": "disabled", "reason": "no reviewer credentials configured"},
             "analytics": {"status": "disabled", "reason": "analytics runtime is not implemented"},
             "recorder": {"status": "unavailable", "reason": "recorder runtime is not implemented"},
         },

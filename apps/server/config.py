@@ -14,6 +14,7 @@ from urllib.parse import parse_qsl, urlsplit
 @dataclass(frozen=True)
 class ServerConfig:
     device_tokens: Mapping[str, str]
+    reviewer_tokens: Mapping[str, str]
     dashboard_token: str
     mongo_uri: str
     mongo_database: str
@@ -38,6 +39,16 @@ def load_server_config(environ: Mapping[str, str] | None = None) -> ServerConfig
         for token, device in device_tokens.items()
     ):
         raise ValueError("DEVICE_TOKENS must map non-empty bearer tokens to device IDs")
+    try:
+        reviewer_tokens = json.loads(values.get("REVIEWER_TOKENS", "") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        raise ValueError("REVIEWER_TOKENS must be a JSON object") from None
+    if not isinstance(reviewer_tokens, dict) or any(
+        not isinstance(reviewer, str) or not reviewer or len(reviewer) > 128
+        or not isinstance(token, str) or not token or token == dashboard_token or token in device_tokens
+        for reviewer, token in reviewer_tokens.items()
+    ) or len(set(reviewer_tokens.values())) != len(reviewer_tokens):
+        raise ValueError("REVIEWER_TOKENS must map unique reviewer IDs to unique bearer tokens")
     if not dashboard_token:
         raise ValueError("DASHBOARD_TOKEN must not be empty")
 
@@ -69,6 +80,7 @@ def load_server_config(environ: Mapping[str, str] | None = None) -> ServerConfig
         "mongo_target": mongo_target,
         "mongo_database": mongo_database,
         "device_ids": sorted(device_tokens.values()),
+        "reviewer_ids": sorted(reviewer_tokens),
         "dashboard_token_configured": True,
     }
     config_hash = hashlib.sha256(
@@ -76,6 +88,7 @@ def load_server_config(environ: Mapping[str, str] | None = None) -> ServerConfig
     ).hexdigest()
     return ServerConfig(
         device_tokens=MappingProxyType(device_tokens),
+        reviewer_tokens=MappingProxyType(reviewer_tokens),
         dashboard_token=dashboard_token,
         mongo_uri=mongo_uri,
         mongo_database=mongo_database,
