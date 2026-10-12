@@ -116,6 +116,42 @@ class OracleReplayTests(unittest.TestCase):
                     run_oracle(source, source, source)
                 self.assertEqual(closed, [True, True])
 
+    def test_observation_callback_receives_failure_and_closes_source_on_error(self):
+        from unittest.mock import patch
+        from apps.edge.oracle_replay import run_oracle
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'source'
+            source.write_bytes(b'fixture')
+            closed, received = [], []
+            def frames(*args, **kwargs):
+                try:
+                    yield np.zeros((1, 1, 3), dtype=np.uint8), {}
+                finally:
+                    closed.append(True)
+            observation = {'detection_status': 'failed', 'detections': [], 'error': 'invalid',
+                           'provenance': {'model_sha256':
+                           'f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d'}}
+            with patch('apps.edge.oracle_detector.OracleDetector') as detector, \
+                    patch('apps.edge.oracle_replay.iter_video_frames', frames):
+                detector.return_value.detect.return_value = observation
+                report = run_oracle(source, source, source, observation_consumer=received.append)
+                self.assertEqual(received, [observation])
+                def mutate(item):
+                    item['detection_status'] = 'ok_empty'
+                    item['provenance']['model_sha256'] = 'changed'
+                preserved = run_oracle(source, source, source, observation_consumer=mutate)
+                self.assertEqual(preserved['status'], 'failed')
+                self.assertEqual(preserved['observations'][0]['provenance']['model_sha256'],
+                                 'f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d')
+                self.assertEqual(report['status'], 'failed')
+                self.assertEqual(closed, [True, True])
+                def fail(item):
+                    raise RuntimeError('callback rejected observation')
+                with self.assertRaisesRegex(RuntimeError, 'callback rejected'):
+                    run_oracle(source, source, source, observation_consumer=fail)
+                self.assertEqual(closed, [True, True, True])
+                self.assertEqual(detector.return_value.detect.call_count, 3)
+
     def test_report_rejects_input_mutation_and_model_provenance_mismatch(self):
         from unittest.mock import patch
         from apps.edge.oracle_replay import run_oracle

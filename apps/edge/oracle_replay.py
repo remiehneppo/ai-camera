@@ -1,7 +1,8 @@
 """Software pixel replay for the lab oracle; no live or notification path."""
 import argparse
 from contextlib import closing
-from collections.abc import Generator
+from copy import deepcopy
+from collections.abc import Callable, Generator
 from typing import Any
 from fractions import Fraction
 import hashlib
@@ -142,7 +143,8 @@ def _sha256(path):
 
 def run_oracle(source: str | Path, manifest_path: str | Path, model_path: str | Path, *,
                sample_fps: float = 2, mode: str = 'fast', camera_id: str = 'lab-camera',
-               session_id: str = 'lab-replay', timeout_seconds: float = 30) -> dict[str, Any]:
+               session_id: str = 'lab-replay', timeout_seconds: float = 30,
+               observation_consumer: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
     _positive(sample_fps, 'sample_fps')
     _positive(timeout_seconds, 'timeout_seconds')
     if mode not in ('fast', 'realtime'):
@@ -161,6 +163,8 @@ def run_oracle(source: str | Path, manifest_path: str | Path, model_path: str | 
             observation = detector.detect(rgb, frame)
             if observation.get('provenance', {}).get('model_sha256') != fingerprints['model']:
                 raise RuntimeError('detector model provenance differs from captured model fingerprint')
+            if observation_consumer is not None:
+                observation_consumer(deepcopy(observation))
             observations.append(observation)
     for name, path in paths.items():
         try:
