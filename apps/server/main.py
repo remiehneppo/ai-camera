@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
+import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
+from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from pymongo.errors import PyMongoError
 from starlette.concurrency import run_in_threadpool
 
 from domain.event_contract import EventValidationError, MAX_EVENT_BYTES, validate_event
 from domain.review_contract import ReviewValidationError, validate_review_request
-from apps.server.config import load_server_config
+from apps.server.config import ServerConfig, load_server_config
 from apps.server.store import EventHashConflict, EventIdentityConflict, EventStore, ReviewConflict, ReviewNotFound
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -87,7 +90,7 @@ def _bearer(request: Request) -> str:
     return token
 
 
-def _device_for_token(token: str, tokens: dict[str, str]) -> str:
+def _device_for_token(token: str, tokens: Mapping[str, str] | dict[str, str]) -> str:
     matched: str | None = None
     for candidate, device_id in tokens.items():
         if hmac.compare_digest(token.encode("utf-8"), candidate.encode("utf-8")):
@@ -97,12 +100,27 @@ def _device_for_token(token: str, tokens: dict[str, str]) -> str:
     return matched
 
 
-def _reviewer_for_token(token: str, tokens: dict[str, str]) -> str | None:
+def _reviewer_for_token(token: str, tokens: Mapping[str, str] | dict[str, str] | Any) -> str | None:
     matched: str | None = None
     for reviewer, candidate in tokens.items():
         if hmac.compare_digest(token.encode("utf-8"), candidate.encode("utf-8")):
             matched = reviewer
     return matched
+
+
+def _is_authorized_viewer(token: str, dashboard_token: str, reviewer_tokens: dict[str, str] | Any) -> bool:
+    if dashboard_token and hmac.compare_digest(token.encode("utf-8"), dashboard_token.encode("utf-8")):
+        return True
+    if _reviewer_for_token(token, reviewer_tokens) is not None:
+        return True
+    return False
+
+
+def _viewer_token(request: Request) -> str:
+    query_token = request.query_params.get("token")
+    if query_token:
+        return query_token
+    return _bearer(request)
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -114,11 +132,12 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def create_app() -> FastAPI:
-    try:
-        config = load_server_config()
-    except ValueError as exc:
-        raise RuntimeError(str(exc)) from exc
+def create_app(config: ServerConfig | None = None) -> FastAPI:
+    if config is None:
+        try:
+            config = load_server_config()
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
 
     try:
         store = EventStore(config.mongo_uri, config.mongo_database)
@@ -127,12 +146,14 @@ def create_app() -> FastAPI:
     device_tokens = config.device_tokens
     dashboard_token = config.dashboard_token
     reviewer_tokens = config.reviewer_tokens
+    evidence_dir = config.evidence_dir
     app = FastAPI(title="AI Camera Lab API", version="1.0.0")
     app.add_middleware(EventBodyLimitMiddleware)
     app.state.event_store = store
     app.state.device_tokens = config.device_tokens
     app.state.reviewer_tokens = config.reviewer_tokens
     app.state.dashboard_token = config.dashboard_token
+    app.state.evidence_dir = config.evidence_dir
     app.state.config_hash = config.config_hash
 
     @app.on_event("startup")
@@ -228,7 +249,206 @@ def create_app() -> FastAPI:
         except PyMongoError:
             raise HTTPException(status_code=503, detail="review commit unavailable; refetch before retrying")
 
+    @app.put("/v1/evidence/{device_id}/{event_id}/{request_id}")
+    async def upload_evidence(
+        device_id: str,
+        event_id: str,
+        request_id: str,
+        request: Request,
+    ) -> JSONResponse:
+        authenticated_device = _device_for_token(_bearer(request), device_tokens)
+        if authenticated_device != device_id:
+            raise HTTPException(status_code=403, detail="evidence device_id does not match authenticated device")
+
+        sha256_header = request.headers.get("x-evidence-sha256", "").strip().lower()
+        if not sha256_header or len(sha256_header) != 64:
+            raise HTTPException(status_code=400, detail="X-Evidence-Sha256 header must be a 64-character hex string")
+
+        metadata_header = request.headers.get("x-evidence-metadata", "")
+        if not metadata_header:
+            raise HTTPException(status_code=400, detail="X-Evidence-Metadata header required")
+        try:
+            metadata = json.loads(metadata_header)
+            if not isinstance(metadata, dict):
+                raise ValueError
+        except Exception:
+            raise HTTPException(status_code=400, detail="X-Evidence-Metadata must be a valid JSON object")
+
+        body = await request.body()
+        computed_sha256 = hashlib.sha256(body).hexdigest()
+        if computed_sha256 != sha256_header:
+            raise HTTPException(status_code=422, detail="evidence SHA-256 checksum mismatch")
+
+        size_bytes = len(body)
+        expected_size = metadata.get("size_bytes")
+        if expected_size is not None:
+            try:
+                if int(expected_size) != size_bytes:
+                    raise HTTPException(status_code=422, detail="evidence size_bytes does not match payload")
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=422, detail="invalid size_bytes in metadata")
+
+        target_dir = Path(evidence_dir) / device_id / event_id
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_file = target_dir / f"{request_id}.mkv"
+        temp_file = target_dir / f".{request_id}.{uuid4().hex}.tmp"
+
+        try:
+            with open(temp_file, "wb") as f:
+                f.write(body)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_file, target_file)
+        except Exception as exc:
+            if temp_file.exists():
+                temp_file.unlink(missing_ok=True)
+            raise HTTPException(status_code=500, detail="failed to store evidence file") from exc
+
+        manifest_data = dict(metadata)
+        manifest_data["sha256"] = computed_sha256
+        manifest_data["size_bytes"] = size_bytes
+
+        try:
+            await run_in_threadpool(
+                store.record_evidence,
+                device_id,
+                event_id,
+                request_id,
+                manifest_data,
+                str(target_file),
+            )
+        except PyMongoError:
+            raise HTTPException(status_code=503, detail="database unavailable; retry evidence upload")
+
+        receipt = {
+            "request_id": request_id,
+            "sha256": computed_sha256,
+            "size_bytes": size_bytes,
+            "location": f"/v1/evidence/{device_id}/{event_id}/{request_id}/media",
+            "status": "committed",
+        }
+        return JSONResponse(receipt, status_code=200)
+
+    @app.get("/v1/evidence/{device_id}/{event_id}/{request_id}")
+    async def get_evidence_manifest(
+        device_id: str,
+        event_id: str,
+        request_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        token = _viewer_token(request)
+        if not _is_authorized_viewer(token, dashboard_token, reviewer_tokens):
+            raise HTTPException(status_code=401, detail="invalid credentials", headers={"WWW-Authenticate": "Bearer"})
+
+        try:
+            record = await run_in_threadpool(store.get_evidence, device_id, event_id, request_id)
+        except PyMongoError:
+            raise HTTPException(status_code=503, detail="database unavailable")
+
+        if not record:
+            raise HTTPException(status_code=404, detail="evidence not found")
+        return record
+
+    @app.get("/v1/evidence/{device_id}/{event_id}/{request_id}/media")
+    async def get_evidence_media(
+        device_id: str,
+        event_id: str,
+        request_id: str,
+        request: Request,
+    ) -> Response:
+        token = _viewer_token(request)
+        if not _is_authorized_viewer(token, dashboard_token, reviewer_tokens):
+            raise HTTPException(status_code=401, detail="invalid credentials", headers={"WWW-Authenticate": "Bearer"})
+
+        try:
+            record = await run_in_threadpool(store.get_evidence, device_id, event_id, request_id)
+        except PyMongoError:
+            raise HTTPException(status_code=503, detail="database unavailable")
+
+        if not record:
+            raise HTTPException(status_code=404, detail="evidence not found")
+
+        file_path = Path(record["file_path"])
+        if not file_path.is_file():
+            raise HTTPException(status_code=404, detail="evidence file missing on disk")
+
+        file_size = file_path.stat().st_size
+        range_header = request.headers.get("range")
+
+        if not range_header:
+            with open(file_path, "rb") as f:
+                content = f.read()
+            return Response(
+                content=content,
+                status_code=200,
+                headers={
+                    "Content-Type": "video/x-matroska",
+                    "Content-Length": str(file_size),
+                    "Accept-Ranges": "bytes",
+                },
+            )
+
+        if not range_header.startswith("bytes="):
+            return Response(
+                status_code=416,
+                headers={"Content-Range": f"bytes */{file_size}"},
+            )
+
+        range_val = range_header[len("bytes="):].strip()
+        if "," in range_val:
+            range_val = range_val.split(",", 1)[0].strip()
+
+        start_str, sep, end_str = range_val.partition("-")
+        if not sep:
+            return Response(
+                status_code=416,
+                headers={"Content-Range": f"bytes */{file_size}"},
+            )
+
+        try:
+            if not start_str:
+                suffix_len = int(end_str)
+                if suffix_len <= 0 or file_size == 0:
+                    return Response(status_code=416, headers={"Content-Range": f"bytes */{file_size}"})
+                start = max(0, file_size - suffix_len)
+                end = file_size - 1
+            elif not end_str:
+                start = int(start_str)
+                end = file_size - 1
+            else:
+                start = int(start_str)
+                end = int(end_str)
+        except ValueError:
+            return Response(status_code=416, headers={"Content-Range": f"bytes */{file_size}"})
+
+        if file_size == 0 or start < 0 or start >= file_size or end < start:
+            return Response(
+                status_code=416,
+                headers={"Content-Range": f"bytes */{file_size}"},
+            )
+
+        end = min(end, file_size - 1)
+        chunk_len = end - start + 1
+
+        with open(file_path, "rb") as f:
+            f.seek(start)
+            chunk = f.read(chunk_len)
+
+        return Response(
+            content=chunk,
+            status_code=206,
+            headers={
+                "Content-Type": "video/x-matroska",
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Content-Length": str(chunk_len),
+                "Accept-Ranges": "bytes",
+            },
+        )
+
     return app
 
 
-app = create_app()
+try:
+    app = create_app()
+except RuntimeError:
+    app = None  # type: ignore[assignment]

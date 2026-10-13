@@ -14,6 +14,15 @@
     .event header { display: flex; gap: .6rem; flex-wrap: wrap; align-items: baseline; }
     code, time { overflow-wrap: anywhere; }
     button { font: inherit; padding: .35rem .7rem; }
+    .evidence-section { margin-top: .75rem; border-top: 1px solid #8883; padding-top: .5rem; }
+    .badge { display: inline-block; padding: .15rem .45rem; border-radius: .25rem; font-size: .85em; font-weight: 500; }
+    .badge-pending { background: #e0990033; color: #d97706; }
+    .badge-complete { background: #10b98133; color: #059669; }
+    .badge-partial { background: #3b82f633; color: #2563eb; }
+    .badge-available { background: #10b98133; color: #059669; }
+    video { width: 100%; max-width: 640px; height: auto; border-radius: .35rem; display: block; margin: .5rem 0; background: #000; }
+    .evidence-item { margin: .5rem 0; }
+    .evidence-actions { display: flex; gap: .75rem; align-items: baseline; }
   </style>
 </head>
 <body>
@@ -94,6 +103,85 @@
               }
               card.append(history);
             }
+
+            const evidenceRequests = event.payload.evidence_requests || [];
+            const uploadedEvidences = row.evidence || [];
+            const evidenceByReq = new Map();
+            for (const ev of uploadedEvidences) {
+              evidenceByReq.set(ev.request_id, ev);
+            }
+
+            if (evidenceRequests.length || uploadedEvidences.length) {
+              const evSection = document.createElement("section");
+              evSection.className = "evidence-section";
+              add(evSection, "h3", "Evidence Clips");
+
+              const handledReqIds = new Set();
+              for (const req of evidenceRequests) {
+                handledReqIds.add(req.request_id);
+                const evItem = document.createElement("div");
+                evItem.className = "evidence-item";
+                const evDoc = evidenceByReq.get(req.request_id);
+                if (evDoc) {
+                  const manifest = evDoc.manifest || {};
+                  const completeness = manifest.completeness || "available";
+                  const rangeStr = Array.isArray(manifest.actual_range)
+                    ? `[${manifest.actual_range[0]}s - ${manifest.actual_range[1]}s]`
+                    : "range recorded";
+                  add(evItem, "span", `${completeness} · ${rangeStr}`, `badge badge-${completeness}`);
+
+                  const video = document.createElement("video");
+                  video.controls = true;
+                  video.preload = "metadata";
+                  const mediaUrl = `/v1/evidence/${encodeURIComponent(event.device_id)}/${encodeURIComponent(event.event_id)}/${encodeURIComponent(req.request_id)}/media?token=${encodeURIComponent(token)}`;
+                  video.src = mediaUrl;
+                  evItem.append(video);
+
+                  const actions = document.createElement("div");
+                  actions.className = "evidence-actions";
+                  const dl = document.createElement("a");
+                  dl.href = mediaUrl;
+                  dl.download = `${req.request_id}.mkv`;
+                  dl.textContent = "Download clip";
+                  actions.append(dl);
+                  if (manifest.size_bytes) {
+                    add(actions, "span", `${(manifest.size_bytes / 1024).toFixed(1)} KB`, "muted");
+                  }
+                  evItem.append(actions);
+                } else {
+                  add(evItem, "span", `Pending upload for ${req.request_id}`, "badge badge-pending");
+                  add(evItem, "p", `Requested [${req.requested_start}s - ${req.requested_end}s] (${req.evidence_anchor_kind})`, "muted");
+                }
+                evSection.append(evItem);
+              }
+
+              for (const ev of uploadedEvidences) {
+                if (!handledReqIds.has(ev.request_id)) {
+                  const evItem = document.createElement("div");
+                  evItem.className = "evidence-item";
+                  const manifest = ev.manifest || {};
+                  const completeness = manifest.completeness || "available";
+                  add(evItem, "span", `${completeness} (${ev.request_id})`, `badge badge-${completeness}`);
+                  const video = document.createElement("video");
+                  video.controls = true;
+                  video.preload = "metadata";
+                  const mediaUrl = `/v1/evidence/${encodeURIComponent(event.device_id)}/${encodeURIComponent(event.event_id)}/${encodeURIComponent(ev.request_id)}/media?token=${encodeURIComponent(token)}`;
+                  video.src = mediaUrl;
+                  evItem.append(video);
+                  const actions = document.createElement("div");
+                  actions.className = "evidence-actions";
+                  const dl = document.createElement("a");
+                  dl.href = mediaUrl;
+                  dl.download = `${ev.request_id}.mkv`;
+                  dl.textContent = "Download clip";
+                  actions.append(dl);
+                  evItem.append(actions);
+                  evSection.append(evItem);
+                }
+              }
+              card.append(evSection);
+            }
+
             const detail = document.createElement("details");
             add(detail, "summary", "Event snapshot");
             add(detail, "pre", JSON.stringify(event, null, 2));

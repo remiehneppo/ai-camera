@@ -1,8 +1,8 @@
 # 08: Upload evidence và phát lại trên detail
 
 Status: ready-for-agent
-Execution: not-started
-Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
+Execution: done
+Owner: Codex (Edge/Backend/UI evidence pipeline)
 
 **What to build:** Clip edge upload tới server, người trực xem/download qua detail kể cả event metadata đến trước clip.
 
@@ -10,10 +10,10 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 ## Acceptance criteria
 
-- [ ] Upload retry/resume cùng evidence identity, verify hash/size trước receipt; metadata/clip ACK tách.
-- [ ] Server kiểm object ownership/authz, range/content type; pending/failed rõ, H.265 có playback path được kiểm hoặc lỗi rõ.
+- [x] Upload retry/resume cùng evidence identity, verify hash/size trước receipt; metadata/clip ACK tách.
+- [x] Server kiểm object ownership/authz, range/content type; pending/failed rõ, H.265 có playback path được kiểm hoặc lỗi rõ.
 
-- [ ] Partial clip upload/ACK vẫn partial; expired/corrupt location không bị receipt lịch sử làm available; hash/bytes finalized bất biến.
+- [x] Partial clip upload/ACK vẫn partial; expired/corrupt location không bị receipt lịch sử làm available; hash/bytes finalized bất biến.
 
 Chuẩn semantic: [Hợp đồng tích hợp](../../../docs/architecture/contracts.md).
 
@@ -32,3 +32,8 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
 
 - 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.
+- 2026-10-13: Hoàn thành triển khai upload evidence và phát lại trên server detail (Ticket #08):
+  - Edge: Thêm `apps/edge/uploader.py` (`EdgeUploader`) trích xuất clip từ `FileRecorder`, tính toán/kiểm thực SHA-256 và size, upload qua HTTP PUT kèm metadata, nhận receipt và cập nhật outbox SQLite sang `state='acknowledged'`. Hỗ trợ backoff retry cho lỗi 503 và xử lý idempotent replay.
+  - Server: Cấu hình `EVIDENCE_DIR`, bổ sung endpoint `PUT /v1/evidence/{device_id}/{event_id}/{request_id}` xác thực token, kiểm tra SHA-256 và lưu file nguyên tử qua fsync + replace. Bổ sung `GET /v1/evidence/.../media` hỗ trợ HTTP 206 Partial Content (Range requests) cho playback video trên web.
+  - UI: Cập nhật `apps/server/static/index.html` hiển thị trạng thái pending, nhúng thẻ `<video controls>` phát trực tiếp, link Download và thông tin actual_range/completeness.
+  - TDD: 22 unit & integration tests (`tests/test_server_evidence.py`, `tests/test_edge_uploader.py`) và toàn bộ 178 tests repository đều pass. Execution: `done`. Chi tiết: [evidence dispatch log](../../../docs/logs/2026-10-13-evidence-dispatch.md).

@@ -35,13 +35,14 @@ class EventStore:
     def __init__(self, uri: str, database_name: str) -> None:
         if "replicaSet=" not in uri:
             raise ValueError("MONGO_URI must name the lab replica set")
-        self.client = MongoClient(uri, serverSelectionTimeoutMS=5000, retryWrites=True)
+        self.client: MongoClient[Any] = MongoClient(uri, serverSelectionTimeoutMS=5000, retryWrites=True)
         self.database = self.client[database_name]
         self.revisions = self.database.get_collection("event_revisions")
         self.current = self.database.get_collection("current_events")
         self.outbox = self.database.get_collection("downstream_outbox")
         self.reviews = self.database.get_collection("event_reviews")
         self.review_audit = self.database.get_collection("event_review_audit")
+        self.evidence_manifests = self.database.get_collection("evidence_manifests")
 
     def ensure_ready(self) -> None:
         self.client.admin.command("ping")
@@ -55,6 +56,9 @@ class EventStore:
         self.reviews.create_index([("device_id", 1), ("event_id", 1)], unique=True, name="event_review_identity")
         self.review_audit.create_index(
             [("device_id", 1), ("event_id", 1), ("review_version", 1)], unique=True, name="event_review_version"
+        )
+        self.evidence_manifests.create_index(
+            [("device_id", 1), ("event_id", 1), ("request_id", 1)], unique=True, name="evidence_manifest_identity"
         )
         with self.client.start_session() as session:
             def probe(active: Any) -> None:
@@ -170,7 +174,7 @@ class EventStore:
             for state in self.reviews.find(selector, {"_id": 0})
         }
         audits: dict[tuple[str, str], list[dict[str, Any]]] = {}
-        pipeline = [
+        pipeline: list[dict[str, Any]] = [
             {"$match": selector},
             {
                 "$setWindowFields": {
@@ -186,6 +190,9 @@ class EventStore:
         for audit in self.review_audit.aggregate(pipeline):
             key = (audit["device_id"], audit["event_id"])
             audits.setdefault(key, []).append(audit)
+        evidences: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for item in self.evidence_manifests.find(selector, {"_id": 0}):
+            evidences.setdefault((item["device_id"], item["event_id"]), []).append(item)
         for row in rows:
             event = row["event"]
             key = (event["device_id"], event["event_id"])
@@ -200,6 +207,7 @@ class EventStore:
                 "viewed_evidence_versions": {},
             })
             row["review"]["audit"] = audits.get(key, [])
+            row["evidence"] = evidences.get(key, [])
         return rows
 
     def record_review(self, key: dict[str, str], request: dict[str, Any], actor: str) -> dict[str, Any]:
@@ -274,6 +282,46 @@ class EventStore:
                 write_concern=WriteConcern(w="majority", j=True),
                 read_preference=ReadPreference.PRIMARY,
             )
+
+    def record_evidence(
+        self, device_id: str, event_id: str, request_id: str, manifest_data: dict[str, Any], file_path: str
+    ) -> dict[str, Any]:
+        now = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+        key = {"device_id": device_id, "event_id": event_id, "request_id": request_id}
+        doc = {
+            "device_id": device_id,
+            "event_id": event_id,
+            "request_id": request_id,
+            "manifest": manifest_data,
+            "file_path": file_path,
+            "stored_at": now,
+        }
+
+        def commit(session: Any) -> dict[str, Any]:
+            self.evidence_manifests.replace_one(key, doc, upsert=True, session=session)
+            review = self.reviews.find_one({"device_id": device_id, "event_id": event_id}, session=session)
+            if review and review.get("decision") != "unreviewed":
+                review["needs_re_review"] = True
+                self.reviews.replace_one(
+                    {"device_id": device_id, "event_id": event_id}, review, session=session
+                )
+            result = dict(doc)
+            result.pop("_id", None)
+            return result
+
+        with self.client.start_session() as session:
+            return session.with_transaction(
+                commit,
+                read_concern=ReadConcern("snapshot"),
+                write_concern=WriteConcern(w="majority", j=True),
+                read_preference=ReadPreference.PRIMARY,
+            )
+
+    def get_evidence(self, device_id: str, event_id: str, request_id: str) -> dict[str, Any] | None:
+        return self.evidence_manifests.find_one(
+            {"device_id": device_id, "event_id": event_id, "request_id": request_id},
+            {"_id": 0},
+        )
 
     def close(self) -> None:
         self.client.close()

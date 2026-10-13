@@ -18,6 +18,7 @@ class ServerConfig:
     dashboard_token: str
     mongo_uri: str
     mongo_database: str
+    evidence_dir: str
     config_hash: str
 
 
@@ -76,9 +77,13 @@ def load_server_config(environ: Mapping[str, str] | None = None) -> ServerConfig
     mongo_database = values.get("MONGO_DATABASE", "camera_lab")
     if not mongo_database:
         raise ValueError("MONGO_DATABASE must not be empty")
+    evidence_dir = values.get("EVIDENCE_DIR", "/tmp/ai-camera-evidence")
+    if not evidence_dir:
+        raise ValueError("EVIDENCE_DIR must not be empty")
     public_config = {
         "mongo_target": mongo_target,
         "mongo_database": mongo_database,
+        "evidence_dir": evidence_dir,
         "device_ids": sorted(device_tokens.values()),
         "reviewer_ids": sorted(reviewer_tokens),
         "dashboard_token_configured": True,
@@ -92,5 +97,6 @@ def load_server_config(environ: Mapping[str, str] | None = None) -> ServerConfig
         dashboard_token=dashboard_token,
         mongo_uri=mongo_uri,
         mongo_database=mongo_database,
+        evidence_dir=evidence_dir,
         config_hash=config_hash,
     )
