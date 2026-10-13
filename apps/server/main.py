@@ -11,7 +11,7 @@ from typing import Any, Mapping
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pymongo.errors import PyMongoError
 from starlette.concurrency import run_in_threadpool
 
@@ -19,6 +19,7 @@ from domain.event_contract import EventValidationError, MAX_EVENT_BYTES, validat
 from domain.review_contract import ReviewValidationError, validate_review_request
 from apps.server.config import ServerConfig, load_server_config
 from apps.server.dataset import export_dataset_records, records_to_jsonl
+from apps.server.live_stream import LiveStreamService
 from apps.server.store import (
     EventHashConflict,
     EventIdentityConflict,
@@ -140,7 +141,7 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def create_app(config: ServerConfig | None = None) -> FastAPI:
+def create_app(config: ServerConfig | None = None, live_service: LiveStreamService | None = None) -> FastAPI:
     if config is None:
         try:
             config = load_server_config()
@@ -151,6 +152,8 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
         store = EventStore(config.mongo_uri, config.mongo_database)
     except PyMongoError:
         raise RuntimeError("MONGO_URI is invalid") from None
+    if live_service is None:
+        live_service = LiveStreamService()
     device_tokens = config.device_tokens
     dashboard_token = config.dashboard_token
     reviewer_tokens = config.reviewer_tokens
@@ -163,6 +166,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     app.state.dashboard_token = config.dashboard_token
     app.state.evidence_dir = config.evidence_dir
     app.state.config_hash = config.config_hash
+    app.state.live_service = live_service
 
     @app.on_event("startup")
     def startup() -> None:
@@ -171,6 +175,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
     @app.on_event("shutdown")
     def shutdown() -> None:
+        live_service.stop()
         store.close()
 
     @app.get("/healthz")
@@ -180,6 +185,23 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
         except PyMongoError:
             raise HTTPException(status_code=503, detail="database unavailable")
         return {"status": "ok"}
+
+    @app.get("/v1/live/stream")
+    def live_stream(request: Request, max_frames: int | None = None) -> StreamingResponse:
+        token = _viewer_token(request)
+        if not _is_authorized_viewer(token, dashboard_token, reviewer_tokens):
+            raise HTTPException(status_code=401, detail="unauthorized viewer credentials", headers={"WWW-Authenticate": "Bearer"})
+        return StreamingResponse(
+            live_service.iter_frames(max_frames=max_frames),
+            media_type="multipart/x-mixed-replace; boundary=frame",
+        )
+
+    @app.get("/v1/live/status")
+    def live_status(request: Request) -> dict[str, Any]:
+        token = _viewer_token(request)
+        if not _is_authorized_viewer(token, dashboard_token, reviewer_tokens):
+            raise HTTPException(status_code=401, detail="unauthorized viewer credentials", headers={"WWW-Authenticate": "Bearer"})
+        return live_service.get_status()
 
     @app.get("/")
     def dashboard() -> FileResponse:
