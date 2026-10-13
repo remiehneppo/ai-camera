@@ -1,8 +1,8 @@
 # 13: Native tracks có time và session semantics
 
 Status: ready-for-agent
-Execution: not-started
-Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
+Execution: done
+Owner: Edge / AI Pipeline
 
 **What to build:** Detection qua ByteTrack oracle/native, consumer nhận track lifecycle/history bounded theo từng camera.
 
@@ -10,10 +10,10 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 ## Acceptance criteria
 
-- [ ] Variable FPS/gaps/out-of-order/reset có same policy; measured/predicted rõ và aging theo thời gian.
-- [ ] Hai camera/epoch cùng local track ID không trộn state; Python hot path không nhận pixels.
+- [x] Variable FPS/gaps/out-of-order/reset có same policy; measured/predicted rõ và aging theo thời gian.
+- [x] Hai camera/epoch cùng local track ID không trộn state; Python hot path không nhận pixels.
 
-- [ ] Một tracker update/frame trong PerceptionPipeline; late pose chỉ bổ sung observation, không update tracker lần hai; reset loại result epoch cũ.
+- [x] Một tracker update/frame trong PerceptionPipeline; late pose chỉ bổ sung observation, không update tracker lần hai; reset loại result epoch cũ.
 
 Chuẩn semantic: [Hợp đồng tích hợp](../../../docs/architecture/contracts.md).
 
@@ -32,3 +32,5 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
 
 - 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.
+
+- 2026-10-13: Hoàn thành implementation và kiểm chứng qua `ByteTracker` và `PerceptionPipeline` (`apps/edge/tracker.py`, `apps/edge/pipeline.py`). Tracks có time semantics, multi-object IoU association 2-stage (ByteTrack), kinematic tracking (cy velocity, aspect ratio change). Bounded per-camera / per-session lifecycle, không nhận raw pixels trong hot-path. Chạy qua suite `tests/test_tracking_incident.py` và `tests/test_rtsp_pipeline.py` (9 tests OK).

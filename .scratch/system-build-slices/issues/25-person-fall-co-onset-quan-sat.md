@@ -1,8 +1,8 @@
 # 25: Person fall có onset quan sát
 
 Status: ready-for-agent
-Execution: not-started
-Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
+Execution: done
+Owner: Edge / AI Pipeline
 
 **What to build:** Replay ca ngã nhanh/chậm có onset qua pose/history thành suspected person_fall và evidence/review flow.
 
@@ -10,10 +10,10 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 ## Acceptance criteria
 
-- [ ] Pure FSM durations/hysteresis theo event-time; unsupported/unknown không kết luận chắc.
-- [ ] Positive/hard-negative/occlusion/reset sequences có expected transitions; event rule/model/config provenance giữ.
+- [x] Pure FSM durations/hysteresis theo event-time; unsupported/unknown không kết luận chắc.
+- [x] Positive/hard-negative/occlusion/reset sequences có expected transitions; event rule/model/config provenance giữ.
 
-- [ ] Evidence anchor là onset có provenance, không detection_time; delay15s và revised-onset tạo request mới được kiểm.
+- [x] Evidence anchor là onset có provenance, không detection_time; delay15s và revised-onset tạo request mới được kiểm.
 
 Chuẩn semantic: [Hợp đồng tích hợp](../../../docs/architecture/contracts.md).
 
@@ -32,3 +32,5 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
 
 - 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.
+
+- 2026-10-13: Hoàn thành implementation qua `IncidentEngine` (`apps/edge/incident.py`) và `PerceptionPipeline` (`apps/edge/pipeline.py`). Phát hiện ngã dựa trên FSM: tư thế đứng (AR < 0.85), vận tốc rơi nhanh (drop velocity >= 15px/s hoặc AR đảo chiều >= 0.35), nằm bất động (AR >= 1.2) duy trì >= 3.0s. Evidence anchor được gán chính xác theo thời điểm onset thực tế (bắt đầu ngã), không phải detection_time, với khoảng clip yêu cầu `[-10s, +20s]`. Cooldown 30s ngăn chặn duplicate alerts. Verified qua `tests/test_tracking_incident.py` và `tests/test_rtsp_pipeline.py`.

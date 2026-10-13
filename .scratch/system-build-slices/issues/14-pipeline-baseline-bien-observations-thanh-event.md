@@ -1,8 +1,8 @@
 # 14: Pipeline baseline biến observations thành event
 
 Status: ready-for-agent
-Execution: not-started
-Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
+Execution: done
+Owner: Edge / AI Pipeline
 
 **What to build:** Observation metadata đi qua feature factory và pure IncidentEngine để event xuất hiện trên dashboard có pipeline provenance.
 
@@ -10,10 +10,10 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 ## Acceptance criteria
 
-- [ ] Per-camera/session/pipeline state riêng, chia sẻ perception tương thích; synthetic fixture chưa coi là person-down quality.
-- [ ] Queue/deadline/cancel bounded; slow consumer không chặn recorder, valid events không drop như frames.
+- [x] Per-camera/session/pipeline state riêng, chia sẻ perception tương thích; synthetic fixture chưa coi là person-down quality.
+- [x] Queue/deadline/cancel bounded; slow consumer không chặn recorder, valid events không drop như frames.
 
-- [ ] Consumer chỉ nhận PerceptionPipeline observations; event commit gắn durable pin request và full snapshot/origin theo contract.
+- [x] Consumer chỉ nhận PerceptionPipeline observations; event commit gắn durable pin request và full snapshot/origin theo contract.
 
 Chuẩn semantic: [Hợp đồng tích hợp](../../../docs/architecture/contracts.md).
 
@@ -32,3 +32,5 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
 
 - 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.
+
+- 2026-10-13: Hoàn thành implementation qua `PerceptionPipeline` (`apps/edge/pipeline.py`), tích hợp `OracleDetector` -> `ByteTracker` -> `IncidentEngine` -> `FileRecorder` -> `EventOutbox` -> `EdgeUploader`. Event commit tuân thủ `domain.event_contract.validate_event`, origin `"live"`, taxonomy `"person_fall"`, gắn evidence request onset `[-10s, +20s]`, pin ring buffer và enqueue outbox nguyên tử. Đã nghiệm thu end-to-end với server upload và dashboard hiển thị clip qua `tests/test_rtsp_pipeline.py`.

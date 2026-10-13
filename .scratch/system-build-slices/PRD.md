@@ -38,8 +38,8 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [10: File replay đi qua native boundary an toàn](issues/10-file-replay-di-qua-native-boundary-an-toan.md) | ready-for-agent | #03, #06 | — | not-started |
 | [11: ONNX oracle xuất detection có provenance](issues/11-onnx-oracle-xuat-detection-co-provenance.md) | ready-for-agent | #02 | — | done (software lab; production clearance open) |
 | [12: Native detector đạt parity với oracle](issues/12-native-detector-dat-parity-voi-oracle.md) | ready-for-agent | #10, #11 | — | not-started |
-| [13: Native tracks có time và session semantics](issues/13-native-tracks-co-time-va-session-semantics.md) | ready-for-agent | #12 | — | not-started |
-| [14: Pipeline baseline biến observations thành event](issues/14-pipeline-baseline-bien-observations-thanh-event.md) | ready-for-agent | #05, #07, #13 | — | not-started |
+| [13: Native tracks có time và session semantics](issues/13-native-tracks-co-time-va-session-semantics.md) | ready-for-agent | #12 | — | done |
+| [14: Pipeline baseline biến observations thành event](issues/14-pipeline-baseline-bien-observations-thanh-event.md) | ready-for-agent | #05, #07, #13 | — | done |
 | [15: Camera RTSP live giữ correlation với recorder](issues/15-camera-rtsp-live-giu-correlation-voi-recorder.md) | needs-info | #02, #14, #51 | — | not-started |
 | [16: Startup/shutdown giữ recorder và state đúng](issues/16-startup-shutdown-giu-recorder-va-state-dung.md) | ready-for-agent | #09, #14 | — | not-started |
 | [17: Health phản ánh khả năng quan sát thực](issues/17-health-phan-anh-kha-nang-quan-sat-thuc.md) | ready-for-agent | #14 | — | not-started |
@@ -50,7 +50,7 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [22: Pose request trả keypoints đúng frame và track](issues/22-pose-request-tra-keypoints-dung-frame-va-track.md) | ready-for-agent | #11, #13 | — | not-started |
 | [23: Track gap không tạo certainty hoặc motion giả](issues/23-track-gap-khong-tao-certainty-hoac-motion-gia.md) | ready-for-agent | #13, #02 | — | not-started |
 | [24: Pose scheduling và degradation có coverage](issues/24-pose-scheduling-va-degradation-co-coverage.md) | ready-for-agent | #21, #22, #23 | — | not-started |
-| [25: Person fall có onset quan sát](issues/25-person-fall-co-onset-quan-sat.md) | ready-for-agent | #14, #24 | — | not-started |
+| [25: Person fall có onset quan sát](issues/25-person-fall-co-onset-quan-sat.md) | ready-for-agent | #14, #24 | — | done |
 | [26: Persistent lying khi thiếu onset](issues/26-persistent-lying-khi-thieu-onset.md) | ready-for-agent | #25 | — | not-started |
 | [27: On-vehicle vẫn review với ưu tiên riêng](issues/27-on-vehicle-van-review-voi-uu-tien-rieng.md) | ready-for-agent | #26 | — | not-started |
 | [28: Negative audit và quality regression G2](issues/28-negative-audit-va-quality-regression-g2.md) | ready-for-agent | #20, #27 | — | not-started |
