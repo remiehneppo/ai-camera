@@ -156,6 +156,10 @@ class EventOutbox:
                     db.execute("UPDATE evidence_requests SET state='failed',last_error=? WHERE request_id=?", (str(exc)[:512], request_id))
         return completed
 
+    def reconcile_and_cleanup(self, recorder: Any) -> dict[str, Any]:
+        from apps.edge.uploader import reconcile_and_cleanup
+        return reconcile_and_cleanup(self, recorder)
+
     def pending(self) -> list[dict[str, Any]]:
         with self._connect() as db:
             rows = db.execute(

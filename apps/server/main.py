@@ -18,7 +18,15 @@ from starlette.concurrency import run_in_threadpool
 from domain.event_contract import EventValidationError, MAX_EVENT_BYTES, validate_event
 from domain.review_contract import ReviewValidationError, validate_review_request
 from apps.server.config import ServerConfig, load_server_config
-from apps.server.store import EventHashConflict, EventIdentityConflict, EventStore, ReviewConflict, ReviewNotFound
+from apps.server.dataset import export_dataset_records, records_to_jsonl
+from apps.server.store import (
+    EventHashConflict,
+    EventIdentityConflict,
+    EventStore,
+    ReviewConflict,
+    ReviewNotFound,
+    cleanup_temp_evidence,
+)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -158,6 +166,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
     @app.on_event("startup")
     def startup() -> None:
+        cleanup_temp_evidence(evidence_dir)
         store.ensure_ready()
 
     @app.on_event("shutdown")
@@ -248,6 +257,44 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc))
         except PyMongoError:
             raise HTTPException(status_code=503, detail="review commit unavailable; refetch before retrying")
+
+    @app.get("/v1/dataset/export")
+    def export_dataset(
+        request: Request,
+        split: str = "all",
+        decision: str = "all",
+        include_ambiguous: bool = False,
+        format: str = "jsonl",
+        split_by: str = "camera",
+    ) -> Response:
+        token = _viewer_token(request)
+        if not _is_authorized_viewer(token, dashboard_token, reviewer_tokens):
+            raise HTTPException(status_code=401, detail="unauthorized viewer credentials", headers={"WWW-Authenticate": "Bearer"})
+
+        if split not in {"train", "val", "test", "all"}:
+            raise HTTPException(status_code=422, detail="invalid split parameter")
+        if decision not in {"confirmed", "false_positive", "resolved", "reopened", "all"}:
+            raise HTTPException(status_code=422, detail="invalid decision parameter")
+        if format not in {"jsonl", "json"}:
+            raise HTTPException(status_code=422, detail="invalid format parameter")
+        if split_by not in {"camera", "site_camera_time", "time"}:
+            raise HTTPException(status_code=422, detail="invalid split_by parameter")
+
+        try:
+            records = export_dataset_records(
+                store=store,
+                split=split,
+                decision=decision,
+                include_ambiguous=include_ambiguous,
+                split_by=split_by,
+            )
+        except PyMongoError:
+            raise HTTPException(status_code=503, detail="dataset export unavailable")
+
+        if format == "jsonl":
+            content = records_to_jsonl(records)
+            return Response(content=content, media_type="application/x-ndjson")
+        return JSONResponse({"count": len(records), "records": records})
 
     @app.put("/v1/evidence/{device_id}/{event_id}/{request_id}")
     async def upload_evidence(
@@ -347,6 +394,33 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
         if not record:
             raise HTTPException(status_code=404, detail="evidence not found")
+
+        file_path_val = record.get("file_path")
+        file_path = Path(file_path_val) if file_path_val else None
+        if not file_path or not file_path.is_file():
+            if record.get("manifest") and isinstance(record["manifest"], dict):
+                record["manifest"]["completeness"] = "missing"
+                record["manifest"]["file_status"] = "missing"
+            raise HTTPException(status_code=404, detail="evidence file missing on disk")
+
+        expected_size = record.get("manifest", {}).get("size_bytes")
+        expected_sha256 = record.get("manifest", {}).get("sha256")
+        file_size = file_path.stat().st_size
+        if expected_size is not None and file_size != int(expected_size):
+            if record.get("manifest") and isinstance(record["manifest"], dict):
+                record["manifest"]["completeness"] = "corrupt"
+                record["manifest"]["file_status"] = "corrupt"
+            raise HTTPException(status_code=404, detail="evidence file corrupt on disk: size mismatch")
+
+        if expected_sha256:
+            with open(file_path, "rb") as f:
+                actual_sha256 = hashlib.file_digest(f, "sha256").hexdigest()
+            if actual_sha256 != str(expected_sha256).lower():
+                if record.get("manifest") and isinstance(record["manifest"], dict):
+                    record["manifest"]["completeness"] = "corrupt"
+                    record["manifest"]["file_status"] = "corrupt"
+                raise HTTPException(status_code=404, detail="evidence file corrupt on disk: sha256 mismatch")
+
         return record
 
     @app.get("/v1/evidence/{device_id}/{event_id}/{request_id}/media")
@@ -372,7 +446,18 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="evidence file missing on disk")
 
+        expected_size = record.get("manifest", {}).get("size_bytes")
+        expected_sha256 = record.get("manifest", {}).get("sha256")
         file_size = file_path.stat().st_size
+
+        if expected_size is not None and file_size != int(expected_size):
+            raise HTTPException(status_code=404, detail="evidence file corrupt on disk: size mismatch")
+
+        if expected_sha256:
+            with open(file_path, "rb") as f:
+                actual_sha256 = hashlib.file_digest(f, "sha256").hexdigest()
+            if actual_sha256 != str(expected_sha256).lower():
+                raise HTTPException(status_code=404, detail="evidence file corrupt on disk: sha256 mismatch")
         range_header = request.headers.get("range")
 
         if not range_header:

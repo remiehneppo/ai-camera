@@ -54,6 +54,240 @@ def _calculate_file_sha256(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def _set_outbox_request_state(
+    outbox_path: str | Path,
+    request_id: str,
+    state: str,
+    *,
+    receipt: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> None:
+    receipt_json = json.dumps(receipt, separators=(",", ":")) if receipt else None
+    with sqlite3.connect(str(outbox_path), timeout=5) as db:
+        db.execute("PRAGMA busy_timeout=5000")
+        if state == "failed":
+            db.execute(
+                "UPDATE evidence_requests SET state=?, last_error=? WHERE request_id=?",
+                (state, error[:512] if error else "unknown error", request_id),
+            )
+        elif receipt_json is not None:
+            db.execute(
+                "UPDATE evidence_requests SET state=?, receipt_json=?, last_error=? WHERE request_id=?",
+                (state, receipt_json, error[:512] if error else None, request_id),
+            )
+        else:
+            db.execute(
+                "UPDATE evidence_requests SET state=?, last_error=? WHERE request_id=?",
+                (state, error[:512] if error else None, request_id),
+            )
+
+
+def reconcile_and_cleanup(
+    outbox: EventOutbox | str | Path,
+    recorder: FileRecorder | str | Path,
+) -> dict[str, Any]:
+    outbox_inst = outbox if isinstance(outbox, EventOutbox) else EventOutbox(outbox)
+    recorder_inst = recorder if isinstance(recorder, FileRecorder) else FileRecorder(recorder)
+
+    cleaned_files: list[str] = []
+    # 1. Clean orphaned temporary files (*.tmp*, *.concat) in recorder output / clip directories
+    if recorder_inst.root.exists():
+        for path in list(recorder_inst.root.rglob("*")):
+            if path.is_file() and (".tmp" in path.name or path.suffix == ".tmp" or path.suffix == ".concat"):
+                try:
+                    path.unlink(missing_ok=True)
+                    cleaned_files.append(str(path))
+                except OSError:
+                    pass
+
+    # 2. For evidence requests in outbox
+    requests = outbox_inst.evidence_requests()
+    recovered_fulfilled = 0
+    failed_requests = 0
+
+    for req in requests:
+        state = req.get("state")
+        request_id = req["request_id"]
+        session_id = req.get("session_id")
+        try:
+            requested_start = float(req.get("requested_start", 0.0))
+            requested_end = float(req.get("requested_end", 0.0))
+        except (ValueError, TypeError):
+            requested_start = 0.0
+            requested_end = 0.0
+
+        if state not in {"pending", "in_progress", "requested", "collecting"}:
+            # For fulfilled/partial, ensure clip on disk is intact
+            if state in {"fulfilled", "partial"}:
+                receipt = req.get("receipt") or {}
+                artifact = receipt.get("artifact")
+                if artifact and isinstance(artifact, dict) and artifact.get("path"):
+                    cpath = Path(artifact["path"])
+                    if not cpath.is_file():
+                        # Clip missing, check if ring segments expired
+                        available_segs = recorder_inst.segments(session_id) if session_id else []
+                        if not available_segs or min(s.start_seconds for s in available_segs) > requested_end:
+                            _set_outbox_request_state(
+                                outbox_inst.path,
+                                request_id,
+                                "failed",
+                                error="ring segments expired: clip file missing and ring pruned",
+                            )
+                            failed_requests += 1
+                    else:
+                        c_size = cpath.stat().st_size
+                        c_hash = _calculate_file_sha256(cpath)
+                        if (artifact.get("size_bytes") is not None and c_size != artifact["size_bytes"]) or \
+                           (artifact.get("sha256") and c_hash != artifact["sha256"]):
+                            _set_outbox_request_state(
+                                outbox_inst.path,
+                                request_id,
+                                "failed",
+                                error="clip corrupted: sha256 or size mismatch",
+                            )
+                            failed_requests += 1
+            continue
+
+        # Look for existing clip file and manifest
+        manifest_dir = recorder_inst.root / "manifests"
+        name = hashlib.sha256(request_id.encode()).hexdigest()
+        manifest_path = manifest_dir / f"{name}.json"
+        default_clip_path = manifest_dir / f"{name}.mkv"
+
+        receipt = req.get("receipt") or {}
+        artifact = receipt.get("artifact")
+
+        clip_file: Path | None = None
+        if artifact and isinstance(artifact, dict) and artifact.get("path"):
+            clip_file = Path(artifact["path"])
+        elif default_clip_path.is_file():
+            clip_file = default_clip_path
+        elif (manifest_dir / f"{request_id}.mkv").is_file():
+            clip_file = manifest_dir / f"{request_id}.mkv"
+        elif manifest_path.is_file():
+            try:
+                m_data = json.loads(manifest_path.read_text())
+                if m_data.get("artifact") and isinstance(m_data["artifact"], dict):
+                    artifact = m_data["artifact"]
+                    clip_file = Path(artifact["path"])
+                    receipt = m_data
+            except Exception:
+                pass
+
+        # Also check pin_status if artifact not found yet
+        if not artifact:
+            pin_status = recorder_inst.pin_status(request_id)
+            if pin_status and pin_status.get("artifact"):
+                artifact = pin_status["artifact"]
+                receipt = {**receipt, **pin_status}
+                if not clip_file and artifact.get("path"):
+                    clip_file = Path(artifact["path"])
+
+        if clip_file is not None and clip_file.is_file():
+            # Clip exists on disk! Check integrity
+            actual_size = clip_file.stat().st_size
+            actual_sha256 = _calculate_file_sha256(clip_file)
+
+            expected_size = artifact.get("size_bytes") if artifact else None
+            expected_sha256 = artifact.get("sha256") if artifact else None
+
+            if expected_size is not None and actual_size != expected_size:
+                _set_outbox_request_state(
+                    outbox_inst.path,
+                    request_id,
+                    "failed",
+                    error=f"clip corrupted: size mismatch {actual_size} != {expected_size}",
+                )
+                failed_requests += 1
+                continue
+            if expected_sha256 is not None and actual_sha256 != expected_sha256:
+                _set_outbox_request_state(
+                    outbox_inst.path,
+                    request_id,
+                    "failed",
+                    error="clip corrupted: sha256 integrity mismatch",
+                )
+                failed_requests += 1
+                continue
+
+            # Valid clip! Transition to fulfilled
+            if not receipt or not receipt.get("artifact"):
+                receipt = {
+                    **receipt,
+                    "request_id": request_id,
+                    "session_id": session_id,
+                    "artifact": {
+                        "path": str(clip_file),
+                        "size_bytes": actual_size,
+                        "sha256": actual_sha256,
+                        "content_type": "video/x-matroska",
+                        "codec": "h264",
+                    },
+                    "completeness": receipt.get("completeness", "complete"),
+                }
+            _set_outbox_request_state(outbox_inst.path, request_id, "fulfilled", receipt=receipt)
+            recovered_fulfilled += 1
+            continue
+
+        # Clip file does not exist on disk. Check if recorder can still fulfill the requested range
+        if not session_id:
+            _set_outbox_request_state(
+                outbox_inst.path, request_id, "failed", error="ring segments expired: missing session_id"
+            )
+            failed_requests += 1
+            continue
+
+        available_segs = recorder_inst.segments(session_id)
+        if not available_segs:
+            _set_outbox_request_state(
+                outbox_inst.path, request_id, "failed", error="ring segments expired: no segments in ring"
+            )
+            failed_requests += 1
+            continue
+
+        earliest_start = min(s.start_seconds for s in available_segs)
+        latest_end = max(s.end_seconds for s in available_segs)
+        matching_segs = [s for s in available_segs if s.end_seconds >= requested_start and s.start_seconds <= requested_end]
+
+        if not matching_segs or earliest_start > requested_end:
+            _set_outbox_request_state(
+                outbox_inst.path, request_id, "failed", error="ring segments expired: range pruned from ring"
+            )
+            failed_requests += 1
+            continue
+
+        # Range can still be fulfilled
+        owner = f"{req.get('device_id')}/{req.get('event_id')}/{req.get('revision')}"
+        try:
+            pin_stat = recorder_inst.pin_status(request_id)
+            if not pin_stat:
+                recorder_inst.pin(request_id, session_id, requested_start, requested_end, owner)
+                pin_stat = recorder_inst.pin_status(request_id)
+
+            if pin_stat and pin_stat.get("artifact"):
+                _set_outbox_request_state(outbox_inst.path, request_id, "fulfilled", receipt=pin_stat)
+                recovered_fulfilled += 1
+            elif latest_end >= requested_end:
+                fin_receipt = recorder_inst.finalize_pin(request_id, allow_partial=True)
+                if fin_receipt.get("artifact"):
+                    _set_outbox_request_state(outbox_inst.path, request_id, "fulfilled", receipt=fin_receipt)
+                    recovered_fulfilled += 1
+                else:
+                    _set_outbox_request_state(
+                        outbox_inst.path, request_id, "failed", error="ring segments expired: finalize produced no artifact"
+                    )
+                    failed_requests += 1
+        except Exception as exc:
+            _set_outbox_request_state(outbox_inst.path, request_id, "failed", error=f"ring segments expired: {exc}")
+            failed_requests += 1
+
+    return {
+        "cleaned_files": cleaned_files,
+        "recovered_fulfilled": recovered_fulfilled,
+        "failed_requests": failed_requests,
+    }
+
+
 class EdgeUploader:
     """Client for uploading finalized edge evidence clips to the server."""
 
@@ -248,8 +482,14 @@ class EdgeUploader:
             self._record_outbox_error(request_id, last_error_str)
         return None
 
-    def upload_pending(self, batch_size: int = 10) -> int:
+    def reconcile_and_cleanup(self) -> dict[str, Any]:
+        return reconcile_and_cleanup(self.outbox, self.recorder)
+
+    def upload_pending(self, batch_size: int = 10, reconcile: bool = False) -> int:
         """Scan outbox for pending evidence requests in fulfilled or partial state and upload them."""
+        if reconcile:
+            self.reconcile_and_cleanup()
+
         pending_candidates = [
             req for req in self.outbox.evidence_requests()
             if req.get("state") in {"fulfilled", "partial"}

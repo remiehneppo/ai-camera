@@ -33,8 +33,8 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [05: Retry và revision không làm mất hoặc lùi event](issues/05-retry-va-revision-khong-lam-mat-hoac-lui-event.md) | ready-for-agent | #01 | — | done |
 | [06: Recorder file replay giữ raw ring độc lập](issues/06-recorder-file-replay-giu-raw-ring-doc-lap.md) | ready-for-agent | #02 | — | partial |
 | [07: Event pin được clip pre/post từ ring](issues/07-event-pin-duoc-clip-pre-post-tu-ring.md) | ready-for-agent | #01, #06 | — | partial |
-| [08: Upload evidence và phát lại trên detail](issues/08-upload-evidence-va-phat-lai-tren-detail.md) | ready-for-agent | #07 | — | not-started |
-| [09: Khôi phục event/evidence sau process crash](issues/09-khoi-phuc-event-evidence-sau-process-crash.md) | ready-for-agent | #05, #08 | — | not-started |
+| [08: Upload evidence và phát lại trên detail](issues/08-upload-evidence-va-phat-lai-tren-detail.md) | ready-for-agent | #07 | — | done |
+| [09: Khôi phục event/evidence sau process crash](issues/09-khoi-phuc-event-evidence-sau-process-crash.md) | ready-for-agent | #05, #08 | — | done |
 | [10: File replay đi qua native boundary an toàn](issues/10-file-replay-di-qua-native-boundary-an-toan.md) | ready-for-agent | #03, #06 | — | not-started |
 | [11: ONNX oracle xuất detection có provenance](issues/11-onnx-oracle-xuat-detection-co-provenance.md) | ready-for-agent | #02 | — | done (software lab; production clearance open) |
 | [12: Native detector đạt parity với oracle](issues/12-native-detector-dat-parity-voi-oracle.md) | ready-for-agent | #10, #11 | — | not-started |
@@ -45,7 +45,7 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [17: Health phản ánh khả năng quan sát thực](issues/17-health-phan-anh-kha-nang-quan-sat-thuc.md) | ready-for-agent | #14 | — | not-started |
 | [18: Quota bảo vệ pinned evidence và journal](issues/18-quota-bao-ve-pinned-evidence-va-journal.md) | ready-for-agent | #09, #17 | — | not-started |
 | [19: Nghiệm thu vertical slice G1 trên lab](issues/19-nghiem-thu-vertical-slice-g1-tren-lab.md) | ready-for-agent | #04, #08, #15, #16, #17, #18 | — | not-started |
-| [20: Feedback review thành nhãn dataset có lineage](issues/20-feedback-review-thanh-nhan-dataset-co-lineage.md) | ready-for-agent | #02, #04, #08 | — | not-started |
+| [20: Feedback review thành nhãn dataset có lineage](issues/20-feedback-review-thanh-nhan-dataset-co-lineage.md) | ready-for-agent | #02, #04, #08 | — | done |
 | [21: Quality và ODD đi xuyên tới event/detail](issues/21-quality-va-odd-di-xuyen-toi-event-detail.md) | ready-for-agent | #17 | — | not-started |
 | [22: Pose request trả keypoints đúng frame và track](issues/22-pose-request-tra-keypoints-dung-frame-va-track.md) | ready-for-agent | #11, #13 | — | not-started |
 | [23: Track gap không tạo certainty hoặc motion giả](issues/23-track-gap-khong-tao-certainty-hoac-motion-gia.md) | ready-for-agent | #13, #02 | — | not-started |

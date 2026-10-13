@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -29,6 +31,21 @@ class ReviewConflict(Exception):
 
 class ReviewNotFound(Exception):
     pass
+
+
+def cleanup_temp_evidence(evidence_dir: str | Path) -> list[str]:
+    cleaned: list[str] = []
+    base = Path(evidence_dir)
+    if not base.exists():
+        return cleaned
+    for item in list(base.rglob("*")):
+        if item.is_file() and (".tmp" in item.name or item.suffix == ".tmp"):
+            try:
+                item.unlink(missing_ok=True)
+                cleaned.append(str(item))
+            except OSError:
+                pass
+    return cleaned
 
 
 class EventStore:
@@ -317,11 +334,113 @@ class EventStore:
                 read_preference=ReadPreference.PRIMARY,
             )
 
-    def get_evidence(self, device_id: str, event_id: str, request_id: str) -> dict[str, Any] | None:
-        return self.evidence_manifests.find_one(
+    def get_evidence(
+        self,
+        device_id: str,
+        event_id: str,
+        request_id: str,
+        *,
+        verify_file: bool = False,
+    ) -> dict[str, Any] | None:
+        doc = self.evidence_manifests.find_one(
             {"device_id": device_id, "event_id": event_id, "request_id": request_id},
             {"_id": 0},
         )
+        if not doc or not verify_file:
+            return doc
+
+        file_path_val = doc.get("file_path")
+        file_path = Path(file_path_val) if file_path_val else None
+        manifest = doc.get("manifest")
+        if not isinstance(manifest, dict):
+            return doc
+
+        if not file_path or not file_path.is_file():
+            manifest["completeness"] = "missing"
+            manifest["file_status"] = "missing"
+            return doc
+
+        expected_size = manifest.get("size_bytes")
+        expected_sha256 = manifest.get("sha256")
+        actual_size = file_path.stat().st_size
+
+        if expected_size is not None and actual_size != int(expected_size):
+            manifest["completeness"] = "corrupt"
+            manifest["file_status"] = "corrupt"
+            return doc
+
+        if expected_sha256:
+            with open(file_path, "rb") as stream:
+                actual_sha256 = hashlib.file_digest(stream, "sha256").hexdigest()
+            if actual_sha256 != str(expected_sha256).lower():
+                manifest["completeness"] = "corrupt"
+                manifest["file_status"] = "corrupt"
+                return doc
+
+        return doc
+
+    def query_reviewed_dataset(
+        self,
+        decision: str | None = None,
+        include_ambiguous: bool = False,
+    ) -> list[dict[str, Any]]:
+        query: dict[str, Any] = {"review_version": {"$gt": 0}}
+        if not include_ambiguous:
+            query["needs_re_review"] = False
+            query["decision"] = {"$nin": ["unreviewed"]}
+            if decision and decision != "all":
+                query["decision"] = decision
+        else:
+            if decision and decision != "all":
+                if decision == "reopened":
+                    query["decision"] = "unreviewed"
+                else:
+                    query["decision"] = decision
+
+        reviews = list(self.reviews.find(query, {"_id": 0}))
+        results: list[dict[str, Any]] = []
+
+        for review in reviews:
+            device_id = review["device_id"]
+            event_id = review["event_id"]
+            reviewed_rev = review.get("reviewed_event_revision")
+            reviewed_hash = review.get("reviewed_event_hash")
+
+            rev_doc = self.revisions.find_one(
+                {"device_id": device_id, "event_id": event_id, "revision": reviewed_rev},
+                {"_id": 0},
+            )
+            if not rev_doc:
+                continue
+
+            # Verify reviewed event hash matches revision event hash
+            if rev_doc.get("event_hash") != reviewed_hash:
+                continue
+
+            event = rev_doc["event"]
+            audits = list(
+                self.review_audit.find(
+                    {"device_id": device_id, "event_id": event_id},
+                    {"_id": 0},
+                ).sort("review_version", 1)
+            )
+
+            manifests = list(
+                self.evidence_manifests.find(
+                    {"device_id": device_id, "event_id": event_id},
+                    {"_id": 0},
+                )
+            )
+
+            results.append({
+                "review": review,
+                "event": event,
+                "event_hash": rev_doc["event_hash"],
+                "audits": audits,
+                "manifests": manifests,
+            })
+
+        return results
 
     def close(self) -> None:
         self.client.close()
