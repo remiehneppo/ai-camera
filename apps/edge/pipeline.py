@@ -151,8 +151,8 @@ class PerceptionPipeline:
         # 4. Handle emitted incidents
         emitted_events: list[dict[str, Any]] = []
         for incident in incidents:
-            if incident.get("taxonomy") == "person_fall":
-                event = self._handle_fall_incident(incident, ts)
+            if incident.get("taxonomy") in {"person_fall", "person_lying_persistent"}:
+                event = self._handle_incident(incident, ts)
                 emitted_events.append(event)
 
         return emitted_events
@@ -163,12 +163,15 @@ class PerceptionPipeline:
         for track in self.tracker.get_all_tracks():
             track.history.clear()
 
-    def _handle_fall_incident(self, incident: dict[str, Any], timestamp: float) -> dict[str, Any]:
+    def _handle_incident(self, incident: dict[str, Any], timestamp: float) -> dict[str, Any]:
         """Construct validated Event snapshot, pin ring buffer, and atomically enqueue to outbox."""
         event_id = str(uuid4())
         message_id = f"msg-{uuid4().hex[:12]}"
         request_id = f"req-{uuid4().hex[:12]}"
         anchor_time = float(incident.get("anchor_time", timestamp))
+        taxonomy = str(incident.get("taxonomy", "person_fall"))
+        anchor_kind = str(incident.get("anchor_kind", "onset"))
+        severity = str(incident.get("severity", "critical"))
 
         now_iso = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
@@ -176,7 +179,7 @@ class PerceptionPipeline:
         evidence_request = make_evidence_request(
             request_id=request_id,
             session_id=self.stream_session_id,
-            anchor_kind="onset",
+            anchor_kind=anchor_kind,
             anchor_time=anchor_time,
         )
 
@@ -199,9 +202,9 @@ class PerceptionPipeline:
             "calibration_version": self.calibration_version,
             "quality_state": self.quality_state,
             "payload": {
-                "taxonomy": "person_fall",
+                "taxonomy": taxonomy,
                 "lifecycle": "candidate",
-                "severity": "critical",
+                "severity": severity,
                 "confidence": float(incident.get("confidence", 0.9)),
                 "track_id": incident.get("track_id"),
                 "anchor_time": anchor_time,
@@ -217,6 +220,10 @@ class PerceptionPipeline:
         self.evidence.persist(validated_event)
 
         return validated_event
+
+    def _handle_fall_incident(self, incident: dict[str, Any], timestamp: float) -> dict[str, Any]:
+        """Backwards compatibility delegation to _handle_incident."""
+        return self._handle_incident(incident, timestamp)
 
     def trigger_upload(self, *, reconcile: bool = True, finish_sessions=()) -> int:
         """Trigger reconciliation and upload of pending events and evidence clips to server."""

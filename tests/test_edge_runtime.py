@@ -233,3 +233,172 @@ class RuntimeCleanupTests(unittest.TestCase):
             runtime.start()
             runtime.stop()
             runtime.stop()
+
+    def test_startup_reconciles_evidence_outbox_before_analytics_worker_starts(self):
+        from apps.edge.runtime import EdgeRuntime
+        from apps.edge.outbox import EventOutbox
+        from tests.test_event_delivery import event_fixture
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / 'events.sqlite3'
+            outbox = EventOutbox(db_path)
+            # Enqueue a valid event fixture
+            event = event_fixture()
+            outbox.enqueue(event)
+
+            runtime = EdgeRuntime(
+                source=self.video(directory),
+                output_dir=Path(directory) / 'ring',
+                outbox_path=db_path,
+                analytics_enabled=False,
+                disabled_reason='test',
+            )
+            # Reconcile hook should be executed during start() before workers start
+            status = runtime.start().wait(timeout_seconds=5)
+            self.assertEqual(status['outcome'], 'ok')
+            reconcile_result = runtime.reconcile_result()
+            self.assertIsNotNone(reconcile_result)
+            self.assertIn('cleaned_files', reconcile_result)
+            runtime.stop()
+
+    @unittest.skipUnless(Path('data/oracle/yolox_tiny.onnx').is_file(), 'requires real cleared oracle asset')
+    def test_graceful_drain_flushes_inflight_observations_before_forced_kill(self):
+        import time
+        from apps.edge.runtime import EdgeRuntime
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = EdgeRuntime(
+                source=self.video(directory, seconds=2),
+                output_dir=Path(directory) / 'ring',
+                manifest_path='models/yolox-tiny/manifest.json',
+                model_path='data/oracle/yolox_tiny.onnx',
+                sample_fps=4,
+                queue_capacity=1,
+                observation_capacity=1,
+                stop_timeout_seconds=1.0,
+                drain_timeout_seconds=0.5,
+            )
+            runtime.start()
+            # Wait until at least one observation is produced by the analytics worker
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                if runtime.status()['observations_retained'] > 0:
+                    break
+                time.sleep(0.01)
+
+            # Test graceful drain via public stop_analytics lifecycle method
+            stopped = runtime.stop_analytics()
+            self.assertFalse(stopped['analytics']['alive'])
+            self.assertEqual(stopped['analytics']['state'], 'stopped')
+            obs = runtime.observations()
+            self.assertGreaterEqual(len(obs), 1)
+            for item in obs:
+                self.assertIn(item['detection_status'], ('ok', 'ok_empty'))
+            runtime.stop()
+
+    def test_support_session_and_epoch_reset_upon_recovery_or_restart(self):
+        from apps.edge.runtime import EdgeRuntime
+        from apps.edge.outbox import EventOutbox
+        from tests.test_event_delivery import event_fixture
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / 'events.sqlite3'
+            outbox = EventOutbox(db_path)
+            outbox.enqueue(event_fixture())
+
+            runtime = EdgeRuntime(
+                source=self.video(directory),
+                output_dir=Path(directory) / 'ring',
+                session_id='session-1',
+                core_epoch=1,
+                outbox_path=db_path,
+                analytics_enabled=False,
+                disabled_reason='test',
+            )
+            status = runtime.status()
+            self.assertEqual(status['stream_session_id'], 'session-1')
+            self.assertEqual(status['core_epoch'], 1)
+
+            # Reset session and epoch
+            runtime.reset_session(session_id='session-2', core_epoch=2)
+            status2 = runtime.status()
+            self.assertEqual(status2['stream_session_id'], 'session-2')
+            self.assertEqual(status2['core_epoch'], 2)
+            runtime.stop()
+
+            # Recovery after stop/forced kill: start a fresh runtime with incremented epoch
+            recovered = EdgeRuntime(
+                source=self.video(directory),
+                output_dir=Path(directory) / 'ring',
+                session_id='session-2',
+                core_epoch=2,
+                outbox_path=db_path,
+                analytics_enabled=False,
+                disabled_reason='test',
+            )
+            recovered.start()
+            reconcile_res = recovered.reconcile_result()
+            self.assertIsNotNone(reconcile_res)
+            self.assertIn('cleaned_files', reconcile_res)
+            final = recovered.wait(timeout_seconds=5)
+            self.assertEqual(final['outcome'], 'ok')
+            self.assertEqual(final['core_epoch'], 2)
+            self.assertEqual(final['stream_session_id'], 'session-2')
+            recovered.stop()
+
+    @unittest.skipUnless(Path('data/oracle/yolox_tiny.onnx').is_file(), 'requires real cleared oracle asset')
+    def test_kill_or_hang_of_analytics_leaves_recorder_functional_and_status_degraded(self):
+        import os
+        import signal
+        import time
+        from apps.edge.runtime import EdgeRuntime
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = EdgeRuntime(
+                source=self.video(directory, seconds=3),
+                output_dir=Path(directory) / 'ring',
+                segment_seconds=0.5,
+                analytics_enabled=True,
+                manifest_path='models/yolox-tiny/manifest.json',
+                model_path='data/oracle/yolox_tiny.onnx',
+                sample_fps=4,
+            )
+            runtime.start()
+            analytics_pid = runtime._pids['analytics']
+            self.assertIsNotNone(analytics_pid)
+
+            # Wait briefly to ensure both processes are running
+            time.sleep(0.05)
+            status_init = runtime.status()
+            self.assertTrue(status_init['recorder']['alive'])
+            self.assertTrue(status_init['analytics']['alive'])
+
+            # Send SIGKILL to analytics process
+            os.kill(analytics_pid, signal.SIGKILL)
+
+            # Wait briefly for OS to terminate the killed process
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                status_after = runtime.status()
+                if not status_after['analytics']['alive']:
+                    break
+                time.sleep(0.02)
+
+            # Verify analytics process terminated while recorder process remains functional
+            self.assertFalse(status_after['analytics']['alive'])
+            self.assertEqual(status_after['analytics']['state'], 'failed')
+            self.assertTrue(status_after['recorder']['alive'])
+            self.assertTrue(status_after['degraded'])
+
+            # Wait for recorder to complete producing segments
+            final = runtime.wait(timeout_seconds=10)
+            self.assertEqual(final['recorder']['state'], 'completed')
+            self.assertEqual(final['analytics']['state'], 'failed')
+            self.assertTrue(final['degraded'])
+            self.assertFalse(final['analytics']['alive'])
+            self.assertGreaterEqual(len(runtime.segments()), 2)
+
+            # Verify status accurately reflects degraded state without falsely declaring healthy
+            status = runtime.status()
+            self.assertTrue(status['degraded'])
+            self.assertEqual(status['outcome'], 'failed')
+            self.assertEqual(status['analytics']['state'], 'failed')
+            self.assertTrue(status['analytics']['error'])
+            runtime.stop()
+

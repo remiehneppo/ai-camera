@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 import unittest
+from pathlib import Path
 from typing import Any
 
-from apps.edge.tracker import ByteTracker, Track
+import numpy as np
+
 from apps.edge.incident import IncidentEngine
+from apps.edge.outbox import EventOutbox
+from apps.edge.pipeline import PerceptionPipeline
+from apps.edge.recorder import FileRecorder
+from apps.edge.tracker import ByteTracker, Track
 
 
 class TestByteTracker(unittest.TestCase):
@@ -320,8 +328,8 @@ class TestIncidentEngine(unittest.TestCase):
             incidents = self.engine.process_tracks([track], timestamp=t)
             self.assertEqual(incidents, [])
 
-    def test_already_lying_without_prior_standing_produces_no_incidents(self) -> None:
-        """Person already lying on ground at initial appearance never triggers fall onset."""
+    def test_already_lying_without_prior_standing_triggers_persistent_lying(self) -> None:
+        """Person already lying on ground from first observation triggers person_lying_persistent after duration."""
         track = Track(
             track_id=50,
             bbox=[100.0, 220.0, 260.0, 280.0],  # horizontal from the start: AR = 2.67
@@ -329,11 +337,144 @@ class TestIncidentEngine(unittest.TestCase):
             label="person",
             timestamp=0.0,
         )
-        for i in range(1, 60):
-            t = i * 0.1
+        self.assertEqual(self.engine.process_tracks([track], timestamp=0.0), [])
+
+        # First 3.0 seconds: no incident emitted yet
+        for i in range(1, 31):
+            t = round(i * 0.1, 2)
+            track.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=t)
+            incidents = self.engine.process_tracks([track], timestamp=t)
+            self.assertEqual(incidents, [], f"Triggered prematurely at t={t}")
+
+        # At t=3.1 (> min_lying_duration 3.0s since first qualifying observation at t=0.0)
+        t_trigger = 3.1
+        track.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=t_trigger)
+        incidents = self.engine.process_tracks([track], timestamp=t_trigger)
+        self.assertEqual(len(incidents), 1, "Expected persistent lying incident at t=3.1")
+
+        incident = incidents[0]
+        self.assertEqual(incident["taxonomy"], "person_lying_persistent")
+        self.assertEqual(incident["severity"], "high")
+        self.assertEqual(incident["anchor_kind"], "first_qualifying_observation")
+        self.assertAlmostEqual(incident["anchor_time"], 0.0, delta=0.05)
+        self.assertAlmostEqual(incident["detection_time"], 3.1, delta=0.05)
+        self.assertEqual(incident["track_id"], 50)
+        self.assertGreaterEqual(incident["confidence"], 0.8)
+        self.assertTrue(len(incident["detections"]) > 0)
+
+    def test_persistent_lying_separate_duration_and_severity(self) -> None:
+        """Configuring separate duration (e.g. 5.0s) and severity ('high') is respected."""
+        engine = IncidentEngine(
+            standing_aspect_ratio=0.85,
+            lying_aspect_ratio=1.2,
+            min_drop_velocity=15.0,
+            min_lying_duration=2.0,
+            persistent_lying_duration=5.0,
+            persistent_lying_severity="high",
+            cooldown_seconds=30.0,
+        )
+        track = Track(
+            track_id=55,
+            bbox=[100.0, 220.0, 260.0, 280.0],  # horizontal from the start
+            score=0.9,
+            label="person",
+            timestamp=0.0,
+        )
+        self.assertEqual(engine.process_tracks([track], timestamp=0.0), [])
+
+        # Even after min_lying_duration (2.0s), persistent lying shouldn't trigger until 5.0s
+        for i in range(1, 50):
+            t = round(i * 0.1, 2)
+            track.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=t)
+            incidents = engine.process_tracks([track], timestamp=t)
+            self.assertEqual(incidents, [])
+
+        # At t=5.1s (> persistent_lying_duration 5.0s)
+        track.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=5.1)
+        incidents = engine.process_tracks([track], timestamp=5.1)
+        self.assertEqual(len(incidents), 1)
+        self.assertEqual(incidents[0]["taxonomy"], "person_lying_persistent")
+        self.assertEqual(incidents[0]["severity"], "high")
+        self.assertEqual(incidents[0]["anchor_kind"], "first_qualifying_observation")
+        self.assertAlmostEqual(incidents[0]["anchor_time"], 0.0, delta=0.05)
+
+    def test_persistent_lying_early_recovery_cancels_candidate(self) -> None:
+        """Standing or sitting semi-upright before duration cancels persistent lying candidate."""
+        track = Track(
+            track_id=56,
+            bbox=[100.0, 220.0, 260.0, 280.0],  # horizontal: AR = 2.67
+            score=0.9,
+            label="person",
+            timestamp=0.0,
+        )
+        self.assertEqual(self.engine.process_tracks([track], timestamp=0.0), [])
+
+        # Lies for 2.0s (< 3.0s min_lying_duration)
+        for i in range(1, 21):
+            t = round(i * 0.1, 2)
             track.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=t)
             incidents = self.engine.process_tracks([track], timestamp=t)
             self.assertEqual(incidents, [])
+
+        # Recovers to standing at t=2.1 (AR = 60/160 = 0.375)
+        for i in range(21, 50):
+            t = round(i * 0.1, 2)
+            track.update([100.0, 100.0, 160.0, 260.0], score=0.9, timestamp=t)
+            incidents = self.engine.process_tracks([track], timestamp=t)
+            self.assertEqual(incidents, [], f"Triggered after recovery at t={t}")
+
+    def test_persistent_lying_track_gap_and_observation_gap_breaks_candidate(self) -> None:
+        """Track disappearance or observation_gap breaks persistent candidate and resets qualifying time."""
+        # 1. Observation gap test
+        track1 = Track(track_id=57, bbox=[100.0, 220.0, 260.0, 280.0], score=0.9, label="person", timestamp=0.0)
+        self.assertEqual(self.engine.process_tracks([track1], timestamp=0.0), [])
+        for i in range(1, 21):
+            t = round(i * 0.1, 2)
+            track1.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=t)
+            self.assertEqual(self.engine.process_tracks([track1], timestamp=t), [])
+
+        # Observation gap occurs at t=2.1
+        self.engine.observation_gap()
+
+        # Re-observation lying starting at t=2.5
+        track1.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=2.5)
+        self.assertEqual(self.engine.process_tracks([track1], timestamp=2.5), [])
+
+        # At t=3.5 (1.0s after gap, 3.5s total), candidate must NOT trigger because gap broke it
+        for i in range(26, 55):
+            t = round(i * 0.1, 2)
+            track1.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=t)
+            incidents = self.engine.process_tracks([track1], timestamp=t)
+            self.assertEqual(incidents, [], f"Premature trigger after gap at t={t}")
+
+        # At t=5.6 (> 3.0s after re-appearance at t=2.5), candidate triggers with anchor_time = 2.5
+        track1.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=5.6)
+        incidents = self.engine.process_tracks([track1], timestamp=5.6)
+        self.assertEqual(len(incidents), 1)
+        self.assertEqual(incidents[0]["taxonomy"], "person_lying_persistent")
+        self.assertAlmostEqual(incidents[0]["anchor_time"], 2.5, delta=0.05)
+
+    def test_persistent_lying_cooldown_prevents_duplicate_spam(self) -> None:
+        """Persistent lying triggers once, and cooldown suppresses repeated alerts."""
+        track = Track(track_id=58, bbox=[100.0, 220.0, 260.0, 280.0], score=0.9, label="person", timestamp=0.0)
+        self.assertEqual(self.engine.process_tracks([track], timestamp=0.0), [])
+        for i in range(1, 31):
+            t = round(i * 0.1, 2)
+            track.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=t)
+            self.engine.process_tracks([track], timestamp=t)
+
+        # Trigger at t=3.1
+        track.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=3.1)
+        incidents = self.engine.process_tracks([track], timestamp=3.1)
+        self.assertEqual(len(incidents), 1)
+        self.assertEqual(incidents[0]["taxonomy"], "person_lying_persistent")
+
+        # Continues lying through t=25.0 (within 30s cooldown) -> no spam
+        for i in range(32, 250):
+            t = round(i * 0.1, 2)
+            track.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=t)
+            incidents = self.engine.process_tracks([track], timestamp=t)
+            self.assertEqual(incidents, [], f"Repeated alert at t={t}")
 
     def test_second_fall_after_cooldown_triggers(self) -> None:
         """After 30s cooldown and re-standing, a second authentic fall triggers again."""
@@ -384,6 +525,222 @@ class TestIncidentEngine(unittest.TestCase):
         self.assertIn(70, self.engine._states)
         self.engine.reset()
         self.assertEqual(len(self.engine._states), 0)
+
+    def test_persistent_lying_transient_speed_jitter_preserves_anchor_time(self) -> None:
+        """Transient speed/jitter during persistent lying must not shift first_qualifying_time forward."""
+        track = Track(
+            track_id=80,
+            bbox=[100.0, 220.0, 260.0, 280.0],  # horizontal from start: AR = 2.67
+            score=0.9,
+            label="person",
+            timestamp=0.0,
+        )
+        self.assertEqual(self.engine.process_tracks([track], timestamp=0.0), [])
+
+        # Frames up to t=0.9: steady lying
+        for i in range(1, 10):
+            t = round(i * 0.1, 2)
+            track.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=t)
+            self.assertEqual(self.engine.process_tracks([track], timestamp=t), [])
+
+        # Transient jitter at t=1.0: bbox shifts by 8px in 0.1s -> speed = 80 px/s > max_motion_speed (50.0)
+        # Person is still lying (w=160, h=60, AR=2.67)
+        track.update([108.0, 220.0, 268.0, 280.0], score=0.9, timestamp=1.0)
+        self.assertEqual(self.engine.process_tracks([track], timestamp=1.0), [])
+
+        # Continues lying steadily until t=3.1 (> 3.0s from t=0.0)
+        for i in range(11, 31):
+            t = round(i * 0.1, 2)
+            track.update([108.0, 220.0, 268.0, 280.0], score=0.9, timestamp=t)
+            self.assertEqual(self.engine.process_tracks([track], timestamp=t), [])
+
+        # At t=3.1 (> 3.0s duration from initial observation at t=0.0):
+        # Should trigger with anchor_time = 0.0, NOT shifted to 1.0 due to jitter
+        track.update([108.0, 220.0, 268.0, 280.0], score=0.9, timestamp=3.1)
+        incidents = self.engine.process_tracks([track], timestamp=3.1)
+        self.assertEqual(len(incidents), 1)
+        self.assertEqual(incidents[0]["taxonomy"], "person_lying_persistent")
+        self.assertEqual(incidents[0]["anchor_kind"], "first_qualifying_observation")
+        self.assertAlmostEqual(incidents[0]["anchor_time"], 0.0, delta=0.05)
+
+    def test_id_switch_without_prior_standing_triggers_persistent_lying(self) -> None:
+        """When an ID switch occurs on a lying person without prior standing, the new track triggers persistent lying with its first observation anchor."""
+        # Initial track 85 is standing briefly then disappears
+        track1 = Track(
+            track_id=85,
+            bbox=[100.0, 100.0, 160.0, 260.0],  # standing
+            score=0.9,
+            label="person",
+            timestamp=0.0,
+        )
+        self.engine.process_tracks([track1], timestamp=0.0)
+
+        # ID switch happens: track 85 is lost, new track 86 appears already lying at t=1.0
+        # Track 86 has NO standing history
+        track2 = Track(
+            track_id=86,
+            bbox=[100.0, 220.0, 260.0, 280.0],  # lying
+            score=0.9,
+            label="person",
+            timestamp=1.0,
+        )
+        self.assertEqual(self.engine.process_tracks([track2], timestamp=1.0), [])
+
+        # Track 2 stays lying for 3.1s (until t=4.1)
+        for i in range(11, 41):
+            t = round(i * 0.1, 2)
+            track2.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=t)
+            self.assertEqual(self.engine.process_tracks([track2], timestamp=t), [])
+
+        # At t=4.1 (> 3.0s after track 2 first qualifying observation at t=1.0)
+        track2.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=4.1)
+        incidents = self.engine.process_tracks([track2], timestamp=4.1)
+        self.assertEqual(len(incidents), 1)
+        incident = incidents[0]
+        self.assertEqual(incident["taxonomy"], "person_lying_persistent")
+        self.assertEqual(incident["track_id"], 86)
+        self.assertEqual(incident["anchor_kind"], "first_qualifying_observation")
+        self.assertAlmostEqual(incident["anchor_time"], 1.0, delta=0.05)
+
+
+class TestEdgePipelineIncidents(unittest.TestCase):
+    """Integration tests for EdgePipeline incident handling (person_fall and person_lying_persistent)."""
+
+    def setUp(self) -> None:
+        self.tmp_dir = tempfile.mkdtemp()
+        self.recorder_dir = Path(self.tmp_dir) / "recorder"
+        self.recorder_dir.mkdir(parents=True, exist_ok=True)
+        self.db_path = Path(self.tmp_dir) / "outbox.db"
+        self.recorder = FileRecorder(self.recorder_dir)
+        self.outbox = EventOutbox(self.db_path)
+        self.pipeline = PerceptionPipeline(
+            recorder=self.recorder,
+            outbox=self.outbox,
+            incident_engine=IncidentEngine(
+                min_lying_duration=3.0,
+                cooldown_seconds=30.0,
+            ),
+        )
+        self.rgb = np.zeros((360, 640, 3), dtype=np.uint8)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_pipeline_emits_valid_event_and_evidence_for_persistent_lying(self) -> None:
+        """Pipeline handles person_lying_persistent with anchor_kind first_qualifying_observation."""
+        # Person appears already lying in frame 0 at t=0.0
+        lying_det = [{"bbox": [100.0, 220.0, 260.0, 280.0], "score": 0.9, "label": "person"}]
+
+        emitted: list[dict[str, Any]] = []
+        for i in range(35):
+            t = round(i * 0.1, 2)
+            events = self.pipeline.process_frame(self.rgb, timestamp=t, frame_id=i, detections=lying_det)
+            emitted.extend(events)
+
+        self.assertEqual(len(emitted), 1, "Expected exactly 1 persistent lying event emitted by pipeline")
+        event = emitted[0]
+        payload = event["payload"]
+        self.assertEqual(payload["taxonomy"], "person_lying_persistent")
+        self.assertEqual(payload["severity"], "high")
+        self.assertNotIn("anchor_kind", payload)
+        self.assertAlmostEqual(payload["anchor_time"], 0.0, delta=0.05)
+
+        # Evidence request verification per docs/architecture/contracts.md:42
+        self.assertEqual(len(payload["evidence_requests"]), 1)
+        req = payload["evidence_requests"][0]
+        self.assertEqual(req["evidence_anchor_kind"], "first_qualifying_observation")
+        self.assertNotEqual(req["evidence_anchor_kind"], "onset")
+        self.assertAlmostEqual(req["evidence_anchor_time"], 0.0, delta=0.05)
+        self.assertAlmostEqual(req["requested_start"], -10.0, delta=0.05)
+        self.assertAlmostEqual(req["requested_end"], 20.0, delta=0.05)
+
+        # Check outbox persistence
+        pending = self.outbox.pending()
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["event"]["event_id"], event["event_id"])
+
+    def test_pipeline_emits_valid_event_and_evidence_for_person_fall(self) -> None:
+        """Pipeline handles person_fall with anchor_kind onset."""
+        # Frame 0 to 10: standing
+        standing_det = [{"bbox": [100.0, 100.0, 160.0, 260.0], "score": 0.92, "label": "person"}]
+        for i in range(11):
+            t = round(i * 0.1, 2)
+            self.pipeline.process_frame(self.rgb, timestamp=t, frame_id=i, detections=standing_det)
+
+        # Frame 11 to 15: rapid drop
+        fall_boxes = [
+            [100.0, 120.0, 165.0, 260.0],
+            [100.0, 150.0, 175.0, 260.0],
+            [100.0, 180.0, 200.0, 265.0],
+            [100.0, 210.0, 230.0, 270.0],
+            [100.0, 220.0, 260.0, 280.0],
+        ]
+        for idx, box in enumerate(fall_boxes, start=11):
+            t = round(idx * 0.1, 2)
+            self.pipeline.process_frame(self.rgb, timestamp=t, frame_id=idx, detections=[{"bbox": box, "score": 0.9, "label": "person"}])
+
+        # Frame 16 to 48: lying stationary
+        lying_det = [{"bbox": [100.0, 220.0, 260.0, 280.0], "score": 0.9, "label": "person"}]
+        emitted: list[dict[str, Any]] = []
+        for i in range(16, 48):
+            t = round(i * 0.1, 2)
+            events = self.pipeline.process_frame(self.rgb, timestamp=t, frame_id=i, detections=lying_det)
+            emitted.extend(events)
+
+        self.assertEqual(len(emitted), 1, "Expected exactly 1 fall event emitted by pipeline")
+        event = emitted[0]
+        payload = event["payload"]
+        self.assertEqual(payload["taxonomy"], "person_fall")
+        self.assertEqual(payload["severity"], "critical")
+        self.assertNotIn("anchor_kind", payload)
+
+        req = payload["evidence_requests"][0]
+        self.assertEqual(req["evidence_anchor_kind"], "onset")
+        self.assertAlmostEqual(req["requested_start"], req["evidence_anchor_time"] - 10, delta=0.05)
+        self.assertAlmostEqual(req["requested_end"], req["evidence_anchor_time"] + 20, delta=0.05)
+
+    def test_pipeline_handles_id_switch_lying_without_prior_standing(self) -> None:
+        """Pipeline correctly processes ID switch resulting in persistent lying without prior standing."""
+        # Initial track 1 standing
+        standing_det = [{"bbox": [100.0, 100.0, 160.0, 260.0], "score": 0.9, "label": "person"}]
+        self.pipeline.process_frame(self.rgb, timestamp=0.0, frame_id=0, detections=standing_det)
+
+        # Reappears at a different position lying down (new track ID) at t=3.0 across frames
+        lying_det = [{"bbox": [300.0, 220.0, 460.0, 280.0], "score": 0.9, "label": "person"}]
+        emitted: list[dict[str, Any]] = []
+        for i in range(35):
+            t = round(3.0 + i * 0.1, 2)
+            events = self.pipeline.process_frame(self.rgb, timestamp=t, frame_id=10 + i, detections=lying_det)
+            emitted.extend(events)
+
+        self.assertEqual(len(emitted), 1)
+        event = emitted[0]
+        payload = event["payload"]
+        self.assertEqual(payload["taxonomy"], "person_lying_persistent")
+        self.assertEqual(payload["severity"], "high")
+        self.assertNotIn("anchor_kind", payload)
+        self.assertAlmostEqual(payload["anchor_time"], 3.0, delta=0.05)
+        self.assertEqual(payload["evidence_requests"][0]["evidence_anchor_kind"], "first_qualifying_observation")
+        self.assertAlmostEqual(payload["evidence_requests"][0]["evidence_anchor_time"], 3.0, delta=0.05)
+
+    def test_handle_fall_incident_backward_compatibility(self) -> None:
+        """_handle_fall_incident delegates cleanly to _handle_incident without aliasing."""
+        incident = {
+            "taxonomy": "person_fall",
+            "severity": "critical",
+            "anchor_kind": "onset",
+            "anchor_time": 10.0,
+            "detection_time": 13.5,
+            "track_id": 99,
+            "confidence": 0.95,
+            "detections": [],
+        }
+        event = self.pipeline._handle_fall_incident(incident, 13.5)
+        self.assertEqual(event["payload"]["taxonomy"], "person_fall")
+        self.assertNotIn("anchor_kind", event["payload"])
+        self.assertEqual(event["payload"]["severity"], "critical")
+        self.assertEqual(event["payload"]["evidence_requests"][0]["evidence_anchor_kind"], "onset")
+        self.assertFalse(self.pipeline._handle_incident is self.pipeline._handle_fall_incident)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,8 @@ import signal
 import time
 from typing import Any
 
+from apps.edge.evidence import EvidenceLifecycle
+from apps.edge.outbox import EventOutbox
 from apps.edge.recorder import FileRecorder, Segment
 
 
@@ -145,17 +147,24 @@ def _analytics_worker(values: dict[str, Any], messages: Any, observations: Any) 
 class EdgeRuntime:
     def __init__(self, *, source: str | Path, output_dir: str | Path,
                  camera_id: str = 'lab-camera', session_id: str = 'lab-replay',
+                 core_epoch: int = 1, outbox_path: str | Path | None = None,
                  analytics_enabled: bool = True, disabled_reason: str | None = None,
                  manifest_path: str | Path | None = None, model_path: str | Path | None = None,
                  sample_fps: float = 2, mode: str = 'fast', segment_seconds: float = 2,
                  ring_seconds: float = 600, queue_capacity: int = 8, observation_capacity: int = 64,
-                 stop_timeout_seconds: float = 3, io_timeout_seconds: float = 30,
+                 stop_timeout_seconds: float = 3, drain_timeout_seconds: float | None = None,
+                 io_timeout_seconds: float = 30,
                  environment: str = 'lab', expected_artifact: dict[str, Any] | None = None) -> None:
         for name, value in (('sample_fps', sample_fps), ('segment_seconds', segment_seconds),
                             ('ring_seconds', ring_seconds), ('stop_timeout_seconds', stop_timeout_seconds),
                             ('io_timeout_seconds', io_timeout_seconds)):
             if isinstance(value, bool) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f'{name} must be finite and positive')
+        if drain_timeout_seconds is not None:
+            if isinstance(drain_timeout_seconds, bool) or not math.isfinite(drain_timeout_seconds) or drain_timeout_seconds < 0:
+                raise ValueError('drain_timeout_seconds must be finite and non-negative')
+        if type(core_epoch) is not int or core_epoch < 1:
+            raise ValueError('core_epoch must be a positive integer')
         for value in (queue_capacity, observation_capacity):
             if type(value) is not int or value < 1:
                 raise ValueError('capacities must be positive integers')
@@ -169,10 +178,14 @@ class EdgeRuntime:
         if not source.is_file():
             raise ValueError('runtime source must be an existing local file')
         self._values: dict[str, Any] = dict(source=str(source), output_dir=str(output_dir), camera_id=camera_id,
-                            session_id=session_id, manifest_path=manifest_path, model_path=model_path,
-                            sample_fps=sample_fps, mode=mode, segment_seconds=segment_seconds,
-                            ring_seconds=ring_seconds, io_timeout_seconds=io_timeout_seconds,
-                            environment=environment, expected_artifact=deepcopy(expected_artifact))
+                            session_id=session_id, core_epoch=core_epoch, manifest_path=manifest_path,
+                            model_path=model_path, sample_fps=sample_fps, mode=mode,
+                            segment_seconds=segment_seconds, ring_seconds=ring_seconds,
+                            io_timeout_seconds=io_timeout_seconds, environment=environment,
+                            expected_artifact=deepcopy(expected_artifact))
+        self._core_epoch = core_epoch
+        self._outbox_path = Path(outbox_path).resolve() if outbox_path is not None else None
+        self._reconcile_result: dict[str, Any] | None = None
         self._ring = FileRecorder(output_dir, ring_seconds, probe_timeout_seconds=io_timeout_seconds)
         self._context = mp.get_context('spawn')
         self._recorder_messages, self._recorder_sender = _channel()
@@ -188,6 +201,7 @@ class EdgeRuntime:
         self._recorder_error: str | None = None
         self._analytics_error: str | None = None
         self._stop_budget = stop_timeout_seconds
+        self._drain_budget = min(stop_timeout_seconds, 1.0) if drain_timeout_seconds is None else drain_timeout_seconds
         self._queue_capacity = queue_capacity
         self._retention = observation_capacity
         self._observations: list[dict[str, Any]] = []
@@ -198,9 +212,28 @@ class EdgeRuntime:
         self._pids: dict[str, int | None] = {'recorder': None, 'analytics': None}
         self._cleaned: set[int] = set()
 
+    def reconcile_result(self) -> dict[str, Any] | None:
+        return self._reconcile_result
+
+    def reset_session(self, session_id: str, core_epoch: int | None = None) -> None:
+        if not session_id:
+            raise ValueError('invalid session_id')
+        self._values['session_id'] = session_id
+        if core_epoch is not None:
+            if type(core_epoch) is not int or core_epoch < 1:
+                raise ValueError('core_epoch must be a positive integer')
+            self._core_epoch = core_epoch
+            self._values['core_epoch'] = core_epoch
+        else:
+            self._core_epoch += 1
+            self._values['core_epoch'] = self._core_epoch
+
     def start(self) -> 'EdgeRuntime':
         if self._started:
             raise RuntimeError('runtime already started')
+        if self._outbox_path is not None:
+            outbox = EventOutbox(self._outbox_path)
+            self._reconcile_result = EvidenceLifecycle(outbox, self._ring).reconcile()
         self._started = True
         self._recorder_state = 'starting'
         self._recorder = self._context.Process(target=_recorder_worker,
@@ -220,6 +253,9 @@ class EdgeRuntime:
                 self._observation_sender.socket.close()
             except Exception as error:
                 self._analytics_state, self._analytics_error = 'failed', type(error).__name__
+        else:
+            self._analytics_sender.socket.close()
+            self._observation_sender.socket.close()
         return self
 
     def _refresh(self) -> None:
@@ -268,6 +304,7 @@ class EdgeRuntime:
         failed = self._recorder_state == 'failed' or self._analytics_state == 'failed'
         return {'origin': 'replay', 'camera_id': self._values['camera_id'],
                 'stream_session_id': self._values['session_id'],
+                'core_epoch': self._core_epoch,
                 'outcome': 'running' if running else ('failed' if failed else 'ok'),
                 'degraded': failed,
                 'recorder': {'state': self._recorder_state, 'error': self._recorder_error,
@@ -289,17 +326,41 @@ class EdgeRuntime:
                 raise TimeoutError('runtime wait deadline exceeded')
             time.sleep(.01)
 
+    def _drain_observations(self, drain_timeout: float) -> None:
+        deadline = time.monotonic() + drain_timeout
+        while time.monotonic() < deadline and len(self._observations) < self._retention:
+            try:
+                self._observations.append(self._observation_messages.get_nowait())
+            except queue.Empty:
+                if self._observation_messages.eof:
+                    break
+                time.sleep(0.005)
+
     def stop_analytics(self) -> dict[str, Any]:
         self._refresh()
         if self._analytics is not None and self._analytics.is_alive():
             self._analytics_cancelled = True
             failed = self._analytics_state == 'failed'
             deadline = time.monotonic() + self._stop_budget
+
+            # 1. Graceful drain phase: request termination / signal child
             self._analytics.terminate()
-            self._analytics.join(max(0, deadline - time.monotonic() - min(.1, self._stop_budget / 2)))
+            drain_deadline = min(deadline, time.monotonic() + self._drain_budget)
+            while time.monotonic() < drain_deadline:
+                self._drain_observations(drain_timeout=0.01)
+                if not self._analytics.is_alive():
+                    break
+                time.sleep(0.01)
+
+            # 2. Wait until remainder of stop deadline before forced kill
+            remaining = max(0.0, deadline - time.monotonic())
+            self._analytics.join(remaining)
+
+            # 3. Forced kill if still alive
             if self._analytics.is_alive():
                 self._kill_group(self._analytics)
-                self._analytics.join(max(0, deadline - time.monotonic()))
+                self._analytics.join(0.1)
+
             self._transport_closed = True
             self._refresh()
             self._analytics_state = 'failed' if failed else 'stopped'
