@@ -182,7 +182,7 @@ class RtmposeEstimator:
 
         max_val_x = np.max(simcc_x, axis=-1)
         max_val_y = np.max(simcc_y, axis=-1)
-        scores = np.maximum(max_val_x, max_val_y)
+        scores = np.minimum(max_val_x, max_val_y)
 
         # Invert affine transform back to original image space
         pts = np.stack([x_locs, y_locs], axis=-1)  # [K, 2]
@@ -439,7 +439,11 @@ class PoseManager:
     ) -> PoseOutcome:
         """Synchronously evaluate a pose request immediately."""
         req = PoseRequest.from_dict(request) if isinstance(request, dict) else request
-        eval_time = current_time if current_time is not None else time.time()
+        eval_time = (
+            current_time
+            if current_time is not None
+            else (time.time() if req.clock_domain != "event_time" else None)
+        )
         start_t = time.perf_counter()
 
         # Epoch check
@@ -460,7 +464,7 @@ class PoseManager:
             return outcome
 
         # Deadline check
-        if eval_time > req.deadline:
+        if eval_time is not None and eval_time > req.deadline:
             outcome = PoseOutcome(
                 request_id=req.request_id,
                 camera_id=req.camera_id,

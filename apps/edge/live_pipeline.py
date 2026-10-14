@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from pathlib import Path
@@ -282,7 +281,8 @@ class LivePerceptionRunner:
             self.is_connected = True
             self.discontinuity_count += 1
             self.last_reconnect_time = time.monotonic()
-            self.pipeline.core_epoch += 1
+            new_epoch = self.pipeline.core_epoch + 1
+            self.pipeline.set_core_epoch(new_epoch)
             if new_session_id is not None:
                 self.pipeline.stream_session_id = str(new_session_id)
                 self.session_id = self.pipeline.stream_session_id
@@ -416,10 +416,12 @@ class LivePerceptionRunner:
             if self._cap is not None:
                 self._cap.release()
                 self._cap = None
+            thread = self._thread
 
-            if self._thread and self._thread.is_alive():
-                self._thread.join(timeout=timeout)
+        if thread and thread.is_alive():
+            thread.join(timeout=timeout)
 
+        with self._lock:
             if self.ring_recorder is not None:
                 self.ring_recorder.stop()
 
