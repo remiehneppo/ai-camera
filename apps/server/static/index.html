@@ -120,13 +120,22 @@
         parent.append(node);
         return node;
       };
+      let refreshing = false;
+      const evidencePlaying = () => Array.from(list.querySelectorAll("video")).some(video => !video.paused && !video.ended);
       async function refresh() {
+        if (refreshing) return;
+        if (evidencePlaying()) return;
         if (!token) { status.textContent = "Enter the dashboard token to load events."; return; }
+        refreshing = true;
         status.textContent = "Loading events…";
         try {
           const response = await fetch("/v1/events?limit=50", { headers: { Authorization: `Bearer ${token}` } });
           if (!response.ok) throw new Error(response.status === 401 ? "Dashboard token rejected." : `Request failed (${response.status}).`);
           const data = await response.json();
+          if (evidencePlaying()) return;
+          const openDetails = new Set(Array.from(list.querySelectorAll("article")).flatMap(card =>
+            Array.from(card.querySelectorAll("details[open]")).map(detail =>
+              `${card.dataset.eventKey}:${detail.querySelector("summary")?.textContent}`)));
           list.replaceChildren();
           if (!data.events.length) {
             status.textContent = "No events yet. Run the edge synthetic fixture to add one.";
@@ -136,6 +145,7 @@
             const event = row.event;
             const card = document.createElement("article");
             card.className = "event";
+            card.dataset.eventKey = JSON.stringify([event.device_id, event.event_id]);
             const header = document.createElement("header");
             add(header, "strong", event.payload.taxonomy || "Event");
             add(header, "span", event.origin, "muted");
@@ -258,11 +268,16 @@
             add(detail, "summary", "Event snapshot");
             add(detail, "pre", JSON.stringify(event, null, 2));
             card.append(detail);
+            for (const section of card.querySelectorAll("details")) {
+              section.open = openDetails.has(`${card.dataset.eventKey}:${section.querySelector("summary")?.textContent}`);
+            }
             list.append(card);
           }
-          status.textContent = `Showing ${data.events.length} event${data.events.length === 1 ? "" : "s"}. Refreshes every 3 seconds.`;
+          status.textContent = `Showing ${data.events.length} event${data.events.length === 1 ? "" : "s"}. Refreshes every 3 seconds while evidence playback is paused.`;
         } catch (error) {
           status.textContent = `${error.message} Check the API and try again.`;
+        } finally {
+          refreshing = false;
         }
       }
       async function submitReview(row, action) {
@@ -280,7 +295,7 @@
               expected_review_version: row.review.review_version,
               viewed_event_revision: event.revision,
               viewed_event_hash: row.event_hash,
-              viewed_evidence_versions: event.payload.evidence_versions || {},
+              viewed_evidence_versions: row.evidence_versions || event.payload.evidence_versions || {},
               reason: reason.trim(),
             }),
           });

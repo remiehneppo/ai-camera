@@ -10,6 +10,8 @@ from types import MappingProxyType
 from typing import Mapping
 from urllib.parse import parse_qsl, urlsplit
 
+from domain.evidence_contract import validate_storage_id
+
 
 @dataclass(frozen=True)
 class ServerConfig:
@@ -40,6 +42,8 @@ def load_server_config(environ: Mapping[str, str] | None = None) -> ServerConfig
         for token, device in device_tokens.items()
     ):
         raise ValueError("DEVICE_TOKENS must map non-empty bearer tokens to device IDs")
+    for device in device_tokens.values():
+        validate_storage_id(device)
     try:
         reviewer_tokens = json.loads(values.get("REVIEWER_TOKENS", "") or "{}")
     except (json.JSONDecodeError, TypeError):

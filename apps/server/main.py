@@ -16,6 +16,7 @@ from pymongo.errors import PyMongoError
 from starlette.concurrency import run_in_threadpool
 
 from domain.event_contract import EventValidationError, MAX_EVENT_BYTES, validate_event
+from domain.evidence_contract import validate_storage_id
 from domain.review_contract import ReviewValidationError, validate_review_request
 from apps.server.config import ServerConfig, load_server_config
 from apps.server.dataset import export_dataset_records, records_to_jsonl
@@ -343,6 +344,17 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
         except Exception:
             raise HTTPException(status_code=400, detail="X-Evidence-Metadata must be a valid JSON object")
 
+        try:
+            for value in (device_id, event_id, request_id):
+                validate_storage_id(value)
+            declared = await run_in_threadpool(store.evidence_request, device_id, event_id, request_id, metadata)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        except ReviewNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except PyMongoError:
+            raise HTTPException(status_code=503, detail="evidence ownership query unavailable")
+
         body = await request.body()
         computed_sha256 = hashlib.sha256(body).hexdigest()
         if computed_sha256 != sha256_header:
@@ -357,7 +369,10 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
             except (ValueError, TypeError):
                 raise HTTPException(status_code=422, detail="invalid size_bytes in metadata")
 
-        target_dir = Path(evidence_dir) / device_id / event_id
+        root = Path(evidence_dir).resolve()
+        target_dir = (root / device_id / event_id).resolve()
+        if not target_dir.is_relative_to(root):
+            raise HTTPException(status_code=422, detail="evidence path escapes storage root")
         target_dir.mkdir(parents=True, exist_ok=True)
         target_file = target_dir / f"{request_id}.mkv"
         temp_file = target_dir / f".{request_id}.{uuid4().hex}.tmp"
@@ -367,13 +382,29 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
                 f.write(body)
                 f.flush()
                 os.fsync(f.fileno())
-            os.replace(temp_file, target_file)
+            try:
+                # Exclusive publication also handles a retry after rename but before DB commit.
+                os.link(temp_file, target_file)
+            except FileExistsError:
+                if target_file.is_symlink():
+                    raise HTTPException(status_code=409, detail="evidence target is not a regular artifact")
+                with target_file.open("rb") as existing:
+                    if hashlib.file_digest(existing, "sha256").hexdigest() != computed_sha256:
+                        raise HTTPException(status_code=409, detail="finalized evidence bytes are immutable")
+            for directory in (target_dir, target_dir.parent, root, root.parent):
+                fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+        except HTTPException:
+            raise
         except Exception as exc:
-            if temp_file.exists():
-                temp_file.unlink(missing_ok=True)
             raise HTTPException(status_code=500, detail="failed to store evidence file") from exc
+        finally:
+            temp_file.unlink(missing_ok=True)
 
-        manifest_data = dict(metadata)
+        manifest_data = {**metadata, **declared}
         manifest_data["sha256"] = computed_sha256
         manifest_data["size_bytes"] = size_bytes
 
@@ -386,6 +417,8 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
                 manifest_data,
                 str(target_file),
             )
+        except EventHashConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
         except PyMongoError:
             raise HTTPException(status_code=503, detail="database unavailable; retry evidence upload")
 
@@ -410,38 +443,16 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
             raise HTTPException(status_code=401, detail="invalid credentials", headers={"WWW-Authenticate": "Bearer"})
 
         try:
-            record = await run_in_threadpool(store.get_evidence, device_id, event_id, request_id)
+            record = await run_in_threadpool(store.get_evidence, device_id, event_id, request_id, verify_file=True)
         except PyMongoError:
             raise HTTPException(status_code=503, detail="database unavailable")
 
         if not record:
             raise HTTPException(status_code=404, detail="evidence not found")
 
-        file_path_val = record.get("file_path")
-        file_path = Path(file_path_val) if file_path_val else None
-        if not file_path or not file_path.is_file():
-            if record.get("manifest") and isinstance(record["manifest"], dict):
-                record["manifest"]["completeness"] = "missing"
-                record["manifest"]["file_status"] = "missing"
-            raise HTTPException(status_code=404, detail="evidence file missing on disk")
-
-        expected_size = record.get("manifest", {}).get("size_bytes")
-        expected_sha256 = record.get("manifest", {}).get("sha256")
-        file_size = file_path.stat().st_size
-        if expected_size is not None and file_size != int(expected_size):
-            if record.get("manifest") and isinstance(record["manifest"], dict):
-                record["manifest"]["completeness"] = "corrupt"
-                record["manifest"]["file_status"] = "corrupt"
-            raise HTTPException(status_code=404, detail="evidence file corrupt on disk: size mismatch")
-
-        if expected_sha256:
-            with open(file_path, "rb") as f:
-                actual_sha256 = hashlib.file_digest(f, "sha256").hexdigest()
-            if actual_sha256 != str(expected_sha256).lower():
-                if record.get("manifest") and isinstance(record["manifest"], dict):
-                    record["manifest"]["completeness"] = "corrupt"
-                    record["manifest"]["file_status"] = "corrupt"
-                raise HTTPException(status_code=404, detail="evidence file corrupt on disk: sha256 mismatch")
+        file_status = record.get("manifest", {}).get("file_status")
+        if file_status in {"missing", "corrupt"}:
+            raise HTTPException(status_code=404, detail=f"evidence file {file_status} on disk")
 
         return record
 
@@ -457,29 +468,21 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
             raise HTTPException(status_code=401, detail="invalid credentials", headers={"WWW-Authenticate": "Bearer"})
 
         try:
-            record = await run_in_threadpool(store.get_evidence, device_id, event_id, request_id)
+            record = await run_in_threadpool(store.get_evidence, device_id, event_id, request_id, verify_file=True)
         except PyMongoError:
             raise HTTPException(status_code=503, detail="database unavailable")
 
         if not record:
             raise HTTPException(status_code=404, detail="evidence not found")
 
+        file_status = record.get("manifest", {}).get("file_status")
+        if file_status in {"missing", "corrupt"}:
+            raise HTTPException(status_code=404, detail=f"evidence file {file_status} on disk")
         file_path = Path(record["file_path"])
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="evidence file missing on disk")
 
-        expected_size = record.get("manifest", {}).get("size_bytes")
-        expected_sha256 = record.get("manifest", {}).get("sha256")
         file_size = file_path.stat().st_size
-
-        if expected_size is not None and file_size != int(expected_size):
-            raise HTTPException(status_code=404, detail="evidence file corrupt on disk: size mismatch")
-
-        if expected_sha256:
-            with open(file_path, "rb") as f:
-                actual_sha256 = hashlib.file_digest(f, "sha256").hexdigest()
-            if actual_sha256 != str(expected_sha256).lower():
-                raise HTTPException(status_code=404, detail="evidence file corrupt on disk: sha256 mismatch")
         range_header = request.headers.get("range")
 
         if not range_header:

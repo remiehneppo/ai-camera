@@ -45,20 +45,29 @@ class IncidentEngine:
     def reset(self) -> None:
         self._states.clear()
 
+    def observation_gap(self):
+        for tid, state in self._states.items():
+            self._states[tid] = _TrackIncidentState(
+                last_alert_time=state.last_alert_time, triggered=state.triggered)
+
     def process_tracks(self, tracks: list[Track], timestamp: float) -> list[dict[str, Any]]:
         ts = float(timestamp)
         incidents: list[dict[str, Any]] = []
+
+        observed_ids = {track.track_id for track in tracks}
+        for tid, state in list(self._states.items()):
+            if tid not in observed_ids:
+                if state.last_alert_time is None or ts - state.last_alert_time >= self.cooldown_seconds:
+                    del self._states[tid]
+                    continue
+                self._states[tid] = _TrackIncidentState(
+                    last_alert_time=state.last_alert_time, triggered=state.triggered)
 
         for track in tracks:
             tid = track.track_id
             if tid not in self._states:
                 self._states[tid] = _TrackIncidentState()
             state = self._states[tid]
-
-            # Cooldown check
-            if state.last_alert_time is not None:
-                if (ts - state.last_alert_time) < self.cooldown_seconds:
-                    continue
 
             # Pose assessment
             is_standing = (
@@ -113,7 +122,9 @@ class IncidentEngine:
                         state.onset_time = ts
                     elif state.lying_start_time is not None:
                         lying_duration = ts - state.lying_start_time
-                        if lying_duration > self.min_lying_duration:
+                        if (lying_duration > self.min_lying_duration
+                                and (state.last_alert_time is None
+                                     or ts - state.last_alert_time >= self.cooldown_seconds)):
                             # Confirmed fall incident!
                             anchor_time = state.onset_time if state.onset_time is not None else ts
                             recent_dets = [

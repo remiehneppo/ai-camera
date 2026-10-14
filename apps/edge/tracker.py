@@ -93,6 +93,8 @@ class Track:
                 aspect_ratio=ar,
             )
         )
+        # shortcut: five seconds/256 observations cover lab sampling; resize before high-FPS acceptance.
+        self.history[:] = [obs for obs in self.history if obs.timestamp >= float(timestamp) - 5][-256:]
 
     def update(self, bbox: list[float], score: float, timestamp: float) -> None:
         self.bbox = [float(x) for x in bbox]
@@ -159,6 +161,10 @@ class ByteTracker:
         self.max_lost_time: float = float(max_lost_time)
         self._next_track_id: int = 1
         self.tracks: list[Track] = []
+
+    def reset(self):
+        self.tracks.clear()
+        self._next_track_id = 1
 
     def _match_iou(
         self,
@@ -256,6 +262,7 @@ class ByteTracker:
             if (ts - track.last_time) > self.max_lost_time:
                 track.mark_removed()
 
+        self.tracks[:] = [t for t in self.tracks if t.state != "removed"]
         return [t for t in self.tracks if t.state == "active"]
 
     def get_all_tracks(self) -> list[Track]:

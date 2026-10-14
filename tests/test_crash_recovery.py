@@ -134,7 +134,7 @@ class TestCrashRecovery(unittest.TestCase):
             )
         return {"event": event, "request": req}
 
-    def test_orphan_temp_file_cleanup_edge(self) -> None:
+    def test_unknown_temp_files_are_preserved_edge(self) -> None:
         manifest_dir = self.recorder_dir / "manifests"
         manifest_dir.mkdir(parents=True, exist_ok=True)
         session_dir = self.recorder_dir / "sess-crash"
@@ -157,11 +157,12 @@ class TestCrashRecovery(unittest.TestCase):
         # Run reconciliation and cleanup
         res = reconcile_and_cleanup(self.outbox, self.recorder)
 
-        # Temp files must be removed
-        self.assertFalse(tmp_clip.exists())
-        self.assertFalse(tmp_json.exists())
-        self.assertFalse(tmp_concat.exists())
-        self.assertFalse(session_tmp.exists())
+        # Unknown ownership must not cause deletion during active recording.
+        self.assertTrue(tmp_clip.exists())
+        self.assertTrue(tmp_json.exists())
+        self.assertTrue(tmp_concat.exists())
+        self.assertTrue(session_tmp.exists())
+        self.assertEqual(res["cleaned_files"], [])
 
         # Legitimate file must remain
         self.assertTrue(legit_file.exists())
@@ -195,7 +196,8 @@ class TestCrashRecovery(unittest.TestCase):
         sess_id = str(uuid4())
         self._create_event_with_request(req_id, state="pending", session_id=sess_id, anchor_time=10.0)
 
-        # Session has no segments or all segments are past requested interval
+        # An explicitly ended session cannot produce its missing footage.
+        self.outbox.ended_sessions([sess_id])
         res = reconcile_and_cleanup(self.outbox, self.recorder)
 
         # Check outbox state: must transition to 'failed' with error about expired ring segments
@@ -204,7 +206,7 @@ class TestCrashRecovery(unittest.TestCase):
         self.assertIsNotNone(target)
         assert target is not None
         self.assertEqual(target["state"], "failed")
-        self.assertIn("ring segments expired", str(target["last_error"]).lower())
+        self.assertEqual(target["receipt"]["build_state"], "failed")
 
     def test_mid_flight_crash_and_restart_resuming_valid_clips(self) -> None:
         req_id = "req-valid-resume"

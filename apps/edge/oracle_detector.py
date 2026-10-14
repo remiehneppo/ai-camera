@@ -14,7 +14,8 @@ from fractions import Fraction
 from time import perf_counter
 
 
-class OracleDetector:
+class OnnxDetector:
+    accepted_origins: tuple[str, ...] = ()
     def __init__(self, manifest_path: str | Path, model_path: str | Path, *, environment: str = "lab",
                  expected_artifact: dict[str, Any] | None = None) -> None:
         from domain.model_manifest import load_manifest
@@ -48,12 +49,18 @@ class OracleDetector:
                                runtime=dict(name="onnxruntime", version=ort.__version__),
                                provider=self.session.get_providers()[0])
 
+    @property
+    def provenance(self):
+        return deepcopy(self._provenance)
+
     def detect(self, rgb: "np.ndarray", frame: dict[str, Any]) -> dict[str, Any]:
         import cv2
         import numpy as np
 
         fields = ("camera_id", "stream_session_id", "core_epoch", "origin", "frame_id", "pts", "time_base", "event_time")
         metadata = {name: frame.get(name) for name in fields} if isinstance(frame, dict) else {}
+        if isinstance(frame, dict) and "clock_domain" in frame:
+            metadata["clock_domain"] = frame["clock_domain"]
         result: dict[str, Any] = dict(schema_version=1, **metadata, detection_status="failed", detections=[],
                       transform=None, provenance=deepcopy(self._provenance),
                       timings=dict(preprocess_ms=0.0, inference_ms=0.0, postprocess_ms=0.0), error=None)
@@ -62,8 +69,8 @@ class OracleDetector:
                 raise ValueError("missing frame lineage metadata")
             if any(not isinstance(frame[name], str) or not frame[name] for name in ("camera_id", "stream_session_id")):
                 raise ValueError("camera and stream session must be nonempty strings")
-            if frame["origin"] != "replay":
-                raise ValueError("oracle accepts replay lineage only")
+            if frame["origin"] not in self.accepted_origins:
+                raise ValueError("detector does not support this source origin")
             if any(type(frame[name]) is not int for name in ("core_epoch", "frame_id", "pts")) or frame["core_epoch"] < 1 or frame["frame_id"] < 0:
                 raise ValueError("invalid frame integer metadata")
             if not isinstance(frame["time_base"], str) or Fraction(frame["time_base"]) <= 0:
@@ -135,3 +142,13 @@ class OracleDetector:
         except Exception as exc:
             result.update(detection_status="failed", detections=[], error=dict(type=type(exc).__name__, message=str(exc)))
             return result
+
+
+class OracleDetector(OnnxDetector):
+    """Reference adapter: replay lineage only."""
+    accepted_origins = ("replay",)
+
+
+class LiveDetector(OnnxDetector):
+    """Live adapter sharing the pinned ONNX inference implementation."""
+    accepted_origins = ("live",)

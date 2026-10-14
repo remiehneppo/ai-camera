@@ -245,6 +245,7 @@ class TestPerceptionPipeline(unittest.TestCase):
                 recorder=self.recorder,
                 outbox=self.outbox,
                 detector=detector,
+                origin="replay",
                 stream_session_id=self.session_id,
             )
             # Process a blank frame through OracleDetector
@@ -252,6 +253,7 @@ class TestPerceptionPipeline(unittest.TestCase):
             events = pipeline.process_frame(frame, timestamp=1.0, frame_id=1)
             self.assertEqual(events, [])
             self.assertEqual(len(pipeline.tracker.tracks), 0)
+            self.assertEqual(pipeline.last_observation["detection_status"], "ok_empty")
 
     def test_pipeline_cooldown_suppresses_rapid_duplicate_events(self) -> None:
         """Cooldown period (30s) prevents repeated alerts for same track."""
@@ -430,7 +432,7 @@ class TestEndToEndDelivery(unittest.TestCase):
         request_id = event["payload"]["evidence_requests"][0]["request_id"]
 
         # Trigger end-to-end upload
-        uploaded = self.pipeline.trigger_upload()
+        uploaded = self.pipeline.trigger_upload(finish_sessions=[self.pipeline.stream_session_id])
         self.assertGreaterEqual(uploaded, 1)
 
         # Query server GET /v1/events with dashboard credentials

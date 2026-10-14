@@ -164,6 +164,27 @@ class FileRecorderTests(unittest.TestCase):
         self.assertEqual([(item.start_seconds, item.end_seconds) for item in self.recorder.segments("live")],
                          [(3.0, 3.9), (4.0, 4.9), (5.0, 5.9), (6.0, 6.9), (7.0, 7.9), (8.0, 8.9)])
 
+    def test_live_ring_prunes_before_eof_and_preserves_pinned_segments(self):
+        release = threading.Event()
+        fifo, feeder, failures = self.feed_pipe(self.live_source(), release, share=.8)
+        try:
+            with self.recorder.ingest(fifo, "bounded-live", segment_seconds=1, poll_seconds=.02):
+                self.assertTrue(self.wait_until(lambda: len(self.recorder.segments("bounded-live")) >= 4))
+                first = self.recorder.segments("bounded-live")[0]
+                self.recorder.pin("keep-first", "bounded-live", first.start_seconds, first.end_seconds, "event")
+                self.recorder.ring_seconds = 1
+                self.assertTrue(self.wait_until(lambda: len(self.recorder.segments("bounded-live")) <= 3))
+                kept = self.recorder.segments("bounded-live")
+                self.assertIn(first, kept)
+                latest = max(item.end_seconds for item in kept)
+                self.assertTrue(all(item == first or item.end_seconds >= latest - 1 for item in kept))
+                self.assertTrue(feeder.is_alive(), "retention must apply before input EOF")
+                release.set()
+        finally:
+            release.set()
+            feeder.join(10)
+        self.assertFalse(failures)
+
     def test_pin_during_ingest_reports_collection_then_finalizes_after_coverage(self):
         release = threading.Event()
         fifo, feeder, failures = self.feed_pipe(self.live_source(), release)
@@ -806,7 +827,11 @@ class FileRecorderTests(unittest.TestCase):
         changed["payload"]["evidence_requests"] = [make_evidence_request("replacement", request["session_id"], "first_qualifying_observation", 4, supersedes_request_id="intent")]
         restarted.enqueue(changed)
         restarted.reconcile_evidence(self.recorder, finish_sessions=[request["session_id"]])
-        self.assertEqual(restarted.evidence_requests()[0], result)
+        recovered = restarted.evidence_requests()[0]
+        self.assertEqual(recovered["state"], "acknowledged")
+        self.assertEqual(recovered["receipt"]["artifact"], result["receipt"]["artifact"])
+        self.assertEqual(recovered["receipt"]["completeness"], "partial")
+        self.assertEqual(recovered["receipt"]["transfer_receipt"]["location"], "server/clip-1")
         self.assertEqual(restarted.evidence_requests()[1]["receipt"]["supersedes_request_id"], "intent")
 
     def test_late_pin_reports_partial_after_watermark_prunes_raw_segments(self):

@@ -14,6 +14,13 @@ export REVIEWER_TOKENS='{"reviewer-1":"replace-with-reviewer-token-1","reviewer-
 docker compose up --build
 ```
 
+Server evidence now uses the persistent `server-evidence` volume at the existing
+`/tmp/ai-camera-evidence` path. Before recreating a server from an older stack,
+copy its existing clips into that volume; adding a volume does not migrate the
+old container's writable layer. Keep the original device/event directories so
+stored MongoDB file paths remain valid. The image initializes the directory for
+its non-root UID 10001. Python 3.12 matches the pinned NumPy/OpenCV lab runtime.
+
 After the server starts, validate the effective server configuration and probe MongoDB from inside the server container:
 
 ```sh

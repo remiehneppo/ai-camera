@@ -17,6 +17,8 @@ Conformance chạy cùng application consumer với hai implementation: original
 
 Implementation note (#11, `e47d6cf`): `OracleDetector` và pixel file replay là detector-stage oracle/conformance tool, không phải implementation đầy đủ của port lifecycle `PerceptionPipeline`. Canonical output có camera/session/epoch/frame, source PTS/event-time, original-coordinate boxes, transform/model/config/runtime provenance và detection status. Tracking/pose/lifecycle/queue-pressure/native conformance còn mở. Bằng chứng: [log #11](../logs/2026-10-12-ticket-11.md).
 
+Implementation note (2026-10-14): `PerceptionExecution` tập trung execution, detection status, lineage validation và public model provenance cho edge processing/preview. `OracleDetector` chỉ nhận replay; `LiveDetector` dùng chung ONNX implementation và giữ origin live. Execution có cache một observation theo toàn bộ frame metadata trên cùng handle; caller chỉ chia sẻ handle khi model/config/source tương thích. Edge loại duplicate/stale trước tracker, reset state khi camera/session/epoch/origin/config thay đổi; explicit failed/missing/stale/skipped ngắt chuỗi temporal evidence chưa phát event, giữ cooldown và event đã persist. Preview đổi session khi chuyển nguồn/loop file; file dùng capture PTS, RTSP dùng acquisition monotonic clock được ghi rõ, chưa chứng minh mapping sang clock recorder. Đây là phần cải thiện Python lab, chưa hoàn tất lifecycle/pose/native conformance của port ở trên.
+
 ## 2. Event snapshot và identity
 
 Mỗi AI revision là **full snapshot**, không phải delta. Identity revision là `(authenticated device_id, event_id, revision)`, revision là số nguyên dương tăng dần do edge cấp bền vững. Payload chứa schema version, camera/session, pipeline ID/version, taxonomy, origin, timestamps/uncertainty, lifecycle/severity/score, tracks/ROI, model/config/calibration provenance và evidence request references.
@@ -53,6 +55,8 @@ MVP pin khi event cần evidence được persist; **không tạo candidate pins
 5. Release idempotent theo request ID sau durable evidence receipt và retention policy; overlap còn owner khác vẫn giữ segment. Đổi requested interval không release artifact cũ trước khi policy cho phép. Candidate cancellation chỉ áp dụng nếu policy candidate hold riêng đã được duyệt.
 
 Không có distributed transaction giữa analytics DB và recorder. RPC deadline/retry/query là bounded; khi recorder không truy cập được, lưu pending + operational fault, reconcile khi phục hồi. Ring hết trước recovery không thể tái tạo video đã mất.
+
+Implementation note (2026-10-14): `EvidenceLifecycle` là chủ orchestration persist intent → pin → finalize → transfer receipt/recovery. Các entry point outbox/uploader cũ chuyển tiếp tới cùng module. File lock trên mỗi recorder root tuần tự hóa các coordinator trong cùng process hoặc khác process; recorder tiếp tục ghi độc lập. `trigger_upload()` không tự kết thúc session; caller EOF/session-loss phải truyền `finish_sessions` rõ. Recovery lấy status/manifest receipt từ recorder, không tự suy completeness từ tên file. Recorder dọn scratch của pin đã biết dưới SQLite write lock dùng chung với finalize; file chưa xác định ownership được giữ lại. Request lỗi I/O tạm thời giữ khả năng retry; receipt đã ACK được phục hồi vào outbox. Schema lưu trữ và receipt giữ nguyên; không thêm timeout policy.
 
 ### 3.2 File commit
 

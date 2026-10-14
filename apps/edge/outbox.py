@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sqlite3
-import subprocess
 from typing import Any
 
 from domain.event_contract import canonical_event_hash, validate_event, validate_revision_identity
@@ -122,43 +121,29 @@ class EventOutbox:
                  "receipt": json.loads(row["receipt_json"]) if row["receipt_json"] else None,
                  "last_error": row["last_error"]} for row in rows]
 
-    def reconcile_evidence(self, recorder, *, finish_sessions=()) -> int:
-        """Retry durable intents; ended replay sessions explicitly finalize partial/missing."""
+    def update_evidence(self, request_id, *, state=None, receipt=None, error=None):
         with self._connect() as db:
-            db.executemany("INSERT OR IGNORE INTO ended_recorder_sessions VALUES(?)", [(session,) for session in finish_sessions])
-            ended = {row[0] for row in db.execute("SELECT session_id FROM ended_recorder_sessions")}
-        completed = 0
-        for request in self.evidence_requests():
-            if request["state"] in {"fulfilled", "partial"}:
-                continue
-            request_id = request["request_id"]
-            owner = f'{request["device_id"]}/{request["event_id"]}/{request["revision"]}'
-            try:
-                pin = recorder.pin(request_id, request["session_id"], request["requested_start"], request["requested_end"], owner)
-                with self._connect() as db:
-                    db.execute("UPDATE evidence_requests SET state='collecting',receipt_json=?,last_error=NULL WHERE request_id=?",
-                               (json.dumps(pin), request_id))
-                status = recorder.pin_status(request_id)
-                if status["state"] == "collecting" and request["session_id"] not in ended:
-                    continue
-                receipt = recorder.finalize_pin(request_id, allow_partial=request["session_id"] in ended,
-                                                request_metadata={key: request[key] for key in (
-                                                    "evidence_anchor_kind", "evidence_anchor_time", "mapping_uncertainty",
-                                                    "policy_version", "supersedes_request_id")})
-                state = "failed" if receipt["build_state"] == "failed" else (
-                    "fulfilled" if receipt["completeness"] == "complete" else "partial")
-                with self._connect() as db:
-                    db.execute("UPDATE evidence_requests SET state=?,receipt_json=?,last_error=NULL WHERE request_id=?",
-                               (state, json.dumps(receipt), request_id))
-                completed += 1
-            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, sqlite3.Error) as exc:
-                with self._connect() as db:
-                    db.execute("UPDATE evidence_requests SET state='failed',last_error=? WHERE request_id=?", (str(exc)[:512], request_id))
-        return completed
+            if state is None:
+                db.execute("UPDATE evidence_requests SET last_error=? WHERE request_id=?",
+                           (str(error)[:512] if error else None, request_id))
+            else:
+                db.execute("UPDATE evidence_requests SET state=?, receipt_json=COALESCE(?,receipt_json), last_error=? WHERE request_id=?",
+                           (state, json.dumps(receipt) if receipt is not None else None,
+                            str(error)[:512] if error else None, request_id))
+
+    def ended_sessions(self, finish_sessions=()):
+        with self._connect() as db:
+            db.executemany("INSERT OR IGNORE INTO ended_recorder_sessions VALUES(?)",
+                           [(session,) for session in finish_sessions])
+            return {row[0] for row in db.execute("SELECT session_id FROM ended_recorder_sessions")}
+
+    def reconcile_evidence(self, recorder, *, finish_sessions=()) -> int:
+        from apps.edge.evidence import EvidenceLifecycle
+        return EvidenceLifecycle(self, recorder).reconcile(finish_sessions=finish_sessions)["recovered_fulfilled"]
 
     def reconcile_and_cleanup(self, recorder: Any) -> dict[str, Any]:
-        from apps.edge.uploader import reconcile_and_cleanup
-        return reconcile_and_cleanup(self, recorder)
+        from apps.edge.evidence import EvidenceLifecycle
+        return EvidenceLifecycle(self, recorder).reconcile()
 
     def pending(self) -> list[dict[str, Any]]:
         with self._connect() as db:

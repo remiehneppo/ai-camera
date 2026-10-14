@@ -19,6 +19,7 @@ def main() -> int:
         from pymongo import MongoClient
         from pymongo.errors import PyMongoError
 
+        client: MongoClient[dict[str, object]]
         with MongoClient(config.mongo_uri, serverSelectionTimeoutMS=2000) as client:
             client.admin.command("ping")
     except ImportError:

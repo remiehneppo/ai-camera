@@ -26,7 +26,7 @@ def redact_sensitive_data(item: Any) -> Any:
         cleaned: dict[str, Any] = {}
         for key, value in item.items():
             key_lower = str(key).lower()
-            if any(substring in key_lower for substring in SENSITIVE_KEY_SUBSTRINGS):
+            if key_lower == "file_path" or any(substring in key_lower for substring in SENSITIVE_KEY_SUBSTRINGS):
                 continue
             cleaned[key] = redact_sensitive_data(value)
         return cleaned
@@ -114,6 +114,7 @@ def export_dataset_records(
             manifest_details = m.get("manifest", {})
             evidence_summaries.append({
                 "request_id": m.get("request_id"),
+                "manifest_version": m.get("manifest_version", 1),
                 "location": sanitized_location,
                 "sha256": manifest_details.get("sha256"),
                 "size_bytes": manifest_details.get("size_bytes"),

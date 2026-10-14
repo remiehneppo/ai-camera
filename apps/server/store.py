@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from copy import deepcopy
 import hashlib
 from pathlib import Path
 from typing import Any
@@ -225,6 +226,10 @@ class EventStore:
             })
             row["review"]["audit"] = audits.get(key, [])
             row["evidence"] = evidences.get(key, [])
+            row["evidence_versions"] = {
+                **event["payload"].get("evidence_versions", {}),
+                **{item["request_id"]: item.get("manifest_version", 1) for item in row["evidence"]},
+            }
         return rows
 
     def record_review(self, key: dict[str, str], request: dict[str, Any], actor: str) -> dict[str, Any]:
@@ -253,7 +258,11 @@ class EventStore:
             viewed_event = viewed["event"]
             if meaningful_content_hash(viewed_event) != meaningful_content_hash(current_event):
                 raise ReviewConflict("event content changed; refetch before reviewing")
-            expected_evidence = current_event["payload"].get("evidence_versions", {})
+            manifests = list(self.evidence_manifests.find(key, {"_id": 0}, session=session))
+            expected_evidence = {
+                **current_event["payload"].get("evidence_versions", {}),
+                **{item["request_id"]: item.get("manifest_version", 1) for item in manifests},
+            }
             if request["viewed_evidence_versions"] != expected_evidence:
                 raise ReviewConflict("evidence version changed; refetch before reviewing")
             try:
@@ -271,6 +280,7 @@ class EventStore:
                 "reviewed_event_revision": request["viewed_event_revision"],
                 "reviewed_event_hash": request["viewed_event_hash"],
                 "viewed_evidence_versions": request["viewed_evidence_versions"],
+                "reviewed_evidence_manifests": deepcopy(manifests),
                 "updated_at": now,
             }
             updated.pop("audit", None)
@@ -284,6 +294,7 @@ class EventStore:
                 "viewed_event_revision": request["viewed_event_revision"],
                 "viewed_event_hash": request["viewed_event_hash"],
                 "viewed_evidence_versions": request["viewed_evidence_versions"],
+                "reviewed_evidence_manifests": deepcopy(manifests),
                 "created_at": now,
             }
             self.reviews.replace_one(key, updated, upsert=True, session=session)
@@ -300,12 +311,34 @@ class EventStore:
                 read_preference=ReadPreference.PRIMARY,
             )
 
+    def evidence_request(self, device_id: str, event_id: str, request_id: str,
+                         metadata: dict[str, Any]) -> dict[str, Any]:
+        selector: dict[str, Any] = {
+            "device_id": device_id, "event_id": event_id,
+            "event.payload.evidence_requests.request_id": request_id,
+        }
+        owner = metadata.get("owner")
+        if owner is not None:
+            prefix = f"{device_id}/{event_id}/"
+            if not isinstance(owner, str) or not owner.startswith(prefix) or not owner[len(prefix):].isdigit():
+                raise ValueError("evidence owner does not match event")
+            selector["revision"] = int(owner[len(prefix):])
+        row = self.revisions.find_one(selector, sort=[("revision", 1)])
+        if row is None:
+            raise ReviewNotFound("declared event evidence request not found")
+        declared = next(item for item in row["event"]["payload"]["evidence_requests"]
+                        if item["request_id"] == request_id)
+        for name, value in declared.items():
+            if name in metadata and metadata[name] != value:
+                raise ValueError(f"evidence {name} does not match declared request")
+        return {**declared, "owner": f"{device_id}/{event_id}/{row['revision']}"}
+
     def record_evidence(
         self, device_id: str, event_id: str, request_id: str, manifest_data: dict[str, Any], file_path: str
     ) -> dict[str, Any]:
         now = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
         key = {"device_id": device_id, "event_id": event_id, "request_id": request_id}
-        doc = {
+        doc: dict[str, Any] = {
             "device_id": device_id,
             "event_id": event_id,
             "request_id": request_id,
@@ -315,9 +348,27 @@ class EventStore:
         }
 
         def commit(session: Any) -> dict[str, Any]:
+            existing = self.evidence_manifests.find_one(key, {"_id": 0}, session=session)
+            if existing:
+                for field in ("sha256", "size_bytes"):
+                    if existing["manifest"].get(field) != manifest_data.get(field):
+                        raise EventHashConflict("finalized evidence bytes are immutable")
+                for field in ("session_id", "owner", "requested_start", "requested_end",
+                              "evidence_anchor_kind", "evidence_anchor_time", "mapping_uncertainty",
+                              "policy_version", "supersedes_request_id"):
+                    if field in existing["manifest"] and existing["manifest"][field] != manifest_data.get(field):
+                        raise EventHashConflict("evidence request identity and interval are immutable")
+                if existing["manifest"] == manifest_data and existing["file_path"] == file_path:
+                    return existing
+            doc["manifest_version"] = existing.get("manifest_version", 1) + 1 if existing else 1
+            event_key = {"device_id": device_id, "event_id": event_id}
+            # Review, event updates and evidence publication share a transaction write guard.
+            self.current.update_one(event_key, {"$inc": {"review_guard": 1}}, session=session)
             self.evidence_manifests.replace_one(key, doc, upsert=True, session=session)
             review = self.reviews.find_one({"device_id": device_id, "event_id": event_id}, session=session)
-            if review and review.get("decision") != "unreviewed":
+            meaningful = ("completeness", "actual_range", "actual_ranges", "file_status")
+            changed = existing is None or any(existing["manifest"].get(k) != manifest_data.get(k) for k in meaningful)
+            if review and review.get("decision") != "unreviewed" and changed:
                 review["needs_re_review"] = True
                 self.reviews.replace_one(
                     {"device_id": device_id, "event_id": event_id}, review, session=session
@@ -358,7 +409,7 @@ class EventStore:
         if not file_path or not file_path.is_file():
             manifest["completeness"] = "missing"
             manifest["file_status"] = "missing"
-            return doc
+            return self.record_evidence(device_id, event_id, request_id, manifest, doc["file_path"])
 
         expected_size = manifest.get("size_bytes")
         expected_sha256 = manifest.get("sha256")
@@ -367,7 +418,7 @@ class EventStore:
         if expected_size is not None and actual_size != int(expected_size):
             manifest["completeness"] = "corrupt"
             manifest["file_status"] = "corrupt"
-            return doc
+            return self.record_evidence(device_id, event_id, request_id, manifest, doc["file_path"])
 
         if expected_sha256:
             with open(file_path, "rb") as stream:
@@ -375,7 +426,7 @@ class EventStore:
             if actual_sha256 != str(expected_sha256).lower():
                 manifest["completeness"] = "corrupt"
                 manifest["file_status"] = "corrupt"
-                return doc
+                return self.record_evidence(device_id, event_id, request_id, manifest, doc["file_path"])
 
         return doc
 
@@ -425,12 +476,17 @@ class EventStore:
                 ).sort("review_version", 1)
             )
 
-            manifests = list(
-                self.evidence_manifests.find(
-                    {"device_id": device_id, "event_id": event_id},
-                    {"_id": 0},
-                )
-            )
+            manifests = review.get("reviewed_evidence_manifests")
+            if manifests is None:
+                # Legacy reviews have no snapshot: include only exactly matching stored versions.
+                viewed_versions = review.get("viewed_evidence_versions", {})
+                manifests = [item for item in self.evidence_manifests.find(
+                    {"device_id": device_id, "event_id": event_id}, {"_id": 0})
+                    if viewed_versions.get(item["request_id"]) == item.get("manifest_version", 1)]
+                if set(viewed_versions) != {item["request_id"] for item in manifests}:
+                    if not include_ambiguous:
+                        continue
+                    review = {**review, "needs_re_review": True}
 
             results.append({
                 "review": review,

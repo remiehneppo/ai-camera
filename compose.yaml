@@ -32,10 +32,14 @@ services:
       DEVICE_TOKENS: ${DEVICE_TOKENS:?Set DEVICE_TOKENS to a JSON object mapping bearer tokens to device IDs}
       DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:?Set DASHBOARD_TOKEN before starting the lab stack}
       REVIEWER_TOKENS: ${REVIEWER_TOKENS:-}
+      EVIDENCE_DIR: /tmp/ai-camera-evidence
+    volumes:
+      - server-evidence:/tmp/ai-camera-evidence
     ports:
       - "127.0.0.1:8000:8000"
     restart: unless-stopped
 
 volumes:
+  server-evidence:
   mongo-data:
     name: ai-camera-oc-mongo-data-7.0

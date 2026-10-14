@@ -11,12 +11,13 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from uuid import UUID, uuid4
+from typing import Any
 
 from apps.edge.outbox import EventOutbox
 from domain.event_contract import validate_event
 
 
-def make_event(device_id: str, camera_id: str, event_id: UUID | None = None) -> dict[str, object]:
+def make_event(device_id: str, camera_id: str, event_id: UUID | None = None) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
     return {
         "schema_version": 1,
@@ -50,7 +51,7 @@ def _api_url(base_url: str) -> str:
     return base_url.rstrip("/") + "/v1/events"
 
 
-def _validate_receipt(receipt: object, item: dict[str, object]) -> dict[str, object]:
+def _validate_receipt(receipt: object, item: dict[str, Any]) -> dict[str, object]:
     event = item["event"]
     expected = {
         "device_id": event["device_id"],
@@ -109,17 +110,18 @@ def main() -> int:
         outbox.enqueue(event)
         print(f"queued event_id={event['event_id']}")
     if args.record_file:
+        from apps.edge.evidence import EvidenceLifecycle
         from apps.edge.recorder import FileRecorder
         recorder = FileRecorder(args.recorder_root)
         sessions = {item["session_id"] for item in outbox.evidence_requests()
                     if item["state"] in {"requested", "collecting"}}
         # Pin before writing/pruning; restart retries the same durable intent.
-        outbox.reconcile_evidence(recorder)
+        EvidenceLifecycle(outbox, recorder).reconcile()
         for session in sessions:
             if not recorder.segments(session):
                 recorder.record_file(args.record_file, session)
-        count = outbox.reconcile_evidence(recorder, finish_sessions=sessions)
-        print(f"evidence_finalized={count}")
+        count = EvidenceLifecycle(outbox, recorder).reconcile( finish_sessions=sessions)
+        print(f"evidence_finalized={count['recovered_fulfilled']}")
     if args.no_send:
         print(f"pending={len(outbox.pending())}")
         return 0

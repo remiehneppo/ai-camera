@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from fractions import Fraction
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import numpy as np
 
+from apps.edge.evidence import EvidenceLifecycle
 from apps.edge.incident import IncidentEngine
-from apps.edge.oracle_detector import OracleDetector
+from apps.edge.oracle_detector import OnnxDetector
+from apps.edge.perception import PerceptionExecution
 from apps.edge.outbox import EventOutbox
 from apps.edge.recorder import FileRecorder
 from apps.edge.tracker import ByteTracker
@@ -31,7 +33,7 @@ class PerceptionPipeline:
         *,
         recorder: FileRecorder,
         outbox: EventOutbox,
-        detector: OracleDetector | None = None,
+        detector: OnnxDetector | None = None,
         tracker: ByteTracker | None = None,
         incident_engine: IncidentEngine | None = None,
         uploader: EdgeUploader | None = None,
@@ -46,10 +48,12 @@ class PerceptionPipeline:
         calibration_version: str = "uncalibrated",
         quality_state: str = "unknown",
         origin: str = "live",
+        execution: PerceptionExecution | None = None,
     ) -> None:
         self.recorder = recorder
         self.outbox = outbox
         self.uploader = uploader
+        self.evidence = EvidenceLifecycle(outbox, recorder, uploader)
         self.camera_id = camera_id
         self.device_id = device_id
         self.stream_session_id = stream_session_id or str(uuid4())
@@ -60,13 +64,17 @@ class PerceptionPipeline:
         self.quality_state = quality_state
         self.origin = origin
 
-        # Initialize or assign detector
-        if detector is not None:
-            self.detector: OracleDetector | None = detector
-        elif manifest_path and model_path:
-            self.detector = OracleDetector(manifest_path, model_path)
-        else:
-            self.detector = None
+        if execution is not None and (detector is not None or manifest_path or model_path):
+            raise ValueError("provide execution or detector configuration, not both")
+        self.execution = execution or PerceptionExecution(detector, manifest_path=manifest_path,
+                                                         model_path=model_path, origin=origin)
+        self.detector = self.execution.detector
+        self.core_epoch = 1
+        self._last_frame_id = -1
+        self._last_timestamp: float | None = None
+        self.last_observation: dict[str, Any] | None = None
+        self._processing_lock = threading.RLock()
+        self._lineage = (self.camera_id, self.stream_session_id, self.core_epoch, self.origin, self.config_version)
 
         # Tracking and incident engines
         self.tracker = tracker or ByteTracker(
@@ -82,66 +90,60 @@ class PerceptionPipeline:
             cooldown_seconds=30.0,
         )
 
-        # Model provenance lineage
-        if self.detector is not None and hasattr(self.detector, "_manifest"):
-            model_id = self.detector._manifest.get("model_id", "yolox-tiny")
-            self.model_lineage = [{"role": "oracle_detector", "version": str(model_id)}]
-            self.model_artifact_hash = str(self.detector._manifest.get("artifact", {}).get("sha256", "unknown_artifact"))
-        else:
-            self.model_lineage = [{"role": "detector", "version": "yolox-tiny-v1"}]
-            self.model_artifact_hash = "unknown_artifact"
+        provenance = self.execution.provenance
+        self.model_lineage = [{"role": "detector", "version": provenance.get("model_id", "unknown")}]
+        self.model_artifact_hash = provenance.get("model_sha256", "unknown_artifact")
 
-    def process_frame(
+    def process_frame(self, rgb, timestamp, frame_id, *, detections=None, observation_status=None):
+        with self._processing_lock:
+            return self._process_frame(rgb, timestamp, frame_id, detections=detections,
+                                       observation_status=observation_status)
+
+    def _process_frame(
         self,
         rgb: np.ndarray,
         timestamp: float,
         frame_id: int,
         *,
         detections: list[dict[str, Any]] | None = None,
+        observation_status: str | None = None,
     ) -> list[dict[str, Any]]:
         """Process one video frame: detection -> tracking -> incident engine -> event/pin/outbox."""
         ts = float(timestamp)
         fid = int(frame_id)
 
-        # 1. Detect objects if detections are not externally provided
-        raw_dets: list[dict[str, Any]] = []
-        if detections is not None:
-            raw_dets = detections
-        elif self.detector is not None:
-            pts = int(round(ts * 1_000_000))
-            frame_meta = {
-                "camera_id": self.camera_id,
-                "stream_session_id": self.stream_session_id,
-                "core_epoch": 1,
-                "origin": "replay",
-                "frame_id": fid,
-                "pts": pts,
-                "time_base": "1/1000000",
-                "event_time": float(pts * Fraction("1/1000000")),
-            }
-            try:
-                det_result = self.detector.detect(rgb, frame_meta)
-                raw_dets = det_result.get("detections", [])
-            except Exception as exc:
-                logger.warning("Detector execution failed for frame %d: %s", fid, exc)
-                raw_dets = []
-
-        # Format detections for ByteTracker
-        formatted_dets: list[dict[str, Any]] = []
-        for d in raw_dets:
-            bbox = d.get("bbox")
-            if bbox is None:
-                bbox = d.get("bbox_xyxy")
-            if bbox is not None and isinstance(bbox, (list, tuple)) and len(bbox) == 4:
-                formatted_dets.append({
-                    "bbox": [float(x) for x in bbox],
-                    "score": float(d.get("score", 0.0)),
-                    "label": str(d.get("label", "person")),
-                    "class_id": d.get("class_id"),
-                })
+        lineage = (self.camera_id, self.stream_session_id, self.core_epoch, self.origin, self.config_version)
+        if lineage != self._lineage:
+            self.tracker.reset()
+            self.incident_engine.reset()
+            self._last_frame_id = -1
+            self._last_timestamp = None
+            self._lineage = lineage
+        frame = self.execution.frame(self.camera_id, self.stream_session_id, self.core_epoch,
+                                     self.origin, fid, ts)
+        if fid <= self._last_frame_id or (self._last_timestamp is not None and ts <= self._last_timestamp):
+            self.last_observation = {**frame, "detection_status": "stale", "detections": []}
+            self._observation_gap()
+            return []
+        self._last_frame_id = fid
+        self._last_timestamp = ts
+        observation = self.execution.execute(rgb, frame, detections=detections, status=observation_status)
+        self.last_observation = observation
+        if observation["detection_status"] not in {"ok", "ok_empty"}:
+            self._observation_gap()
+            return []
+        formatted_dets = observation["detections"]
+        provenance = observation.get("provenance") or {}
+        if provenance:
+            self.model_lineage = [{"role": "detector", "version": provenance.get("model_id", "unknown")}]
+            self.model_artifact_hash = provenance.get("model_sha256", "unknown_artifact")
 
         # 2. Update multi-object tracker
         tracks = self.tracker.update(formatted_dets, timestamp=ts)
+
+        for track in self.tracker.get_all_tracks():
+            if track.state != "active":
+                track.history.clear()
 
         # 3. Assess incident engine
         incidents = self.incident_engine.process_tracks(tracks, timestamp=ts)
@@ -154,6 +156,12 @@ class PerceptionPipeline:
                 emitted_events.append(event)
 
         return emitted_events
+
+    def _observation_gap(self):
+        self.incident_engine.observation_gap()
+        # Retain track IDs/cooldown, discard pre-gap motion and standing evidence.
+        for track in self.tracker.get_all_tracks():
+            track.history.clear()
 
     def _handle_fall_incident(self, incident: dict[str, Any], timestamp: float) -> dict[str, Any]:
         """Construct validated Event snapshot, pin ring buffer, and atomically enqueue to outbox."""
@@ -206,38 +214,17 @@ class PerceptionPipeline:
         # Validate event contract
         validated_event = validate_event(event_snapshot)
 
-        # Pin ring buffer in FileRecorder
-        owner = f"{self.device_id}/{event_id}/1"
-        try:
-            self.recorder.pin(
-                request_id,
-                self.stream_session_id,
-                evidence_request["requested_start"],
-                evidence_request["requested_end"],
-                owner,
-            )
-        except Exception as exc:
-            logger.warning("Recorder pin failed for %s: %s", request_id, exc)
-
-        # Atomically enqueue into durable SQLite outbox
-        self.outbox.enqueue(validated_event)
+        self.evidence.persist(validated_event)
 
         return validated_event
 
-    def trigger_upload(self, *, reconcile: bool = True) -> int:
+    def trigger_upload(self, *, reconcile: bool = True, finish_sessions=()) -> int:
         """Trigger reconciliation and upload of pending events and evidence clips to server."""
         if self.uploader is None:
             return 0
 
-        # Reconcile pins and finalize clips
         if reconcile:
-            try:
-                self.outbox.reconcile_evidence(
-                    self.recorder,
-                    finish_sessions=[self.stream_session_id],
-                )
-            except Exception as exc:
-                logger.warning("Evidence reconciliation failed: %s", exc)
+            self.evidence.reconcile(finish_sessions=finish_sessions)
 
         # Deliver pending event metadata to server /v1/events
         try:
@@ -252,4 +239,4 @@ class PerceptionPipeline:
             logger.warning("Event metadata delivery failed: %s", exc)
 
         # Upload pending evidence clips to /v1/evidence
-        return self.uploader.upload_pending(reconcile=reconcile)
+        return self.evidence.upload_pending()

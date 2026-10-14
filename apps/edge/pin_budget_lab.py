@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from apps.edge.evidence import EvidenceLifecycle
+
 import argparse
 import hashlib
 import json
@@ -60,7 +62,7 @@ def run_lab(source: str | Path, *, ring_seconds: float, anchor_time: float,
         retained = recorder.actual_range(session, request["requested_start"], request["requested_end"])
         recorder = FileRecorder(root / "ring", ring_seconds=ring_seconds)
         outbox = EventOutbox(root / "events.sqlite3")
-        outbox.reconcile_evidence(recorder, finish_sessions=[session])
+        EvidenceLifecycle(outbox, recorder).reconcile( finish_sessions=[session])
         result = outbox.evidence_requests()[0]
         required = delay + 10 + margin_seconds
         return {

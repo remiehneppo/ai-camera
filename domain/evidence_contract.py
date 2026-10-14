@@ -3,6 +3,13 @@
 import math
 
 
+def validate_storage_id(value):
+    if (not isinstance(value, str) or not value or len(value) > 128
+            or value in {".", ".."} or any(char in value for char in ("/", "\\", "\x00"))):
+        raise ValueError("invalid evidence storage ID")
+    return value
+
+
 def make_evidence_request(request_id, session_id, anchor_kind, anchor_time, *,
                           mapping_uncertainty=0, supersedes_request_id=None):
     request = {

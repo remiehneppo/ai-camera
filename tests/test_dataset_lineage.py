@@ -39,7 +39,7 @@ def sample_event(
     revision: int = 1,
     camera_id: str = "lab-camera-01",
     severity: str = "high",
-    evidence_versions: dict[str, str] | None = None,
+    evidence_versions: dict[str, int] | None = None,
     stream_session_id: str | None = None,
 ) -> dict[str, object]:
     eid = event_id or str(uuid4())
@@ -162,7 +162,7 @@ class DatasetLineageTests(unittest.TestCase):
             device_id=device_id,
             event_id=event_id,
             revision=1,
-            evidence_versions={"req-001": "hash-ev-1"},
+            evidence_versions={"req-001": 1},
         )
         r = self.store.persist(ev)
 
@@ -185,7 +185,7 @@ class DatasetLineageTests(unittest.TestCase):
                 "expected_review_version": 0,
                 "viewed_event_revision": 1,
                 "viewed_event_hash": r["event_hash"],
-                "viewed_evidence_versions": {"req-001": "hash-ev-1"},
+                "viewed_evidence_versions": {"req-001": 1},
             },
             "alice",
         )
@@ -199,7 +199,7 @@ class DatasetLineageTests(unittest.TestCase):
                 "expected_review_version": 1,
                 "viewed_event_revision": 1,
                 "viewed_event_hash": r["event_hash"],
-                "viewed_evidence_versions": {"req-001": "hash-ev-1"},
+                "viewed_evidence_versions": {"req-001": 1},
             },
             "bob",
         )
@@ -213,7 +213,7 @@ class DatasetLineageTests(unittest.TestCase):
                 "expected_review_version": 2,
                 "viewed_event_revision": 1,
                 "viewed_event_hash": r["event_hash"],
-                "viewed_evidence_versions": {"req-001": "hash-ev-1"},
+                "viewed_evidence_versions": {"req-001": 1},
             },
             "bob",
         )

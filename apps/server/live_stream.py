@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from fractions import Fraction
 import logging
 import os
 from pathlib import Path
@@ -13,7 +12,9 @@ from typing import Any, Iterator
 import cv2
 import numpy as np
 
-from apps.edge.oracle_detector import OracleDetector
+from apps.edge.oracle_detector import OracleDetector, LiveDetector, OnnxDetector
+from apps.edge.perception import PerceptionExecution
+from uuid import uuid4
 from apps.edge.rtsp import load_rtsp_config
 
 logger = logging.getLogger("live_stream")
@@ -26,12 +27,15 @@ class LiveStreamService:
         self,
         rtsp_url: str | None = None,
         fallback_path: str | Path | None = None,
-        detector: OracleDetector | None = None,
+        detector: OnnxDetector | None = None,
         manifest_path: str | Path | None = None,
         model_path: str | Path | None = None,
         fps_target: float = 15.0,
         enable_detection: bool = True,
+        execution: PerceptionExecution | None = None,
+        camera_id: str = "lab_camera",
     ) -> None:
+        self.camera_id = camera_id
         self.fps_target = fps_target
         self.enable_detection = enable_detection
 
@@ -54,9 +58,13 @@ class LiveStreamService:
             candidate = Path(".scratch/replay-measurements/h264-10s.mkv")
             self.fallback_path = candidate if candidate.exists() else None
 
-        # 3. Resolve Oracle Detector
-        if detector is not None:
-            self.detector: OracleDetector | None = detector
+        # 3. Resolve the adapter for the actual source origin.
+        if execution is not None and (detector is not None or manifest_path or model_path):
+            raise ValueError("provide execution or detector configuration, not both")
+        if execution is not None:
+            self.detector = execution.detector
+        elif detector is not None:
+            self.detector = detector
         elif enable_detection:
             m_path = (
                 Path(manifest_path)
@@ -72,12 +80,27 @@ class LiveStreamService:
 
             w_path = Path(model_path) if model_path else Path("data/oracle/yolox_tiny.onnx")
             try:
-                self.detector = OracleDetector(m_path, w_path)
+                self.detector = (LiveDetector if self.rtsp_url else OracleDetector)(m_path, w_path)
             except Exception as exc:
                 logger.warning("Could not initialize OracleDetector: %s", exc)
                 self.detector = None
         else:
             self.detector = None
+
+        self._manifest_path = manifest_path or (m_path if enable_detection and detector is None and execution is None else None)
+        self._model_path = model_path or (w_path if enable_detection and detector is None and execution is None else None)
+        self._provided_detector = detector is not None or execution is not None
+        self._shared_execution = execution
+        self._detectors = {"live" if self.rtsp_url else "replay": self.detector}
+        self.execution = execution or PerceptionExecution(self.detector)
+        self.last_observation: dict[str, Any] | None = None
+        self._session_id = str(uuid4())
+        self._epoch = 1
+        self._source_identity: str | None = None
+        self._capture_time: float | None = None
+        self._capture_origin: str | None = None
+        self._capture_clock = "acquisition_monotonic"
+        self._processing_lock = threading.RLock()
 
         self._rtsp_cap: cv2.VideoCapture | None = None
         self._fallback_cap: cv2.VideoCapture | None = None
@@ -122,6 +145,9 @@ class LiveStreamService:
                 if self._rtsp_cap is not None and self._rtsp_cap.isOpened():
                     ret, frame = self._rtsp_cap.read()
                     if ret and frame is not None:
+                        self._capture_origin = "live"
+                        self._capture_time = time.monotonic()
+                        self._capture_clock = "acquisition_monotonic"
                         return frame, "rtsp"
                     self._rtsp_cap.release()
                     self._rtsp_cap = None
@@ -136,12 +162,20 @@ class LiveStreamService:
                     ret, frame = self._fallback_cap.read()
                     if not ret or frame is None:
                         # Video file hit EOF, loop from start
+                        self._session_id = str(uuid4())
+                        self._epoch += 1
                         self._fallback_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                         ret, frame = self._fallback_cap.read()
                     if ret and frame is not None:
+                        self._capture_origin = "replay"
+                        self._capture_time = self._fallback_cap.get(cv2.CAP_PROP_POS_MSEC) / 1000.0
+                        self._capture_clock = "source_pts"
                         return frame, "fallback"
 
             # Synthetic frame if no video file available
+            self._capture_origin = "synthetic"
+            self._capture_time = time.monotonic()
+            self._capture_clock = "acquisition_monotonic"
             frame = self._generate_synthetic_frame()
             return frame, "fallback"
 
@@ -170,7 +204,11 @@ class LiveStreamService:
         )
         return frame
 
-    def process_and_annotate(
+    def process_and_annotate(self, frame: np.ndarray, source: str) -> tuple[np.ndarray, list[dict[str, Any]]]:
+        with self._processing_lock:
+            return self._process_and_annotate(frame, source)
+
+    def _process_and_annotate(
         self, frame: np.ndarray, source: str
     ) -> tuple[np.ndarray, list[dict[str, Any]]]:
         h, w = frame.shape[:2]
@@ -178,28 +216,34 @@ class LiveStreamService:
         self.height = h
         self.current_source = source
 
-        detections: list[dict[str, Any]] = []
-        if self.detector is not None:
-            try:
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                self._frame_counter += 1
-                frame_meta = {
-                    "camera_id": "lab_camera",
-                    "stream_session_id": "live_session",
-                    "core_epoch": 1,
-                    "origin": "replay",
-                    "frame_id": self._frame_counter,
-                    "pts": self._frame_counter,
-                    "time_base": "1/30",
-                    "event_time": float(self._frame_counter * Fraction("1/30")),
-                }
-                res = self.detector.detect(rgb, frame_meta)
-                detections = res.get("detections", [])
-            except Exception as exc:
-                logger.warning("Detection failed on live frame: %s", exc)
-                detections = []
-        else:
-            self._frame_counter += 1
+        origin = self._capture_origin or ("live" if source == "rtsp" else (
+            "replay" if self.fallback_path and self.fallback_path.is_file() else "synthetic"))
+        if origin != self._source_identity:
+            self._source_identity = origin
+            self._session_id = str(uuid4())
+            self._epoch += 1
+            self._frame_counter = 0
+            if not self._provided_detector and origin not in self._detectors and origin != "synthetic" and self.enable_detection:
+                try:
+                    adapter = LiveDetector if origin == "live" else OracleDetector
+                    self._detectors[origin] = adapter(
+                        self._manifest_path or "models/yolox-tiny/manifest.json",
+                        self._model_path or "data/oracle/yolox_tiny.onnx")
+                except Exception:
+                    self._detectors[origin] = None
+            selected = self.detector if self._provided_detector else self._detectors.get(origin)
+            self.execution = self._shared_execution or PerceptionExecution(selected)
+        self._frame_counter += 1
+        timestamp = self._capture_time if self._capture_time is not None else time.monotonic()
+        frame_meta = self.execution.frame(self.camera_id, self._session_id, self._epoch,
+                                          origin, self._frame_counter, timestamp)
+        # OpenCV live capture exposes acquisition time, not authenticated source PTS.
+        frame_meta["clock_domain"] = self._capture_clock
+        observation = self.execution.execute(
+            cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), frame_meta,
+            status="missing" if origin == "synthetic" or not self.enable_detection else None)
+        self.last_observation = observation
+        detections = observation["detections"]
 
         self.detections_count = len(detections)
 
@@ -322,11 +366,13 @@ class LiveStreamService:
             while not self._stopped:
                 if max_frames is not None and yielded >= max_frames:
                     break
-                frame, source = self.read_frame()
+                with self._processing_lock:
+                    frame, source = self.read_frame()
+                    if frame is not None:
+                        annotated, _ = self.process_and_annotate(frame, source)
                 if frame is None:
                     time.sleep(0.05)
                     continue
-                annotated, _ = self.process_and_annotate(frame, source)
                 ret, buf = cv2.imencode(
                     ".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 80]
                 )
@@ -349,6 +395,12 @@ class LiveStreamService:
             "fps": round(self.fps, 1),
             "detections_count": self.detections_count,
             "model": "yolox_tiny",
+            "detection_error": (self.last_observation or {}).get("error"),
+            "detection_status": (self.last_observation or {}).get("detection_status", "missing"),
+            "origin": (self.last_observation or {}).get("origin"),
+            "stream_session_id": self._session_id,
+            "core_epoch": self._epoch,
+            "clock_domain": self._capture_clock,
         }
 
     def stop(self) -> None:

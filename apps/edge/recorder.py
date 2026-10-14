@@ -212,10 +212,15 @@ class FileRecorder:
                 clip_temp = directory / (name + ".tmp.mkv")
                 playlist = directory / (name + ".concat")
                 playlist.write_text("".join("file '" + str(Path(item.path).resolve()).replace("'", "'\\''") + "'\nduration " + str(item.end_seconds - item.start_seconds + item.frame_interval_seconds) + "\n" for item in segments))
-                subprocess.run([
-                    "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat",
-                    "-safe", "0", "-i", str(playlist), "-map", "0:v:0", "-c:v", "copy", str(clip_temp),
-                ], check=True, capture_output=True, timeout=20)
+                try:
+                    subprocess.run([
+                        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat",
+                        "-safe", "0", "-i", str(playlist), "-map", "0:v:0", "-c:v", "copy", str(clip_temp),
+                    ], check=True, capture_output=True, timeout=20)
+                except subprocess.CalledProcessError as exc:
+                    if b"Invalid data found when processing input" in (exc.stderr or b""):
+                        raise ValueError("pinned segment media is corrupt") from exc
+                    raise
                 with clip_temp.open("rb") as source:
                     os.fsync(source.fileno())
                     digest = hashlib.file_digest(source, "sha256").hexdigest()
@@ -254,6 +259,20 @@ class FileRecorder:
             db.execute("UPDATE pins SET receipt=? WHERE request_id=?",
                        (json.dumps(receipt, separators=(",", ":")), request_id))
             return receipt
+
+    def cleanup_evidence_temps(self) -> list[str]:
+        """Only recorder-owned scratch files, serialized with finalize_pin."""
+        cleaned = []
+        with sqlite3.connect(self._pins, timeout=30) as db:
+            db.execute("BEGIN IMMEDIATE")
+            for (request_id,) in db.execute("SELECT request_id FROM pins"):
+                name = hashlib.sha256(request_id.encode()).hexdigest()
+                for suffix in (".tmp.mkv", ".json.tmp", ".concat"):
+                    path = self.root / "manifests" / (name + suffix)
+                    if path.is_file():
+                        path.unlink()
+                        cleaned.append(str(path))
+        return cleaned
 
     def _session_dir(self, session_id: str) -> Path:
         if not session_id or session_id in {".", ".."} or Path(session_id).name != session_id:
@@ -396,6 +415,8 @@ class FileRecorder:
                 for part in [candidate for candidate in parts if candidate not in probed]:
                     probed.add(part)
                     self._publish_part(part, session_id)
+                probed.intersection_update(parts)
+                self._prune(session_id)
                 if returncode is not None:
                     return
                 time.sleep(poll_seconds)

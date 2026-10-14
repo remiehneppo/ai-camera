@@ -196,7 +196,7 @@ class ServerEvidenceApiTests(unittest.TestCase):
         self.dashboard_token = "dashboard-secret-token"
         self.reviewer_token = "reviewer-secret-alice"
         self.event_id = str(uuid4())
-        self.request_id = "req-upload-1"
+        self.request_id = "req-001"
 
         event = sample_event(device_id=self.device_id, event_id=self.event_id)
         resp = self.client.post(
