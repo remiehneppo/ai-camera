@@ -76,6 +76,8 @@ class PerceptionPipeline:
         self.pose_scheduler: PoseScheduler | None
         if pose_scheduler is not None:
             self.pose_scheduler = pose_scheduler
+            if pose_manager is not None:
+                pose_manager.scheduler = pose_scheduler
         elif pose_manager is not None:
             self.pose_scheduler = getattr(pose_manager, "scheduler", None)
         else:
@@ -317,10 +319,10 @@ class PerceptionPipeline:
 
     def get_pose_metrics(self) -> dict[str, Any]:
         """Retrieve branch coverage and scheduling metrics."""
-        if self.pose_scheduler is not None:
-            return self.pose_scheduler.get_metrics()
         if self.pose_manager is not None and hasattr(self.pose_manager, "get_metrics"):
             return self.pose_manager.get_metrics()
+        if self.pose_scheduler is not None:
+            return self.pose_scheduler.get_metrics()
         return {}
 
     def get_pose_capability(self) -> dict[str, Any]:

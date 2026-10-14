@@ -433,7 +433,7 @@ class PoseScheduler:
                 if self.capability_status != "degraded":
                     self.capability_status = "degraded"
                     self.degraded_reason = "queue_near_capacity"
-                    self._consecutive_calm_cycles = 0
+                self._consecutive_calm_cycles = 0
 
             return True
 
@@ -493,6 +493,7 @@ class PoseScheduler:
         """Extract next batch using fair budget allocation across active branches."""
         alloc_budget = budget if budget is not None else self.batch_budget
         with self._lock:
+            initial_queue_count = self.queued_count()
             expired_outcomes: list[PoseOutcome] = []
             for branch in ("fast_fall", "slow_collapse", "persistent_lying"):
                 queue = self._branch_queues[branch]
@@ -555,8 +556,11 @@ class PoseScheduler:
                     selected.append(self._branch_queues[b].popleft())
                     remaining -= 1
 
-            # Calm check for hysteresis
-            calm = (self.queued_count() < int(self.overload_queue_threshold * self.max_queue_size) and len(self._shed_outcomes) == 0)
+            # Calm check for hysteresis evaluated against pre-dispatch queue occupancy
+            calm = (
+                initial_queue_count < int(self.overload_queue_threshold * self.max_queue_size)
+                and len(self._shed_outcomes) == 0
+            )
             self.step_evaluation_cycle(calm=calm)
 
             outcomes = list(self._shed_outcomes) + expired_outcomes
@@ -749,8 +753,9 @@ class PoseManager:
                 return False
 
             accepted = self.scheduler.submit_request(req)
-            shed = self.scheduler.poll_shed_outcomes()
-            self._terminal_outcomes.extend(shed)
+            if not accepted:
+                shed = self.scheduler.poll_shed_outcomes()
+                self._terminal_outcomes.extend(shed)
             return accepted
 
     def process_pending(self, current_time: float) -> list[PoseOutcome]:
