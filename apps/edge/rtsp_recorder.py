@@ -30,6 +30,7 @@ class RtspRingRecorder:
         segment_seconds: float = 2.0,
         session_id: str | None = None,
         probe_timeout_seconds: float = 2.0,
+        recorder: FileRecorder | None = None,
     ) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -37,7 +38,7 @@ class RtspRingRecorder:
         self.segment_seconds = float(segment_seconds)
         self.probe_timeout_seconds = float(probe_timeout_seconds)
         self.session_id = session_id or str(uuid4())
-        self.recorder = FileRecorder(self.root, ring_seconds=self.ring_seconds)
+        self.recorder = recorder if recorder is not None else FileRecorder(self.root, ring_seconds=self.ring_seconds)
 
         # 1. Resolve RTSP URL (secrets must never be leaked)
         if rtsp_url == "":

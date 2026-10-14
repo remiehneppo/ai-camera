@@ -1,7 +1,7 @@
 # 22: Pose request trả keypoints đúng frame và track
 
-Status: ready-for-agent
-Execution: not-started
+Status: ready-for-review
+Execution: completed
 Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
 
 **What to build:** Gửi ROI request có deadline tới native ORT pose và nhận pose/status trong observation metadata.
@@ -10,10 +10,9 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 ## Acceptance criteria
 
-- [ ] Oracle/native RTMPose crop/affine/SimCC/schema parity; original coordinate/missing keypoints rõ.
-- [ ] Bounded buffer cache; expired/skipped/stale/ID switch không gắn pose nhầm frame; request fixture dùng trước automatic scheduling.
-
-- [ ] Mỗi accepted pose request có terminal outcome; detection-ok/pose-skipped cùng biểu diễn; crash epoch fail outstanding requests, terminal queue không drop im lặng.
+- [x] Oracle/native RTMPose crop/affine/SimCC/schema parity; original coordinate/missing keypoints rõ.
+- [x] Bounded buffer cache; expired/skipped/stale/ID switch không gắn pose nhầm frame; request fixture dùng trước automatic scheduling.
+- [x] Mỗi accepted pose request có terminal outcome; detection-ok/pose-skipped cùng biểu diễn; crash epoch fail outstanding requests, terminal queue không drop im lặng.
 
 Chuẩn semantic: [Hợp đồng tích hợp](../../../docs/architecture/contracts.md).
 
@@ -32,3 +31,8 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
 
 - 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.
+
+- 2026-10-14: Hoàn thành triển khai RTMPose Estimator và Pose Request Lifecycle theo hợp đồng:
+  - `apps/edge/pose.py`: `RtmposeEstimator` (crop affine 192x256, SimCC split_ratio=2.0, 17 COCO keypoints original coordinate mapping), `PoseManager` (deadline timeout -> skipped, epoch reset -> cancelled, bounded request queue -> skipped, bounded frame buffer cache -> skipped, single terminal outcome per request).
+  - `apps/edge/pipeline.py`: Tích hợp `pose_manager`, `request_pose()`, `set_core_epoch()`, và per-frame caching.
+  - `tests/test_pose.py`: 12 tests bao phủ dummy/real Shibuya fixtures, deadline timeout, epoch mismatch cancellation, bounded queue/cache, status separation (detection ok vs pose skipped/failed). Tất cả unit tests và regression tests (`test_tracking_incident`, `test_live_pipeline`) đều passed; mypy type check đạt 0 lỗi.

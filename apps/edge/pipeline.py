@@ -16,6 +16,7 @@ from apps.edge.incident import IncidentEngine
 from apps.edge.oracle_detector import OnnxDetector
 from apps.edge.perception import PerceptionExecution
 from apps.edge.outbox import EventOutbox
+from apps.edge.pose import PoseManager, PoseOutcome, PoseRequest
 from apps.edge.recorder import FileRecorder
 from apps.edge.tracker import ByteTracker
 from apps.edge.uploader import EdgeUploader
@@ -49,6 +50,7 @@ class PerceptionPipeline:
         quality_state: str = "unknown",
         origin: str = "live",
         execution: PerceptionExecution | None = None,
+        pose_manager: PoseManager | None = None,
     ) -> None:
         self.recorder = recorder
         self.outbox = outbox
@@ -69,6 +71,7 @@ class PerceptionPipeline:
         self.execution = execution or PerceptionExecution(detector, manifest_path=manifest_path,
                                                          model_path=model_path, origin=origin)
         self.detector = self.execution.detector
+        self.pose_manager = pose_manager
         self.core_epoch = 1
         self._last_frame_id = -1
         self._last_timestamp: float | None = None
@@ -116,11 +119,15 @@ class PerceptionPipeline:
         if lineage != self._lineage:
             self.tracker.reset()
             self.incident_engine.reset()
+            if self.pose_manager is not None:
+                self.pose_manager.set_epoch(self.core_epoch)
             self._last_frame_id = -1
             self._last_timestamp = None
             self._lineage = lineage
         frame = self.execution.frame(self.camera_id, self.stream_session_id, self.core_epoch,
                                      self.origin, fid, ts)
+        if self.pose_manager is not None:
+            self.pose_manager.cache_frame(self.camera_id, self.stream_session_id, self.core_epoch, fid, rgb)
         if fid <= self._last_frame_id or (self._last_timestamp is not None and ts <= self._last_timestamp):
             self.last_observation = {**frame, "detection_status": "stale", "detections": []}
             self._observation_gap()
@@ -156,6 +163,11 @@ class PerceptionPipeline:
                 emitted_events.append(event)
 
         return emitted_events
+
+    def observation_gap(self) -> None:
+        """Mark observation gap on frame drop, network hiccup, or stream loss."""
+        with self._processing_lock:
+            self._observation_gap()
 
     def _observation_gap(self):
         self.incident_engine.observation_gap()
@@ -224,6 +236,35 @@ class PerceptionPipeline:
     def _handle_fall_incident(self, incident: dict[str, Any], timestamp: float) -> dict[str, Any]:
         """Backwards compatibility delegation to _handle_incident."""
         return self._handle_incident(incident, timestamp)
+
+    def request_pose(
+        self,
+        request: dict[str, Any] | PoseRequest,
+        rgb: np.ndarray | None = None,
+        current_time: float | None = None,
+    ) -> PoseOutcome:
+        """Submit and synchronously evaluate a pose request."""
+        req = PoseRequest.from_dict(request) if isinstance(request, dict) else request
+        if self.pose_manager is None:
+            return PoseOutcome(
+                request_id=req.request_id,
+                camera_id=req.camera_id,
+                stream_session_id=req.stream_session_id,
+                core_epoch=req.core_epoch,
+                frame_id=req.frame_id,
+                track_id=req.track_id,
+                status="failed",
+                reason="pose_manager_unavailable",
+                executed_at=datetime.now(timezone.utc).timestamp(),
+            )
+        eval_time = current_time if current_time is not None else self._last_timestamp
+        return self.pose_manager.request_pose(req, rgb=rgb, current_time=eval_time)
+
+    def set_core_epoch(self, epoch: int) -> None:
+        """Update core epoch and notify pose manager of invalidation."""
+        self.core_epoch = epoch
+        if self.pose_manager is not None:
+            self.pose_manager.set_epoch(epoch)
 
     def trigger_upload(self, *, reconcile: bool = True, finish_sessions=()) -> int:
         """Trigger reconciliation and upload of pending events and evidence clips to server."""

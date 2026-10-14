@@ -1,0 +1,31 @@
+{
+  "model_id": "rtmpose-tiny-256x192",
+  "framework": "onnxruntime",
+  "input_size": [
+    256,
+    192
+  ],
+  "output_format": "SimCC",
+  "simcc_split_ratio": 2.0,
+  "num_keypoints": 17,
+  "sha256": "a6c2f6a3896a4d51131d14d7a80a3d08b50f559af5a58a45d5b098aef510a70f",
+  "keypoint_labels": [
+    "nose",
+    "left_eye",
+    "right_eye",
+    "left_ear",
+    "right_ear",
+    "left_shoulder",
+    "right_shoulder",
+    "left_elbow",
+    "right_elbow",
+    "left_wrist",
+    "right_wrist",
+    "left_hip",
+    "right_hip",
+    "left_knee",
+    "right_knee",
+    "left_ankle",
+    "right_ankle"
+  ]
+}
