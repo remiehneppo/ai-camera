@@ -1,5 +1,6 @@
 """Evidence orchestration; recorder owns files, outbox owns durable state."""
 from contextlib import contextmanager
+import errno
 import fcntl
 import json
 import logging
@@ -14,10 +15,11 @@ logger = logging.getLogger(__name__)
 
 
 class EvidenceLifecycle:
-    def __init__(self, outbox, recorder, transport=None):
+    def __init__(self, outbox, recorder, transport=None, quota_manager=None):
         self.outbox = outbox if isinstance(outbox, EventOutbox) else EventOutbox(outbox)
         self.recorder = recorder if isinstance(recorder, FileRecorder) else FileRecorder(recorder)
         self.transport = transport
+        self.quota_manager = quota_manager
 
     @contextmanager
     def _worker(self):
@@ -35,10 +37,24 @@ class EvidenceLifecycle:
             ids = {r["request_id"] for r in event["payload"].get("evidence_requests", [])}
             for request in self.outbox.evidence_requests():
                 if request["request_id"] in ids and request["state"] in {"requested", "collecting", "pending", "in_progress"}:
+                    if self.quota_manager and not self.quota_manager.can_accept_new_evidence():
+                        self.outbox.update_evidence(
+                            request["request_id"],
+                            state="failed",
+                            error=RuntimeError("storage_exhausted: state reserve protection active"),
+                        )
+                        continue
                     try:
                         self._pin(request)
                     except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
-                        self.outbox.update_evidence(request["request_id"], error=exc)
+                        state = (
+                            "failed"
+                            if (isinstance(exc, OSError) and getattr(exc, "errno", None) == errno.ENOSPC)
+                            or "storage_exhausted" in str(exc)
+                            or "reserve_exhausted" in str(exc)
+                            else None
+                        )
+                        self.outbox.update_evidence(request["request_id"], state=state, error=exc)
         return event
 
     def _pin(self, request):
@@ -53,6 +69,8 @@ class EvidenceLifecycle:
             return self._reconcile(finish_sessions=finish_sessions)
 
     def _reconcile(self, *, finish_sessions=()):
+        if self.quota_manager and self.quota_manager.is_storage_pressured():
+            self.quota_manager.cleanup_eligible()
         cleaned = self.recorder.cleanup_evidence_temps()
         ended = self.outbox.ended_sessions(finish_sessions)
         completed = failed = 0
@@ -76,6 +94,14 @@ class EvidenceLifecycle:
                     continue
                 if request["state"] == "failed":
                     continue
+                if self.quota_manager and not self.quota_manager.can_accept_new_evidence():
+                    self.outbox.update_evidence(
+                        request_id,
+                        state="failed",
+                        error=RuntimeError("storage_exhausted: cannot finalize evidence under storage exhaustion"),
+                    )
+                    failed += 1
+                    continue
                 self._pin(request)
                 status = self.recorder.pin_status(request_id)
                 if status["state"] == "collecting" and request["session_id"] not in ended:
@@ -89,7 +115,13 @@ class EvidenceLifecycle:
                 completed += 1
             except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, sqlite3.Error) as exc:
                 # Retry transient failures without inventing a terminal build result.
-                terminal = bool(status and status.get("manifest")) or isinstance(exc, ValueError)
+                terminal = (
+                    bool(status and status.get("manifest"))
+                    or isinstance(exc, ValueError)
+                    or (isinstance(exc, OSError) and getattr(exc, "errno", None) == errno.ENOSPC)
+                    or "storage_exhausted" in str(exc)
+                    or "reserve_exhausted" in str(exc)
+                )
                 self.outbox.update_evidence(request_id, state="failed" if terminal else None, error=exc)
                 failed += 1
         return {"cleaned_files": cleaned, "recovered_fulfilled": completed, "failed_requests": failed}

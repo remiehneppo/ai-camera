@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 import threading
+import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -12,6 +13,7 @@ from uuid import uuid4
 import numpy as np
 
 from apps.edge.evidence import EvidenceLifecycle
+from apps.edge.health import EdgeHealthMonitor
 from apps.edge.incident import IncidentEngine
 from apps.edge.oracle_detector import OnnxDetector
 from apps.edge.perception import PerceptionExecution
@@ -52,6 +54,7 @@ class PerceptionPipeline:
         execution: PerceptionExecution | None = None,
         pose_manager: PoseManager | None = None,
         pose_scheduler: PoseScheduler | None = None,
+        health: EdgeHealthMonitor | None = None,
     ) -> None:
         self.recorder = recorder
         self.outbox = outbox
@@ -106,6 +109,13 @@ class PerceptionPipeline:
         provenance = self.execution.provenance
         self.model_lineage = [{"role": "detector", "version": provenance.get("model_id", "unknown")}]
         self.model_artifact_hash = provenance.get("model_sha256", "unknown_artifact")
+
+        self.health = health or EdgeHealthMonitor(
+            recorder=self.recorder,
+            recorder_session_id=self.stream_session_id,
+            outbox=self.outbox,
+            backend_checker=uploader,
+        )
 
     def process_frame(self, rgb, timestamp, frame_id, *, detections=None, observation_status=None):
         with self._processing_lock:
@@ -196,6 +206,7 @@ class PerceptionPipeline:
                 event = self._handle_incident(incident, ts)
                 emitted_events.append(event)
 
+        self.health.record_frame_received(receive_time=time.time())
         return emitted_events
 
     def observation_gap(self) -> None:

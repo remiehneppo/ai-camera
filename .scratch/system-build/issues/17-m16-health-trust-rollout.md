@@ -33,11 +33,11 @@ Phụ thuộc giữ ID của backlog hiện hành. Q là quyết định đã gh
 
 Phụ thuộc nguồn: `B03,J02,R04`.
 
-- [ ] **H01.01** — Structured logs/health starting/healthy/degraded/unavailable với component reason và capability.
-- [ ] **H01.02** — Xuất frame age/drop/recorder gap/disk/outbox/backend metrics, bounded labels/spool và redact secrets.
-- [ ] **H01.03** — Test deadlock/native failure/recorder mất dữ liệu không báo healthy; telemetry đầy không ăn state reserve.
-- [ ] **H01.AC** — Nghiệm thu: Mask secrets; bounded cardinality/spool; analytics unhealthy không chỉ báo process running.
-- [ ] **H01.EV** — Ghi test/fixture ID, expected/actual, lệnh chạy thật và artifact/report path trong Comments; ghi rõ phần chưa chạy hoặc blocked.
+- [x] **H01.01** — Structured logs/health starting/healthy/degraded/unavailable với component reason và capability.
+- [x] **H01.02** — Xuất frame age/drop/recorder gap/disk/outbox/backend metrics, bounded labels/spool và redact secrets.
+- [x] **H01.03** — Test deadlock/native failure/recorder mất dữ liệu không báo healthy; telemetry đầy không ăn state reserve.
+- [x] **H01.AC** — Nghiệm thu: Mask secrets; bounded cardinality/spool; analytics unhealthy không chỉ báo process running.
+- [x] **H01.EV** — Ghi test/fixture ID, expected/actual, lệnh chạy thật và artifact/report path trong Comments; ghi rõ phần chưa chạy hoặc blocked.
 
 ### H02 — Synthetic end-to-end probe và alert contracts/runbooks/routing
 

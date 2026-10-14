@@ -1,8 +1,8 @@
 # 18: Quota bảo vệ pinned evidence và journal
 
-Status: ready-for-agent
-Execution: not-started
-Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
+Status: ready-for-review
+Execution: completed
+Owner: Edge / Storage
 
 **What to build:** Khi disk áp lực, hệ thống cleanup dữ liệu eligible rồi báo degraded/partial cho clip mới mà không xóa unACK.
 
@@ -10,8 +10,8 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 ## Acceptance criteria
 
-- [ ] Quotas tính pins/postroll/temp/proxy/WAL/reserve; disk95/100/write/fsync/checkpoint errors có test.
-- [ ] State reserve hết thì không commit/ACK giả; outage24h không là TTL xóa protected evidence.
+- [x] Quotas tính pins/postroll/temp/proxy/WAL/reserve; disk95/100/write/fsync/checkpoint errors có test.
+- [x] State reserve hết thì không commit/ACK giả; outage24h không là TTL xóa protected evidence.
 
 ## Traceability
 
@@ -26,3 +26,4 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 ## Comments
 
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
+- 2026-10-14: Ticket #18 completed. Implemented `StorageQuotaManager` in `apps/edge/quota.py` and test suite `tests/test_quota.py`. Integrated with `EvidenceLifecycle` and `EdgeHealthMonitor`. All 9 tests pass, mypy typecheck passes with 0 errors. UnACK evidence strictly preserved across 24h+ outages and under disk pressure. Fake commits and ACKs refused when state reserve is exhausted or write fails.

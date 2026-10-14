@@ -14,6 +14,8 @@ from uuid import uuid4
 import cv2
 import numpy as np
 
+from apps.edge.evidence import EvidenceLifecycle
+from apps.edge.health import EdgeHealthMonitor
 from apps.edge.incident import IncidentEngine
 from apps.edge.oracle_detector import OnnxDetector
 from apps.edge.outbox import EventOutbox
@@ -55,6 +57,7 @@ class LivePerceptionRunner:
         pipeline: PerceptionPipeline | None = None,
         ring_recorder: RtspRingRecorder | None = None,
         upload_interval_seconds: float | None = None,
+        health: EdgeHealthMonitor | None = None,
     ) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -157,7 +160,18 @@ class LivePerceptionRunner:
                 device_id=self.device_id,
                 stream_session_id=self.session_id,
                 origin=origin,
+                health=health,
             )
+
+        # 7. Health monitor
+        self.health = health or getattr(self.pipeline, "health", None) or EdgeHealthMonitor(
+            recorder=self.recorder,
+            recorder_session_id=self.session_id,
+            outbox=self.outbox,
+            backend_checker=uploader,
+        )
+        if hasattr(self.pipeline, "health") and self.health is not None:
+            self.pipeline.health = self.health
 
         # 7. Internal synchronization and telemetry
         self._lock = threading.RLock()
@@ -454,6 +468,7 @@ class LivePerceptionRunner:
                 "last_capture_time": self.last_capture_time,
                 "ring_recorder": ring_status,
                 "error": self._last_error,
+                "health": self.health.get_health_snapshot() if self.health is not None else None,
             }
 
     def __enter__(self) -> LivePerceptionRunner:

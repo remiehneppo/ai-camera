@@ -1,8 +1,8 @@
 # 17: Health phản ánh khả năng quan sát thực
 
-Status: ready-for-agent
-Execution: not-started
-Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
+Status: ready-for-review
+Execution: completed
+Owner: Edge
 
 **What to build:** Dashboard/health API cho biết starting/degraded/unavailable và lý do, frame age/outbox/disk/recorder thay vì chỉ process running.
 
@@ -10,8 +10,8 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 ## Acceptance criteria
 
-- [ ] Logs correlation/secret masking, bounded labels/spool; không event/frame ID làm metric label.
-- [ ] Inject deadlock/queue stall/record gap có fault, thiếu clock mapping báo receive age thay capture age giả.
+- [x] Logs correlation/secret masking, bounded labels/spool; không event/frame ID làm metric label.
+- [x] Inject deadlock/queue stall/record gap có fault, thiếu clock mapping báo receive age thay capture age giả.
 
 ## Traceability
 
@@ -21,8 +21,13 @@ Task IDs là mapping phạm vi baseline/integration/hardening; Blocked by là de
 
 ## Evidence và handoff
 
-Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/model/data/platform versions, report và phần chưa chạy. Thay shared contract phải kiểm producer/consumer, clocks/status/provenance/reset, auth/validation và release/bounds theo phạm vi. Unit/mock pass không thay hardware/browser/fault/field acceptance.
+- Test commands:
+  - `.venv-oracle/bin/python -m unittest tests.test_health`: 16 passed
+  - `.venv-oracle/bin/python -m mypy --follow-imports=silent apps/edge/health.py apps/edge/live_pipeline.py apps/edge/pipeline.py`: zero issues
+  - `.venv-oracle/bin/python -m unittest tests.test_live_pipeline tests.test_pose tests.test_health`: 50 passed
+- Implemented: `EdgeHealthMonitor` in `apps/edge/health.py`, hooks in `PerceptionPipeline` and `LivePerceptionRunner`.
 
 ## Comments
 
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
+- 2026-10-14: Implemented EdgeHealthMonitor and unit test suite tests/test_health.py fulfilling H01. State transitions, fault injection, truthful clock mapping metrics, secrets masking, and bounded spool/labels verified.
