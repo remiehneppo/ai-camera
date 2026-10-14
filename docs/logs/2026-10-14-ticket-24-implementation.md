@@ -27,11 +27,14 @@ Triển khai Ticket #24: **Pose scheduling và degradation có coverage** thuộ
 
 ## OpenCodeReview (OCR) Findings & Remediation
 - Review bằng `ocr review` với model `Gemini 3.8 Flash (High)`:
-  1. *Pose capability shadow*: Đảo thứ tự kiểm tra `pose_manager` trước `pose_scheduler` để phản ánh đúng khi `estimator is None`.
+  1. *Pose capability shadow*: Đảo thứ tự kiểm tra `pose_manager` trước `pose_scheduler` trong `get_pose_capability` để phản ánh đúng khi `estimator is None`.
   2. *Epoch synchronization*: Đồng bộ `set_epoch` khi `pose_scheduler` là instance độc lập.
   3. *Duplicate terminal outcomes*: Khử việc gọi `.extend(shed_outcomes)` hai lần trong `process_pending`.
   4. *Preserve degradation reason*: Bảo toàn `degraded_reason` khi có nhiều nguyên nhân suy thoái.
   5. *Memory pruning*: Cắt tỉa `_last_scheduled_time` định kỳ khi kích thước > 1000.
+  6. *Pre-dispatch queue count for hysteresis*: Tính toán trạng thái bình ổn `calm` trên số lượng phần tử trước khi rút batch (`initial_queue_count`), tránh đánh giá sai thành calm khi tải cao.
+  7. *Targeted shed outcomes collection*: Chỉ đưa vào `_terminal_outcomes` khi `submit_request` trả về `False` (bị drop ngay lúc enqueue), giúp `schedule_batch` ghi nhận đầy đủ việc xả tải trong chu kỳ.
+  8. *Synchronize scheduler in pipeline*: Đồng bộ `self.pose_manager.scheduler = pose_scheduler` và kiểm tra `pose_manager.get_metrics()` trước `pose_scheduler`.
 
 ## Verification Evidence
 - `tests.test_pose`: 24/24 tests passed (0.565s).
