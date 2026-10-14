@@ -16,7 +16,7 @@ from apps.edge.incident import IncidentEngine
 from apps.edge.oracle_detector import OnnxDetector
 from apps.edge.perception import PerceptionExecution
 from apps.edge.outbox import EventOutbox
-from apps.edge.pose import PoseManager, PoseOutcome, PoseRequest
+from apps.edge.pose import PoseManager, PoseOutcome, PoseRequest, PoseScheduler
 from apps.edge.recorder import FileRecorder
 from apps.edge.tracker import ByteTracker
 from apps.edge.uploader import EdgeUploader
@@ -51,6 +51,7 @@ class PerceptionPipeline:
         origin: str = "live",
         execution: PerceptionExecution | None = None,
         pose_manager: PoseManager | None = None,
+        pose_scheduler: PoseScheduler | None = None,
     ) -> None:
         self.recorder = recorder
         self.outbox = outbox
@@ -72,6 +73,13 @@ class PerceptionPipeline:
                                                          model_path=model_path, origin=origin)
         self.detector = self.execution.detector
         self.pose_manager = pose_manager
+        self.pose_scheduler: PoseScheduler | None
+        if pose_scheduler is not None:
+            self.pose_scheduler = pose_scheduler
+        elif pose_manager is not None:
+            self.pose_scheduler = getattr(pose_manager, "scheduler", None)
+        else:
+            self.pose_scheduler = None
         self.core_epoch = 1
         self._last_frame_id = -1
         self._last_timestamp: float | None = None
@@ -151,6 +159,30 @@ class PerceptionPipeline:
         for track in self.tracker.get_all_tracks():
             if track.state != "active":
                 track.history.clear()
+
+        # Pose candidate scheduling across branches
+        pose_outcomes: list[PoseOutcome] = []
+        if self.pose_scheduler is not None:
+            active_tracks = [t for t in tracks if t.state == "active"]
+            candidates = self.pose_scheduler.schedule_tracks(
+                tracks=active_tracks,
+                current_time=ts,
+                frame_id=fid,
+                camera_id=self.camera_id,
+                stream_session_id=self.stream_session_id,
+                core_epoch=self.core_epoch,
+            )
+            if self.pose_manager is not None:
+                for cand in candidates:
+                    self.pose_manager.submit_request(cand)
+                pose_outcomes = self.pose_manager.process_pending(current_time=ts)
+
+        observation["pose_capability"] = self.get_pose_capability()
+        observation["pose_metrics"] = self.get_pose_metrics()
+        if pose_outcomes:
+            observation["pose_outcomes"] = [o.to_dict() for o in pose_outcomes]
+            observation["pose_status"] = "ok" if any(o.status == "ok" for o in pose_outcomes) else pose_outcomes[0].status
+            observation["pose_reason"] = None if any(o.status == "ok" for o in pose_outcomes) else pose_outcomes[0].reason
 
         # 3. Assess incident engine
         incidents = self.incident_engine.process_tracks(tracks, timestamp=ts)
@@ -265,6 +297,48 @@ class PerceptionPipeline:
         self.core_epoch = epoch
         if self.pose_manager is not None:
             self.pose_manager.set_epoch(epoch)
+        if self.pose_scheduler is not None and (
+            self.pose_manager is None or self.pose_scheduler is not getattr(self.pose_manager, "scheduler", None)
+        ):
+            self.pose_scheduler.set_epoch(epoch)
+
+    def status(self) -> dict[str, Any]:
+        """Report pipeline operational status, quality state, and capability."""
+        with self._processing_lock:
+            return {
+                "camera_id": self.camera_id,
+                "device_id": self.device_id,
+                "stream_session_id": self.stream_session_id,
+                "core_epoch": self.core_epoch,
+                "quality_state": self.quality_state,
+                "pose_capability": self.get_pose_capability(),
+                "pose_metrics": self.get_pose_metrics(),
+            }
+
+    def get_pose_metrics(self) -> dict[str, Any]:
+        """Retrieve branch coverage and scheduling metrics."""
+        if self.pose_scheduler is not None:
+            return self.pose_scheduler.get_metrics()
+        if self.pose_manager is not None and hasattr(self.pose_manager, "get_metrics"):
+            return self.pose_manager.get_metrics()
+        return {}
+
+    def get_pose_capability(self) -> dict[str, Any]:
+        """Retrieve current pose estimation capability and degradation reason."""
+        if self.pose_manager is not None and hasattr(self.pose_manager, "get_capability_status"):
+            return {
+                "status": self.pose_manager.get_capability_status(),
+                "reason": self.pose_manager.get_degraded_reason(),
+            }
+        if self.pose_scheduler is not None:
+            return {
+                "status": self.pose_scheduler.capability_status,
+                "reason": self.pose_scheduler.degraded_reason,
+            }
+        return {
+            "status": "unsupported",
+            "reason": "pose_manager_unavailable",
+        }
 
     def trigger_upload(self, *, reconcile: bool = True, finish_sessions=()) -> int:
         """Trigger reconciliation and upload of pending events and evidence clips to server."""

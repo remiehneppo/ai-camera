@@ -10,11 +10,14 @@ import cv2
 import numpy as np
 
 from apps.edge.pose import (
+    BranchMetrics,
     PoseManager,
     PoseOutcome,
     PoseRequest,
+    PoseScheduler,
     RtmposeEstimator,
 )
+from apps.edge.tracker import Track
 
 
 class TestRtmposeEstimator(unittest.TestCase):
@@ -419,6 +422,333 @@ class TestPipelinePoseIntegration(unittest.TestCase):
         self.assertEqual(observation_batch["detection_status"], "ok")
         self.assertEqual(observation_batch["pose_status"], "skipped")
         self.assertEqual(observation_batch["pose_reason"], "deadline_exceeded")
+
+
+class TestPoseBranchClassification(unittest.TestCase):
+    """Tests for 3-branch classification (fast_fall, slow_collapse, persistent_lying)."""
+
+    def setUp(self) -> None:
+        self.scheduler = PoseScheduler(
+            min_drop_velocity=15.0,
+            min_ar_change=0.35,
+            slow_drop_velocity=3.0,
+            slow_ar_change=0.15,
+            standing_aspect_ratio=0.85,
+            lying_aspect_ratio=1.2,
+            persistent_sample_interval=1.0,
+        )
+
+    def test_classify_fast_fall_high_velocity(self) -> None:
+        """Track with rapid downward velocity is classified as fast_fall."""
+        # Initial upright person at t=1.0
+        track = Track(track_id=1, bbox=[100.0, 100.0, 150.0, 300.0], score=0.9, label="person", timestamp=1.0)
+        # Dropping rapidly at t=2.0 (cy changes from 200 to 250 -> 50 px/s)
+        track.update(bbox=[100.0, 150.0, 200.0, 350.0], score=0.9, timestamp=2.0)
+
+        branch = self.scheduler.classify_track(track, current_time=2.0)
+        self.assertEqual(branch, "fast_fall")
+
+    def test_classify_fast_fall_sudden_aspect_ratio_change(self) -> None:
+        """Track with sudden aspect ratio change is classified as fast_fall."""
+        track = Track(track_id=2, bbox=[100.0, 100.0, 150.0, 300.0], score=0.9, label="person", timestamp=1.0)
+        # ar changed from 50/200=0.25 to 150/100=1.5 (change = 1.25 >= 0.35)
+        track.update(bbox=[100.0, 120.0, 250.0, 220.0], score=0.9, timestamp=1.5)
+
+        branch = self.scheduler.classify_track(track, current_time=1.5)
+        self.assertEqual(branch, "fast_fall")
+
+    def test_classify_slow_collapse_gradual_change(self) -> None:
+        """Track with moderate velocity / progressive posture change is classified as slow_collapse."""
+        track = Track(track_id=3, bbox=[100.0, 100.0, 150.0, 300.0], score=0.9, label="person", timestamp=1.0)
+        # cy moves from 200 to 206 in 1.0s (6 px/s, between 3.0 and 15.0), ar changes 0.2
+        track.update(bbox=[100.0, 106.0, 180.0, 280.0], score=0.9, timestamp=2.0)
+
+        branch = self.scheduler.classify_track(track, current_time=2.0)
+        self.assertEqual(branch, "slow_collapse")
+
+    def test_classify_persistent_lying_already_down(self) -> None:
+        """Track with aspect ratio >= 1.2 and no recent kinematic onset is classified as persistent_lying."""
+        # Already lying down at t=1.0 (w=250, h=100 -> ar=2.5)
+        track = Track(track_id=4, bbox=[100.0, 200.0, 350.0, 300.0], score=0.9, label="person", timestamp=1.0)
+        track.update(bbox=[100.0, 200.0, 350.0, 300.0], score=0.9, timestamp=2.0)
+
+        branch = self.scheduler.classify_track(track, current_time=2.0)
+        self.assertEqual(branch, "persistent_lying")
+
+    def test_classify_normal_standing_returns_none(self) -> None:
+        """Normal standing upright person is not scheduled for pose."""
+        track = Track(track_id=5, bbox=[100.0, 100.0, 150.0, 300.0], score=0.9, label="person", timestamp=1.0)
+        track.update(bbox=[100.0, 100.0, 150.0, 300.0], score=0.9, timestamp=2.0)
+
+        branch = self.scheduler.classify_track(track, current_time=2.0)
+        self.assertIsNone(branch)
+
+    def test_persistent_lying_periodic_sampling(self) -> None:
+        """Persistent lying candidate is only scheduled periodically per sampling interval."""
+        track = Track(track_id=6, bbox=[100.0, 200.0, 350.0, 300.0], score=0.9, label="person", timestamp=1.0)
+        reqs1 = self.scheduler.schedule_tracks([track], current_time=1.0, frame_id=1, camera_id="c1", stream_session_id="s1", core_epoch=1)
+        self.assertEqual(len(reqs1), 1)
+        self.assertEqual(reqs1[0].branch, "persistent_lying")
+
+        # Next frame at t=1.2 (within 1.0s interval) should NOT generate a new request
+        reqs2 = self.scheduler.schedule_tracks([track], current_time=1.2, frame_id=2, camera_id="c1", stream_session_id="s1", core_epoch=1)
+        self.assertEqual(len(reqs2), 0)
+
+        # After sampling interval passes (t=2.1), a request is generated
+        reqs3 = self.scheduler.schedule_tracks([track], current_time=2.1, frame_id=3, camera_id="c1", stream_session_id="s1", core_epoch=1)
+        self.assertEqual(len(reqs3), 1)
+
+
+class TestPoseSchedulerFairnessAntiStarvation(unittest.TestCase):
+    """Tests for fair scheduling and anti-starvation across active branches."""
+
+    def test_burst_fast_fall_does_not_starve_other_branches(self) -> None:
+        """A burst of fast_fall requests does not starve slow_collapse or persistent_lying."""
+        scheduler = PoseScheduler(batch_budget=4, min_shares={"fast_fall": 1, "slow_collapse": 1, "persistent_lying": 1})
+
+        # Submit 15 fast_fall requests, 2 slow_collapse requests, and 2 persistent_lying requests
+        for i in range(15):
+            scheduler.submit_request(PoseRequest(
+                request_id=f"ff-{i}",
+                camera_id="cam-1",
+                stream_session_id="sess-1",
+                core_epoch=1,
+                frame_id=1,
+                bbox=[10, 10, 50, 50],
+                deadline=10.0,
+                branch="fast_fall",
+                priority=1,
+            ))
+        for i in range(2):
+            scheduler.submit_request(PoseRequest(
+                request_id=f"sc-{i}",
+                camera_id="cam-1",
+                stream_session_id="sess-1",
+                core_epoch=1,
+                frame_id=1,
+                bbox=[10, 10, 50, 50],
+                deadline=10.0,
+                branch="slow_collapse",
+                priority=2,
+            ))
+        for i in range(2):
+            scheduler.submit_request(PoseRequest(
+                request_id=f"pl-{i}",
+                camera_id="cam-1",
+                stream_session_id="sess-1",
+                core_epoch=1,
+                frame_id=1,
+                bbox=[10, 10, 50, 50],
+                deadline=10.0,
+                branch="persistent_lying",
+                priority=3,
+            ))
+
+        # Schedule batch with budget = 4
+        batch, _ = scheduler.schedule_batch(current_time=1.0)
+        self.assertEqual(len(batch), 4)
+
+        branches_in_batch = [req.branch for req in batch]
+        # Anti-starvation guarantee: all 3 active branches must be present!
+        self.assertIn("fast_fall", branches_in_batch)
+        self.assertIn("slow_collapse", branches_in_batch)
+        self.assertIn("persistent_lying", branches_in_batch)
+
+        # Fast fall gets 2 slots (guaranteed 1 + remaining 1), other branches get 1 each
+        self.assertEqual(branches_in_batch.count("fast_fall"), 2)
+        self.assertEqual(branches_in_batch.count("slow_collapse"), 1)
+        self.assertEqual(branches_in_batch.count("persistent_lying"), 1)
+
+
+class TestPoseBranchMetrics(unittest.TestCase):
+    """Tests for tracking scheduled, attempted, skipped, failed, stale, and coverage per branch."""
+
+    def test_metrics_tracking_per_branch(self) -> None:
+        scheduler = PoseScheduler()
+
+        # Branch 1: fast_fall (2 ok, 1 skipped)
+        req_ff1 = PoseRequest("ff1", "c1", "s1", 1, 1, [0, 0, 10, 10], 10.0, branch="fast_fall")
+        req_ff2 = PoseRequest("ff2", "c1", "s1", 1, 1, [0, 0, 10, 10], 10.0, branch="fast_fall")
+        req_ff3 = PoseRequest("ff3", "c1", "s1", 1, 1, [0, 0, 10, 10], 0.5, branch="fast_fall")
+        scheduler.record_scheduled("fast_fall", 3)
+        scheduler.record_outcome(PoseOutcome("ff1", "c1", "s1", 1, 1, "ok", branch="fast_fall"))
+        scheduler.record_outcome(PoseOutcome("ff2", "c1", "s1", 1, 1, "ok", branch="fast_fall"))
+        scheduler.record_outcome(PoseOutcome("ff3", "c1", "s1", 1, 1, "skipped", reason="deadline_exceeded", branch="fast_fall"))
+
+        # Branch 2: slow_collapse (1 ok, 1 failed)
+        scheduler.record_scheduled("slow_collapse", 2)
+        scheduler.record_outcome(PoseOutcome("sc1", "c1", "s1", 1, 1, "ok", branch="slow_collapse"))
+        scheduler.record_outcome(PoseOutcome("sc2", "c1", "s1", 1, 1, "failed", reason="inference_error", branch="slow_collapse"))
+
+        # Branch 3: persistent_lying (1 ok, 1 stale)
+        scheduler.record_scheduled("persistent_lying", 2)
+        scheduler.record_outcome(PoseOutcome("pl1", "c1", "s1", 1, 1, "ok", branch="persistent_lying"))
+        scheduler.record_outcome(PoseOutcome("pl2", "c1", "s1", 1, 1, "cancelled", reason="epoch_mismatch", branch="persistent_lying"))
+
+        metrics = scheduler.get_metrics()
+
+        # Check fast_fall
+        ff = metrics["fast_fall"]
+        self.assertEqual(ff["scheduled"], 3)
+        self.assertEqual(ff["attempted"], 2)
+        self.assertEqual(ff["skipped"], 1)
+        self.assertEqual(ff["failed"], 0)
+        self.assertEqual(ff["stale"], 0)
+        self.assertAlmostEqual(ff["coverage"], 2 / 3, places=3)
+
+        # Check slow_collapse
+        sc = metrics["slow_collapse"]
+        self.assertEqual(sc["scheduled"], 2)
+        self.assertEqual(sc["attempted"], 2)
+        self.assertEqual(sc["skipped"], 0)
+        self.assertEqual(sc["failed"], 1)
+        self.assertEqual(sc["stale"], 0)
+        self.assertEqual(sc["coverage"], 1.0)
+
+        # Check persistent_lying
+        pl = metrics["persistent_lying"]
+        self.assertEqual(pl["scheduled"], 2)
+        self.assertEqual(pl["attempted"], 1)
+        self.assertEqual(pl["skipped"], 0)
+        self.assertEqual(pl["failed"], 0)
+        self.assertEqual(pl["stale"], 1)
+        self.assertEqual(pl["coverage"], 0.5)
+
+
+class TestOverloadDegradation(unittest.TestCase):
+    """Tests for shedding lower-priority work under overload and capability degradation."""
+
+    def test_overload_sheds_routine_work_first(self) -> None:
+        """When queue reaches capacity, persistent_lying is shed first and capability is degraded."""
+        scheduler = PoseScheduler(max_queue_size=5, overload_queue_threshold=0.8)
+
+        # Fill queue with 3 fast_fall and 2 persistent_lying requests
+        for i in range(3):
+            scheduler.submit_request(PoseRequest(f"ff-{i}", "c1", "s1", 1, 1, [0, 0, 10, 10], 10.0, branch="fast_fall", priority=1))
+        for i in range(2):
+            scheduler.submit_request(PoseRequest(f"pl-{i}", "c1", "s1", 1, 1, [0, 0, 10, 10], 10.0, branch="persistent_lying", priority=3))
+
+        self.assertEqual(scheduler.queued_count(), 5)
+
+        # Now submit another fast_fall request during overload
+        new_ff = PoseRequest("ff-new", "c1", "s1", 1, 1, [0, 0, 10, 10], 10.0, branch="fast_fall", priority=1)
+        success = scheduler.submit_request(new_ff)
+        self.assertTrue(success)
+
+        # The persistent_lying request should have been shed to make room!
+        self.assertEqual(scheduler.capability_status, "degraded")
+        self.assertIn("overload_shedding_routine_pose", str(scheduler.degraded_reason))
+
+        # Check shed outcomes
+        shed = scheduler.poll_shed_outcomes()
+        self.assertGreaterEqual(len(shed), 1)
+        self.assertEqual(shed[0].branch, "persistent_lying")
+        self.assertEqual(shed[0].status, "skipped")
+        self.assertEqual(shed[0].reason, "overload_shedding_routine_pose")
+
+        # Fast fall requests are still in the queue!
+        queued_branches = scheduler.get_queued_branches()
+        self.assertIn("fast_fall", queued_branches)
+
+
+class TestHysteresisRecovery(unittest.TestCase):
+    """Tests for recovery hysteresis requiring sustained calm cycles to prevent flapping."""
+
+    def test_recovery_ramp_with_hysteresis(self) -> None:
+        scheduler = PoseScheduler(recovery_cycles=3)
+        scheduler.trigger_overload(reason="overload_shedding_routine_pose")
+
+        self.assertEqual(scheduler.capability_status, "degraded")
+        self.assertEqual(scheduler.degraded_reason, "overload_shedding_routine_pose")
+
+        # Calm cycle 1: must remain degraded! (Does NOT flap to full on single empty cycle)
+        scheduler.step_evaluation_cycle(calm=True)
+        self.assertEqual(scheduler.capability_status, "degraded")
+
+        # Calm cycle 2: still degraded
+        scheduler.step_evaluation_cycle(calm=True)
+        self.assertEqual(scheduler.capability_status, "degraded")
+
+        # Interruption: an overload cycle occurs! Resets calm counter
+        scheduler.step_evaluation_cycle(calm=False, overload_reason="queue_near_capacity")
+        self.assertEqual(scheduler.capability_status, "degraded")
+        self.assertEqual(scheduler.degraded_reason, "queue_near_capacity")
+
+        # Now 3 consecutive calm cycles needed
+        scheduler.step_evaluation_cycle(calm=True)
+        self.assertEqual(scheduler.capability_status, "degraded")
+
+        scheduler.step_evaluation_cycle(calm=True)
+        self.assertEqual(scheduler.capability_status, "degraded")
+
+        # 3rd calm cycle: now recovered to full!
+        scheduler.step_evaluation_cycle(calm=True)
+        self.assertEqual(scheduler.capability_status, "full")
+        self.assertIsNone(scheduler.degraded_reason)
+
+
+class TestPipelinePoseIntegrationDeepened(unittest.TestCase):
+    """Tests for PerceptionPipeline automatic scheduling, metrics exposure, and status."""
+
+    def setUp(self) -> None:
+        import tempfile
+        from apps.edge.outbox import EventOutbox
+        from apps.edge.pipeline import PerceptionPipeline
+        from apps.edge.recorder import FileRecorder
+
+        self.tmp_dir = tempfile.mkdtemp()
+        self.recorder_dir = Path(self.tmp_dir) / "recorder"
+        self.recorder_dir.mkdir(parents=True, exist_ok=True)
+        self.db_path = Path(self.tmp_dir) / "outbox.db"
+        self.recorder = FileRecorder(self.recorder_dir)
+        self.outbox = EventOutbox(self.db_path)
+        self.estimator = RtmposeEstimator()
+        self.pose_manager = PoseManager(estimator=self.estimator, max_queue_size=10, max_cached_frames=10)
+        self.pipeline = PerceptionPipeline(
+            recorder=self.recorder,
+            outbox=self.outbox,
+            pose_manager=self.pose_manager,
+        )
+
+    def tearDown(self) -> None:
+        import shutil
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_pipeline_status_and_pose_metrics_exposure(self) -> None:
+        """Pipeline exposes pose_capability and branch metrics in status() and get_pose_metrics()."""
+        status = self.pipeline.status()
+        self.assertIn("pose_capability", status)
+        self.assertIn("pose_metrics", status)
+        self.assertEqual(status["pose_capability"]["status"], "full")
+
+        metrics = self.pipeline.get_pose_metrics()
+        self.assertIn("fast_fall", metrics)
+        self.assertIn("slow_collapse", metrics)
+        self.assertIn("persistent_lying", metrics)
+
+    def test_pipeline_process_frame_schedules_and_records_coverage(self) -> None:
+        """process_frame schedules pose candidate from active track and records coverage."""
+        rgb = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        # Frame 1: initial person track
+        det1 = [{"bbox": [100.0, 100.0, 150.0, 300.0], "score": 0.9, "label": "person"}]
+        self.pipeline.process_frame(rgb, timestamp=1.0, frame_id=1, detections=det1)
+
+        # Frame 2: rapid drop (fast_fall)
+        det2 = [{"bbox": [100.0, 200.0, 200.0, 350.0], "score": 0.9, "label": "person"}]
+        self.pipeline.process_frame(rgb, timestamp=2.0, frame_id=2, detections=det2)
+
+        metrics = self.pipeline.get_pose_metrics()
+        self.assertGreaterEqual(metrics["fast_fall"]["scheduled"], 1)
+        self.assertGreaterEqual(metrics["fast_fall"]["attempted"], 1)
+        self.assertGreater(metrics["fast_fall"]["coverage"], 0.0)
+
+        # Check observation metadata contains pose capability and metrics
+        obs = self.pipeline.last_observation
+        self.assertIsNotNone(obs)
+        assert obs is not None
+        self.assertIn("pose_capability", obs)
+        self.assertIn("pose_metrics", obs)
 
 
 if __name__ == "__main__":

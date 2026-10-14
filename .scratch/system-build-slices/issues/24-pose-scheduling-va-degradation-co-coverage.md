@@ -1,7 +1,7 @@
 # 24: Pose scheduling và degradation có coverage
 
-Status: ready-for-agent
-Execution: not-started
+Status: ready-for-review
+Execution: completed
 Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
 
 **What to build:** Fast-fall, slow-collapse và lying được sampling công bằng; overload giảm công việc có capability reason tới dashboard.
@@ -10,8 +10,8 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 ## Acceptance criteria
 
-- [ ] Đo scheduled/attempted/skipped/failed/stale và coverage từng nhánh, không chỉ trigger y spike.
-- [ ] Burst/deadline/fairness/hysteresis/recovery test; recorder tiếp tục và mất capability không báo healthy/negative.
+- [x] Đo scheduled/attempted/skipped/failed/stale và coverage từng nhánh, không chỉ trigger y spike.
+- [x] Burst/deadline/fairness/hysteresis/recovery test; recorder tiếp tục và mất capability không báo healthy/negative.
 
 ## Traceability
 
@@ -26,3 +26,9 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 ## Comments
 
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
+- 2026-10-14: Triển khai hoàn tất PoseScheduler trong `apps/edge/pose.py` và tích hợp `PerceptionPipeline` trong `apps/edge/pipeline.py`:
+  - Phân loại 3 nhánh: `fast_fall` (priority 1), `slow_collapse` (priority 2), `persistent_lying` (priority 3) với per-branch min-shares và anti-starvation.
+  - Đo lường metrics đầy đủ: scheduled, attempted, skipped, failed, stale, và coverage per branch.
+  - Hỗ trợ overload shedding (shedding persistent_lying trước, rồi slow_collapse), báo `capability_status="degraded"` với lý do cụ thể.
+  - Cơ chế hồi phục Hysteresis (3 calm cycles liên tiếp) chống flapping.
+  - 24/24 tests trong `tests/test_pose.py` passed; mypy đạt 0 lỗi; code review OCR đạt chuẩn. Ghi log tại `docs/logs/2026-10-14-ticket-24-implementation.md`.
