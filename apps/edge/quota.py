@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import contextlib
 import json
 import logging
-import os
 from pathlib import Path
 import shutil
 import sqlite3
@@ -22,6 +22,8 @@ class StorageBreakdown:
     free_bytes: int
     total_bytes: int
     used_percent: float
+    degraded: bool = False
+    degraded_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -32,6 +34,8 @@ class StorageBreakdown:
             "free_bytes": self.free_bytes,
             "total_bytes": self.total_bytes,
             "used_percent": self.used_percent,
+            "degraded": self.degraded,
+            "degraded_reason": self.degraded_reason,
         }
 
 
@@ -59,6 +63,8 @@ class StorageQuotaManager:
         self.warning_percent = float(warning_percent)
         self.critical_percent = float(critical_percent)
         self.disk_usage_fn = disk_usage_fn or shutil.disk_usage
+        self.degraded: bool = False
+        self.degraded_reason: str | None = None
 
         if storage_path is not None:
             self.storage_path = Path(storage_path).resolve()
@@ -82,14 +88,18 @@ class StorageQuotaManager:
 
         active_pins: dict[str, list[tuple[float, float]]] = {}
         try:
-            with sqlite3.connect(pins_db, timeout=5) as db:
+            with contextlib.closing(sqlite3.connect(pins_db, timeout=5)) as db:
                 rows = db.execute(
                     "SELECT session_id, start, end FROM pins WHERE released=0"
                 ).fetchall()
                 for session_id, start, end in rows:
                     active_pins.setdefault(session_id, []).append((float(start), float(end)))
+            self.degraded = False
+            self.degraded_reason = None
         except (sqlite3.Error, OSError) as exc:
             logger.warning("Failed to query active pins: %s", exc)
+            self.degraded = True
+            self.degraded_reason = f"active_pins_query_failed: {exc}"
         return active_pins
 
     def get_storage_breakdown(self) -> StorageBreakdown:
@@ -119,10 +129,14 @@ class StorageQuotaManager:
             wal_candidates.extend(self.storage_path.glob("*.db*"))
 
         for f in wal_candidates:
-            if f.is_file() and f not in seen_wal_files:
-                seen_wal_files.add(f)
+            try:
+                resolved = f.resolve()
+            except OSError:
+                resolved = f
+            if resolved.is_file() and resolved not in seen_wal_files:
+                seen_wal_files.add(resolved)
                 try:
-                    wal_bytes += f.stat().st_size
+                    wal_bytes += resolved.stat().st_size
                 except OSError:
                     pass
 
@@ -130,8 +144,29 @@ class StorageQuotaManager:
         recorder_root = None
         if self.recorder is not None and hasattr(self.recorder, "root"):
             recorder_root = Path(self.recorder.root)
-        elif (self.storage_path / "manifests").is_dir():
+        elif (self.storage_path / "pins.sqlite3").is_file() or (self.storage_path / "manifests").is_dir() or self.storage_path.is_dir():
             recorder_root = self.storage_path
+
+        released_acked_hashes: set[str] = set()
+        pins_db = None
+        if self.recorder is not None and hasattr(self.recorder, "_pins"):
+            pins_db = Path(self.recorder._pins)
+        elif (self.storage_path / "pins.sqlite3").is_file():
+            pins_db = self.storage_path / "pins.sqlite3"
+
+        if pins_db and pins_db.is_file():
+            try:
+                import hashlib
+                with contextlib.closing(sqlite3.connect(pins_db, timeout=5)) as db:
+                    rows = db.execute(
+                        "SELECT p.request_id FROM pins p JOIN transfers t ON p.request_id = t.request_id WHERE p.released = 1"
+                    ).fetchall()
+                    for (req_id,) in rows:
+                        released_acked_hashes.add(hashlib.sha256(req_id.encode()).hexdigest())
+            except (sqlite3.Error, OSError) as exc:
+                logger.warning("Failed to query released acked pins: %s", exc)
+                self.degraded = True
+                self.degraded_reason = self.degraded_reason or f"released_pins_query_failed: {exc}"
 
         if recorder_root and recorder_root.is_dir():
             # A. Manifests directory
@@ -148,7 +183,11 @@ class StorageQuotaManager:
                     if name.endswith((".tmp.mkv", ".json.tmp", ".concat", ".tmp")):
                         temp_bytes += sz
                     elif name.endswith(".mkv") or name.endswith(".json"):
-                        pinned_bytes += sz
+                        stem = entry.name.removesuffix(".mkv").removesuffix(".json")
+                        if stem in released_acked_hashes:
+                            ring_bytes += sz
+                        else:
+                            pinned_bytes += sz
 
             # B. Session directories
             for sdir in recorder_root.iterdir():
@@ -249,6 +288,8 @@ class StorageQuotaManager:
             free_bytes=free_bytes,
             total_bytes=total_bytes,
             used_percent=used_percent,
+            degraded=self.degraded,
+            degraded_reason=self.degraded_reason,
         )
 
     def is_storage_pressured(self) -> bool:
@@ -274,7 +315,8 @@ class StorageQuotaManager:
             return False
         if (breakdown.free_bytes - estimated_bytes) <= self.min_state_reserve_bytes:
             return False
-        projected_used_bytes = (breakdown.total_bytes - breakdown.free_bytes) + estimated_bytes
+        baseline_used_bytes = breakdown.total_bytes * (breakdown.used_percent / 100.0)
+        projected_used_bytes = baseline_used_bytes + estimated_bytes
         if (projected_used_bytes / breakdown.total_bytes * 100.0) >= self.critical_percent:
             return False
         return True
@@ -289,97 +331,25 @@ class StorageQuotaManager:
         if not force and not self.is_storage_pressured():
             return {"cleaned_bytes": 0, "cleaned_files": []}
 
-        cleaned_files: list[str] = []
-        cleaned_bytes: int = 0
+        if self.recorder is None or not hasattr(self.recorder, "cleanup_storage"):
+            return {"cleaned_bytes": 0, "cleaned_files": []}
 
-        # Step 1: Cleanup temporary scratch files
-        if self.recorder is not None and hasattr(self.recorder, "cleanup_evidence_temps"):
-            try:
-                rec_cleaned = self.recorder.cleanup_evidence_temps()
-                cleaned_files.extend(rec_cleaned)
-            except Exception as exc:
-                logger.warning("Recorder cleanup_evidence_temps error: %s", exc)
+        target_bytes_to_reclaim = None
+        if not force:
+            breakdown = self.get_storage_breakdown()
+            needed_for_percent = 0
+            if breakdown.used_percent >= self.warning_percent and breakdown.total_bytes > 0:
+                target_used = breakdown.total_bytes * (max(0.0, self.warning_percent - 2.0) / 100.0)
+                current_used = breakdown.total_bytes * (breakdown.used_percent / 100.0)
+                needed_for_percent = int(max(0.0, current_used - target_used))
+            needed_for_reserve = 0
+            if breakdown.free_bytes <= self.min_state_reserve_bytes:
+                target_free = int(self.min_state_reserve_bytes * 1.2)
+                needed_for_reserve = max(0, target_free - breakdown.free_bytes)
+            target_bytes_to_reclaim = max(needed_for_percent, needed_for_reserve)
 
-        recorder_root = None
-        if self.recorder is not None and hasattr(self.recorder, "root"):
-            recorder_root = Path(self.recorder.root)
-        elif (self.storage_path / "manifests").is_dir():
-            recorder_root = self.storage_path
-
-        if recorder_root and recorder_root.is_dir():
-            # Clean orphan temp files in manifests/
-            manifests_dir = recorder_root / "manifests"
-            if manifests_dir.is_dir():
-                for entry in manifests_dir.iterdir():
-                    if entry.is_file() and entry.name.endswith(
-                        (".tmp.mkv", ".json.tmp", ".concat", ".tmp")
-                    ):
-                        try:
-                            sz = entry.stat().st_size
-                            entry.unlink(missing_ok=True)
-                            cleaned_files.append(str(entry))
-                            cleaned_bytes += sz
-                        except OSError:
-                            pass
-
-            # Step 2: Clean unpinned ring segments
-            active_pins = self._get_active_pins()
-
-            for sdir in recorder_root.iterdir():
-                if not sdir.is_dir() or sdir.name == "manifests" or sdir.name.startswith("."):
-                    continue
-                session_id = sdir.name
-                session_pins = active_pins.get(session_id, [])
-
-                # Clean any orphan tmp files in session dir (skip active segment parts)
-                for entry in sdir.iterdir():
-                    if entry.is_file() and entry.name.endswith(
-                        (".tmp", ".tmp.mkv", ".json.tmp", ".concat")
-                    ):
-                        try:
-                            sz = entry.stat().st_size
-                            entry.unlink(missing_ok=True)
-                            cleaned_files.append(str(entry))
-                            cleaned_bytes += sz
-                        except OSError:
-                            pass
-
-                # Find unpinned segments from sidecar json
-                eligible_segments: list[tuple[float, Path, Path]] = []
-                for entry in sdir.iterdir():
-                    if entry.is_file() and entry.name.endswith(".json") and not entry.name.endswith(".json.tmp"):
-                        try:
-                            meta = json.loads(entry.read_text())
-                            s_start = float(meta.get("start_seconds", 0.0))
-                            s_end = float(meta.get("end_seconds", 0.0))
-                            is_pinned = any(
-                                s_start <= pin_end and s_end >= pin_start
-                                for pin_start, pin_end in session_pins
-                            )
-                            if not is_pinned:
-                                media_p = sdir / f"{entry.stem}.mkv"
-                                eligible_segments.append((s_start, entry, media_p))
-                        except Exception:
-                            continue
-
-                # Sort oldest first (FIFO)
-                eligible_segments.sort(key=lambda x: x[0])
-                for _, json_p, media_p in eligible_segments:
-                    try:
-                        if media_p.is_file():
-                            sz = media_p.stat().st_size
-                            media_p.unlink(missing_ok=True)
-                            cleaned_files.append(str(media_p))
-                            cleaned_bytes += sz
-                        if json_p.is_file():
-                            sz = json_p.stat().st_size
-                            json_p.unlink(missing_ok=True)
-                            cleaned_files.append(str(json_p))
-                            cleaned_bytes += sz
-                    except OSError:
-                        pass
-
-        return {
-            "cleaned_bytes": cleaned_bytes,
-            "cleaned_files": cleaned_files,
-        }
+        try:
+            return self.recorder.cleanup_storage(target_bytes=target_bytes_to_reclaim)
+        except Exception as exc:
+            logger.warning("Recorder storage cleanup failed: %s", exc)
+            return {"cleaned_bytes": 0, "cleaned_files": []}

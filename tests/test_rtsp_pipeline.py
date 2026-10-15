@@ -109,6 +109,149 @@ class TestRtspRingRecorder(unittest.TestCase):
         self.assertGreaterEqual(len(segments), 1)
         ring_recorder.stop()
 
+    def test_recorder_rollover_session_on_fallback_prevents_file_exists_error(self) -> None:
+        """P1-04: When transitioning between rtsp and fallback, a new session_id is used.
+        Pre-populating the initial session_id with segments must not cause FileExistsError.
+        """
+        initial_session = str(uuid4())
+        recorder = FileRecorder(self.root / "ring_rollover", ring_seconds=600.0)
+        # Pre-populate initial_session with segments to simulate prior recording
+        recorder.record_file(self.sample_fixture, initial_session, segment_seconds=2.0)
+        self.assertGreaterEqual(len(recorder.segments(initial_session)), 1)
+
+        credentialed_url = "rtsp://camera_user:super_pass@127.0.0.1:54321/live"
+        sleep_durations: list[float] = []
+        ring_recorder = RtspRingRecorder(
+            root=self.root / "ring_rollover",
+            ring_seconds=600.0,
+            rtsp_url=credentialed_url,
+            fallback_path=self.sample_fixture,
+            session_id=initial_session,
+            probe_timeout_seconds=0.1,
+            recorder=recorder,
+            reconnect_initial_delay=0.05,
+            sleeper=lambda d: sleep_durations.append(d),
+        )
+        # Starting recorder with unreachable RTSP must rollover session_id,
+        # avoiding FileExistsError on initial_session.
+        ring_recorder.start()
+        try:
+            status = ring_recorder.status()
+            self.assertEqual(status["status"], "running")
+            self.assertEqual(status["source"], "fallback")
+            # session_id must have rolled over to a new ID different from initial_session
+            self.assertNotEqual(ring_recorder.session_id, initial_session)
+            # And fallback segments must be recorded under the new session_id
+            new_segments = ring_recorder.recorder.segments(ring_recorder.session_id)
+            self.assertGreaterEqual(len(new_segments), 1)
+        finally:
+            ring_recorder.stop()
+
+    def test_recorder_reconnect_loop_recovers_to_rtsp_with_new_session(self) -> None:
+        """P0-03 & P1-04: RtspRingRecorder attempts reconnect with backoff;
+        when RTSP becomes available, it switches back to rtsp with a new session_id.
+        """
+        initial_session = str(uuid4())
+        recorder = FileRecorder(self.root / "ring_recon", ring_seconds=600.0)
+        fake_url = "rtsp://camera.test:554/live"
+
+        probes = [False, False, True]  # fail twice, then succeed
+        def fake_probe(url: str, timeout_seconds: float = 2.0):
+            if probes:
+                ok = probes.pop(0)
+                if not ok:
+                    raise RuntimeError("connection refused")
+            return None
+
+        recorded_rtsp_sessions: list[str] = []
+        def fake_record_rtsp():
+            recorded_rtsp_sessions.append(ring_recorder.session_id)
+            # Sleep until stopped
+            while not ring_recorder._stop_event.is_set():
+                ring_recorder._stop_event.wait(0.01)
+
+        sleep_delays: list[float] = []
+        from unittest.mock import patch
+        with patch("apps.edge.rtsp_recorder.probe_rtsp_stream", side_effect=fake_probe):
+            ring_recorder = RtspRingRecorder(
+                root=self.root / "ring_recon",
+                ring_seconds=600.0,
+                rtsp_url=fake_url,
+                fallback_path=self.sample_fixture,
+                session_id=initial_session,
+                probe_timeout_seconds=0.1,
+                recorder=recorder,
+                reconnect_initial_delay=0.01,
+                sleeper=lambda d: sleep_delays.append(d),
+            )
+            with patch.object(ring_recorder, "_record_rtsp_stream", side_effect=fake_record_rtsp):
+                ring_recorder.start()
+                # Wait until RTSP reconnect is reached and recorded
+                for _ in range(50):
+                    if ring_recorder.status()["source"] == "rtsp":
+                        break
+                    time.sleep(0.02)
+                try:
+                    status = ring_recorder.status()
+                    self.assertEqual(status["source"], "rtsp")
+                    self.assertGreaterEqual(len(recorded_rtsp_sessions), 1)
+                    # The RTSP session must be different from initial_session and fallback session
+                    self.assertNotEqual(recorded_rtsp_sessions[0], initial_session)
+                    self.assertGreaterEqual(len(sleep_delays), 1)
+                finally:
+                    ring_recorder.stop()
+
+    def test_fallback_multiple_backoff_cycles_no_file_exists_error_and_no_overwriting(self) -> None:
+        """Fallback running through multiple backoff cycles does not cause FileExistsError,
+        does not overwrite segments on the same session, and maintains a stable session_id.
+        """
+        initial_session = str(uuid4())
+        recorder = FileRecorder(self.root / "ring_multi_backoff", ring_seconds=600.0)
+        fake_url = "rtsp://camera.invalid:554/live"
+
+        sleep_delays: list[float] = []
+        stop_after_cycles = 4
+        cycle_count = 0
+
+        def failing_probe(url: str, timeout_seconds: float = 2.0):
+            nonlocal cycle_count
+            cycle_count += 1
+            if cycle_count >= stop_after_cycles:
+                ring_recorder._stop_event.set()
+            raise RuntimeError("camera offline")
+
+        from unittest.mock import patch
+        with patch("apps.edge.rtsp_recorder.probe_rtsp_stream", side_effect=failing_probe):
+            ring_recorder = RtspRingRecorder(
+                root=self.root / "ring_multi_backoff",
+                ring_seconds=600.0,
+                rtsp_url=fake_url,
+                fallback_path=self.sample_fixture,
+                session_id=initial_session,
+                probe_timeout_seconds=0.05,
+                recorder=recorder,
+                reconnect_initial_delay=0.01,
+                sleeper=lambda d: sleep_delays.append(d),
+            )
+            ring_recorder.start()
+            try:
+                if ring_recorder._thread:
+                    ring_recorder._thread.join(timeout=3.0)
+                status = ring_recorder.status()
+                self.assertEqual(status["source"], "fallback")
+                # Must have run multiple backoff waits
+                self.assertGreaterEqual(len(sleep_delays), 2)
+                # Session must have rolled over from initial_session once when entering fallback
+                fallback_session = ring_recorder.session_id
+                self.assertNotEqual(fallback_session, initial_session)
+                # Segments must exist for fallback_session
+                segments = recorder.segments(fallback_session)
+                self.assertGreaterEqual(len(segments), 1)
+                # No FileExistsError in last_error
+                self.assertNotIn("FileExistsError", status.get("error") or "")
+            finally:
+                ring_recorder.stop()
+
 
 class TestPerceptionPipeline(unittest.TestCase):
     """Test suite for PerceptionPipeline integration."""

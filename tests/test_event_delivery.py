@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import io
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import MagicMock, patch
+from urllib.error import HTTPError, URLError
 
 from apps.edge.outbox import EventConflict, EventOutbox
+from apps.edge.send_synthetic import deliver_pending
 from domain.event_contract import EventValidationError, canonical_event_hash, validate_event, validate_revision_identity
 
 
@@ -188,15 +193,161 @@ class EdgeOutboxTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaisesRegex(EventValidationError, f"{field} is immutable"):
                 self.outbox.enqueue(next_event)
 
-    def test_out_of_order_revisions_are_durable_and_identity_checked(self) -> None:
-        for revision in (3, 1, 2):
-            event = event_fixture()
-            event.update(revision=revision, message_id=f"msg-{revision}")
-            self.outbox.enqueue(event)
+    def test_revisions_must_be_strictly_increasing_and_idempotent_replay(self) -> None:
+        # Revision 1 enqueued
+        event1 = event_fixture()
+        event1.update(revision=1, message_id="msg-1")
+        self.assertEqual(self.outbox.enqueue(event1), "msg-1")
 
+        # Idempotent replay of exact same revision/hash returns prior message_id
+        self.assertEqual(self.outbox.enqueue(event1), "msg-1")
+
+        # Same revision with different content raises EventConflict
+        event1_different = dict(event1)
+        event1_different["payload"] = {"taxonomy": "different"}
+        with self.assertRaises(EventConflict):
+            self.outbox.enqueue(event1_different)
+
+        # Revision 3 enqueued
+        event3 = event_fixture()
+        event3.update(revision=3, message_id="msg-3", produced_at="2026-10-12T00:00:03Z")
+        self.assertEqual(self.outbox.enqueue(event3), "msg-3")
+
+        # Idempotent replay of revision 3 returns prior message_id
+        self.assertEqual(self.outbox.enqueue(event3), "msg-3")
+
+        # Lower revision (revision 2 < max revision 3) is rejected with EventConflict
+        event2 = event_fixture()
+        event2.update(revision=2, message_id="msg-2", produced_at="2026-10-12T00:00:02Z")
+        with self.assertRaises(EventConflict):
+            self.outbox.enqueue(event2)
+
+        # Outbox should have revision 1 and revision 3
         with sqlite3.connect(self.db_path) as db:
             revisions = db.execute("SELECT revision FROM event_revisions ORDER BY revision").fetchall()
-        self.assertEqual([row[0] for row in revisions], [1, 2, 3])
+        self.assertEqual([row[0] for row in revisions], [1, 3])
+
+
+class DeliverPendingRetryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.tempdir.name) / "edge.sqlite3"
+        self.outbox = EventOutbox(self.db_path)
+        self.event = event_fixture()
+        self.outbox.enqueue(self.event)
+        self.item = self.outbox.pending()[0]
+        self.valid_receipt = {
+            "device_id": self.event["device_id"],
+            "event_id": self.event["event_id"],
+            "revision": self.event["revision"],
+            "message_id": self.item["message_id"],
+            "event_hash": self.item["event_hash"],
+            "accepted": True,
+            "accepted_at": "2026-10-15T00:00:00Z",
+            "canonicalization": "canonical-json-python-v1",
+        }
+
+    def tearDown(self) -> None:
+        self.tempdir.cleanup()
+
+    def _mock_response(self, receipt: dict) -> MagicMock:
+        resp = MagicMock()
+        resp.__enter__.return_value = io.BytesIO(json.dumps(receipt).encode("utf-8"))
+        resp.__exit__.return_value = False
+        return resp
+
+    @patch.dict(os.environ, {"ALLOW_INSECURE_LAB": "1"})
+    @patch("apps.edge.send_synthetic.urlopen")
+    def test_deliver_pending_success_on_first_try(self, mock_urlopen) -> None:
+        mock_urlopen.return_value = self._mock_response(self.valid_receipt)
+        delivered = deliver_pending(self.outbox, "http://localhost:8000", "tok")
+        self.assertEqual(delivered, 1)
+        self.assertEqual(self.outbox.pending(), [])
+
+    @patch.dict(os.environ, {"ALLOW_INSECURE_LAB": "1"})
+    @patch("apps.edge.send_synthetic.urlopen")
+    def test_deliver_pending_retries_transient_error_with_backoff_and_jitter(self, mock_urlopen) -> None:
+        sleep_delays: list[float] = []
+        clock_ticks: list[float] = [100.0]
+
+        def fake_sleep(dur: float) -> None:
+            sleep_delays.append(dur)
+            clock_ticks[0] += dur
+
+        def fake_clock() -> float:
+            return clock_ticks[0]
+
+        # First 2 attempts fail with URLError, 3rd attempt succeeds
+        mock_urlopen.side_effect = [
+            URLError("connection refused"),
+            URLError("reset by peer"),
+            self._mock_response(self.valid_receipt),
+        ]
+
+        # Use rng_fn that returns max of the interval (b) to test backoff bound
+        delivered = deliver_pending(
+            self.outbox,
+            "http://localhost:8000",
+            "tok",
+            max_retries=3,
+            backoff_base=0.5,
+            jitter=True,
+            sleep_fn=fake_sleep,
+            clock_fn=fake_clock,
+            rng_fn=lambda a, b: b,
+        )
+        self.assertEqual(delivered, 1)
+        self.assertEqual(len(sleep_delays), 2)
+        self.assertAlmostEqual(sleep_delays[0], 0.5)
+        self.assertAlmostEqual(sleep_delays[1], 1.0)
+        self.assertEqual(self.outbox.pending(), [])
+
+    @patch.dict(os.environ, {"ALLOW_INSECURE_LAB": "1"})
+    @patch("apps.edge.send_synthetic.urlopen")
+    def test_deliver_pending_exhausts_retries_and_records_all_attempts(self, mock_urlopen) -> None:
+        sleep_delays: list[float] = []
+        mock_urlopen.side_effect = HTTPError("http://localhost:8000/v1/events", 503, "Unavailable", {}, None)
+
+        with self.assertRaises(HTTPError):
+            deliver_pending(
+                self.outbox,
+                "http://localhost:8000",
+                "tok",
+                max_retries=2,
+                backoff_base=0.2,
+                sleep_fn=sleep_delays.append,
+                rng_fn=lambda a, b: b,
+            )
+
+        self.assertEqual(len(sleep_delays), 2)
+        self.assertAlmostEqual(sleep_delays[0], 0.2)
+        self.assertAlmostEqual(sleep_delays[1], 0.4)
+        pending = self.outbox.pending()
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["attempts"], 3)
+        with sqlite3.connect(self.db_path) as db:
+            last_err = db.execute("SELECT last_error FROM delivery_outbox WHERE message_id=?", (self.item["message_id"],)).fetchone()[0]
+        self.assertEqual(last_err, "HTTPError")
+
+    @patch.dict(os.environ, {"ALLOW_INSECURE_LAB": "1"})
+    @patch("apps.edge.send_synthetic.urlopen")
+    def test_deliver_pending_non_retryable_4xx_raises_immediately_without_retry(self, mock_urlopen) -> None:
+        sleep_delays: list[float] = []
+        mock_urlopen.side_effect = HTTPError("http://localhost:8000/v1/events", 403, "Forbidden", {}, None)
+
+        with self.assertRaises(HTTPError):
+            deliver_pending(
+                self.outbox,
+                "http://localhost:8000",
+                "tok",
+                max_retries=3,
+                sleep_fn=sleep_delays.append,
+            )
+
+        self.assertEqual(len(sleep_delays), 0)
+        pending = self.outbox.pending()
+        self.assertEqual(len(pending), 1)
+        self.assertEqual(pending[0]["attempts"], 1)
 
 
 if __name__ == "__main__":

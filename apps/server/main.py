@@ -31,6 +31,71 @@ from apps.server.store import (
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
+MAX_EVIDENCE_BYTES = 100 * 1024 * 1024  # 100 MiB limit per evidence clip
+
+
+def _infer_evidence_extension(metadata: dict[str, Any], content_type_header: str = "") -> str:
+    ct = (
+        metadata.get("content_type")
+        or metadata.get("content-type")
+        or metadata.get("mime_type")
+        or content_type_header
+    )
+    if isinstance(ct, str):
+        ct_clean = ct.split(";", 1)[0].strip().lower()
+        if ct_clean in {"image/jpeg", "image/jpg"}:
+            return ".jpg"
+        if ct_clean == "image/png":
+            return ".png"
+        if ct_clean == "video/mp4":
+            return ".mp4"
+        if ct_clean == "video/x-matroska":
+            return ".mkv"
+
+    codec = metadata.get("codec")
+    if isinstance(codec, str):
+        c_clean = codec.strip().lower()
+        if c_clean in {"jpeg", "mjpeg", "jpg"}:
+            return ".jpg"
+        if c_clean == "png":
+            return ".png"
+        if c_clean == "mp4":
+            return ".mp4"
+        if c_clean in {"mkv", "matroska", "h264", "h265", "hevc"}:
+            return ".mkv"
+
+    return ".mkv"
+
+
+def _infer_media_type(record: dict[str, Any], file_path: Path) -> str:
+    manifest = record.get("manifest", {})
+    ct = (
+        manifest.get("content_type")
+        or manifest.get("content-type")
+        or manifest.get("mime_type")
+    )
+    if isinstance(ct, str) and "/" in ct:
+        return ct.split(";", 1)[0].strip().lower()
+
+    codec = manifest.get("codec")
+    if isinstance(codec, str):
+        c_clean = codec.strip().lower()
+        if c_clean in {"jpeg", "mjpeg", "jpg"}:
+            return "image/jpeg"
+        if c_clean == "png":
+            return "image/png"
+        if c_clean == "mp4":
+            return "video/mp4"
+
+    ext = file_path.suffix.lower()
+    if ext in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if ext == ".png":
+        return "image/png"
+    if ext == ".mp4":
+        return "video/mp4"
+
+    return "video/x-matroska"
 
 
 class EventBodyLimitMiddleware:
@@ -238,14 +303,21 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
         return JSONResponse(receipt, status_code=200)
 
     @app.get("/v1/events")
-    def list_events(request: Request, limit: int = 50) -> dict[str, Any]:
+    def list_events(request: Request, limit: int = 50, cursor: str | None = None) -> dict[str, Any]:
         token = _bearer(request)
         if not hmac.compare_digest(token.encode("utf-8"), dashboard_token.encode("utf-8")):
             raise HTTPException(status_code=401, detail="invalid dashboard credentials", headers={"WWW-Authenticate": "Bearer"})
         if not 1 <= limit <= 100:
             raise HTTPException(status_code=422, detail="limit must be between 1 and 100")
         try:
-            return {"events": store.list_current(limit), "review_enabled": bool(reviewer_tokens)}
+            paginated = store.list_current(limit, cursor=cursor)
+            return {
+                "events": paginated,
+                "next_cursor": getattr(paginated, "next_cursor", None),
+                "review_enabled": bool(reviewer_tokens),
+            }
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
         except PyMongoError:
             raise HTTPException(status_code=503, detail="event query unavailable")
 
@@ -355,17 +427,13 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
         except PyMongoError:
             raise HTTPException(status_code=503, detail="evidence ownership query unavailable")
 
-        body = await request.body()
-        computed_sha256 = hashlib.sha256(body).hexdigest()
-        if computed_sha256 != sha256_header:
-            raise HTTPException(status_code=422, detail="evidence SHA-256 checksum mismatch")
-
-        size_bytes = len(body)
         expected_size = metadata.get("size_bytes")
+        expected_size_int: int | None = None
         if expected_size is not None:
             try:
-                if int(expected_size) != size_bytes:
-                    raise HTTPException(status_code=422, detail="evidence size_bytes does not match payload")
+                expected_size_int = int(expected_size)
+                if expected_size_int < 0:
+                    raise ValueError
             except (ValueError, TypeError):
                 raise HTTPException(status_code=422, detail="invalid size_bytes in metadata")
 
@@ -374,14 +442,33 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
         if not target_dir.is_relative_to(root):
             raise HTTPException(status_code=422, detail="evidence path escapes storage root")
         target_dir.mkdir(parents=True, exist_ok=True)
-        target_file = target_dir / f"{request_id}.mkv"
+        extension = _infer_evidence_extension(metadata, request.headers.get("content-type", ""))
+        target_file = target_dir / f"{request_id}{extension}"
         temp_file = target_dir / f".{request_id}.{uuid4().hex}.tmp"
+
+        hasher = hashlib.sha256()
+        size_bytes = 0
 
         try:
             with open(temp_file, "wb") as f:
-                f.write(body)
+                async for chunk in request.stream():
+                    if not chunk:
+                        continue
+                    size_bytes += len(chunk)
+                    if size_bytes > MAX_EVIDENCE_BYTES:
+                        raise HTTPException(status_code=413, detail="evidence payload exceeds maximum allowed size")
+                    hasher.update(chunk)
+                    f.write(chunk)
                 f.flush()
                 os.fsync(f.fileno())
+
+            computed_sha256 = hasher.hexdigest()
+            if computed_sha256 != sha256_header:
+                raise HTTPException(status_code=422, detail="evidence SHA-256 checksum mismatch")
+
+            if expected_size_int is not None and size_bytes != expected_size_int:
+                raise HTTPException(status_code=422, detail="evidence size_bytes does not match payload")
+
             try:
                 # Exclusive publication also handles a retry after rename but before DB commit.
                 os.link(temp_file, target_file)
@@ -482,77 +569,12 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
         if not file_path.is_file():
             raise HTTPException(status_code=404, detail="evidence file missing on disk")
 
-        file_size = file_path.stat().st_size
-        range_header = request.headers.get("range")
-
-        if not range_header:
-            with open(file_path, "rb") as f:
-                content = f.read()
-            return Response(
-                content=content,
-                status_code=200,
-                headers={
-                    "Content-Type": "video/x-matroska",
-                    "Content-Length": str(file_size),
-                    "Accept-Ranges": "bytes",
-                },
-            )
-
-        if not range_header.startswith("bytes="):
-            return Response(
-                status_code=416,
-                headers={"Content-Range": f"bytes */{file_size}"},
-            )
-
-        range_val = range_header[len("bytes="):].strip()
-        if "," in range_val:
-            range_val = range_val.split(",", 1)[0].strip()
-
-        start_str, sep, end_str = range_val.partition("-")
-        if not sep:
-            return Response(
-                status_code=416,
-                headers={"Content-Range": f"bytes */{file_size}"},
-            )
-
-        try:
-            if not start_str:
-                suffix_len = int(end_str)
-                if suffix_len <= 0 or file_size == 0:
-                    return Response(status_code=416, headers={"Content-Range": f"bytes */{file_size}"})
-                start = max(0, file_size - suffix_len)
-                end = file_size - 1
-            elif not end_str:
-                start = int(start_str)
-                end = file_size - 1
-            else:
-                start = int(start_str)
-                end = int(end_str)
-        except ValueError:
-            return Response(status_code=416, headers={"Content-Range": f"bytes */{file_size}"})
-
-        if file_size == 0 or start < 0 or start >= file_size or end < start:
-            return Response(
-                status_code=416,
-                headers={"Content-Range": f"bytes */{file_size}"},
-            )
-
-        end = min(end, file_size - 1)
-        chunk_len = end - start + 1
-
-        with open(file_path, "rb") as f:
-            f.seek(start)
-            chunk = f.read(chunk_len)
-
-        return Response(
-            content=chunk,
-            status_code=206,
-            headers={
-                "Content-Type": "video/x-matroska",
-                "Content-Range": f"bytes {start}-{end}/{file_size}",
-                "Content-Length": str(chunk_len),
-                "Accept-Ranges": "bytes",
-            },
+        media_type = _infer_media_type(record, file_path)
+        return FileResponse(
+            file_path,
+            media_type=media_type,
+            headers={"Accept-Ranges": "bytes"},
+            content_disposition_type=None,
         )
 
     return app

@@ -43,15 +43,15 @@ class TestByteTracker(unittest.TestCase):
         # Frame 1: Person at (100, 100, 160, 260)
         dets_f1 = [{"bbox": [100.0, 100.0, 160.0, 260.0], "score": 0.9, "label": "person"}]
         tracks_f1 = tracker.update(dets_f1, timestamp=1.0)
-        self.assertEqual(len(tracks_f1), 1)
-        track_id = tracks_f1[0].track_id
-        self.assertEqual(tracks_f1[0].state, "active")
+        # P1-12: a new track is tentative and is not reported until its second hit.
+        self.assertEqual(len(tracks_f1), 0)
 
-        # Frame 2: Person moves slightly to (105, 102, 165, 262)
+        # Frame 2: Person moves slightly to (105, 102, 165, 262) -> track activates
         dets_f2 = [{"bbox": [105.0, 102.0, 165.0, 262.0], "score": 0.88, "label": "person"}]
         tracks_f2 = tracker.update(dets_f2, timestamp=1.1)
         self.assertEqual(len(tracks_f2), 1)
-        self.assertEqual(tracks_f2[0].track_id, track_id)
+        track_id = tracks_f2[0].track_id
+        self.assertEqual(tracks_f2[0].state, "active")
 
         # Frame 3: Person at (110, 104, 170, 264)
         dets_f3 = [{"bbox": [110.0, 104.0, 170.0, 264.0], "score": 0.85, "label": "person"}]
@@ -66,13 +66,15 @@ class TestByteTracker(unittest.TestCase):
 
         # Frame 1: High score detection
         dets_f1 = [{"bbox": [200.0, 200.0, 260.0, 360.0], "score": 0.95, "label": "person"}]
-        tracks_f1 = tracker.update(dets_f1, timestamp=0.0)
+        self.assertEqual(len(tracker.update(dets_f1, timestamp=0.0)), 0)  # tentative
+        dets_f1b = [{"bbox": [201.0, 200.0, 261.0, 360.0], "score": 0.95, "label": "person"}]
+        tracks_f1 = tracker.update(dets_f1b, timestamp=0.1)
         self.assertEqual(len(tracks_f1), 1)
         tid = tracks_f1[0].track_id
 
-        # Frame 2: Occlusion causes score to drop to 0.35 (below high_threshold 0.6, but >= low_threshold 0.2)
+        # Frame 3: Occlusion causes score to drop to 0.35 (below high_threshold 0.6, but >= low_threshold 0.2)
         dets_f2 = [{"bbox": [202.0, 201.0, 262.0, 361.0], "score": 0.35, "label": "person"}]
-        tracks_f2 = tracker.update(dets_f2, timestamp=0.1)
+        tracks_f2 = tracker.update(dets_f2, timestamp=0.2)
         self.assertEqual(len(tracks_f2), 1)
         self.assertEqual(tracks_f2[0].track_id, tid)
         self.assertAlmostEqual(tracks_f2[0].score, 0.35)
@@ -80,6 +82,7 @@ class TestByteTracker(unittest.TestCase):
     def test_bytetracker_lost_and_removed_lifecycle(self) -> None:
         tracker = ByteTracker(max_lost_time=2.0)
         dets = [{"bbox": [50.0, 50.0, 100.0, 200.0], "score": 0.9, "label": "person"}]
+        self.assertEqual(len(tracker.update(dets, timestamp=-0.1)), 0)  # tentative
         tracks = tracker.update(dets, timestamp=0.0)
         self.assertEqual(len(tracks), 1)
         tid = tracks[0].track_id
@@ -602,6 +605,188 @@ class TestIncidentEngine(unittest.TestCase):
         self.assertEqual(incident["anchor_kind"], "first_qualifying_observation")
         self.assertAlmostEqual(incident["anchor_time"], 1.0, delta=0.05)
 
+    def test_non_person_tracks_ignored_by_incident_engine(self) -> None:
+        """P0-01: IncidentEngine strictly ignores non-person tracks (e.g., car, truck)."""
+        car_track = Track(
+            track_id=90,
+            bbox=[100.0, 220.0, 260.0, 280.0],
+            score=0.9,
+            label="car",
+            timestamp=0.0,
+        )
+        motorcycle_track = Track(
+            track_id=91,
+            bbox=[100.0, 220.0, 260.0, 280.0],
+            score=0.9,
+            label="motorcycle",
+            timestamp=0.0,
+        )
+        for i in range(40):
+            t = round(i * 0.1, 2)
+            car_track.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=t)
+            motorcycle_track.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=t)
+            incidents = self.engine.process_tracks([car_track, motorcycle_track], timestamp=t)
+            self.assertEqual(incidents, [], f"Non-person tracks should not emit incidents at t={t}")
+
+    def test_persistent_lying_anchor_is_first_stationary_observation(self) -> None:
+        """Review (spec #26 / contracts §3): anchor is the FIRST qualifying (stationary) observation,
+        not the last frame that was still moving."""
+        track = Track(track_id=93, bbox=[100.0, 220.0, 260.0, 280.0], score=0.9, label="person", timestamp=0.0)
+        self.engine.process_tracks([track], timestamp=0.0)
+        for i in range(1, 21):  # moving fast through t=2.0
+            t = round(i * 0.1, 2)
+            track.update([100.0 + i * 10.0, 220.0, 260.0 + i * 10.0, 280.0], score=0.9, timestamp=t)
+            self.engine.process_tracks([track], timestamp=t)
+        anchors = []
+        for i in range(21, 60):  # stationary from t=2.1
+            t = round(i * 0.1, 2)
+            track.update([300.0, 220.0, 460.0, 280.0], score=0.9, timestamp=t)
+            for incident in self.engine.process_tracks([track], timestamp=t):
+                anchors.append(incident["anchor_time"])
+        self.assertEqual(len(anchors), 1)
+        self.assertAlmostEqual(anchors[0], 2.1, delta=0.01)
+
+    def test_out_of_roi_track_state_is_dropped_so_reentry_starts_fresh(self) -> None:
+        """ocr #7: a track outside the ROI must not keep stale per-track state that is reused on re-entry."""
+        roi = [[0.0, 0.0], [500.0, 0.0], [500.0, 400.0], [0.0, 400.0]]
+        engine = IncidentEngine(min_lying_duration=3.0, cooldown_seconds=30.0, roi_polygon=roi)
+        track = Track(track_id=201, bbox=[100.0, 220.0, 260.0, 280.0], score=0.9, label="person", timestamp=0.0)
+        for i in range(0, 20):  # inside ROI, lying and stationary for ~1.9s
+            t = round(i * 0.1, 2)
+            track.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=t)
+            engine.process_tracks([track], timestamp=t)
+        self.assertIn(201, engine._states)
+        for i in range(20, 60):  # leaves the ROI for a long time
+            t = round(i * 0.1, 2)
+            track.update([600.0, 220.0, 760.0, 280.0], score=0.9, timestamp=t)
+            engine.process_tracks([track], timestamp=t)
+        self.assertNotIn(201, engine._states, "state of a track outside the ROI must be dropped")
+        emitted = []
+        for i in range(60, 75):  # re-enters, lying ~1.4s: stale state would wrongly fire (anchor from t<2)
+            t = round(i * 0.1, 2)
+            track.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=t)
+            emitted.extend(engine.process_tracks([track], timestamp=t))
+        self.assertEqual(emitted, [], "re-entry must restart the persistence window, not reuse stale state")
+
+    def test_person_lying_persistent_requires_stationary_speed(self) -> None:
+        """P0-02: person_lying_persistent requires speed <= max_motion_speed; motion resets first_qualifying_time."""
+        track = Track(
+            track_id=92,
+            bbox=[100.0, 220.0, 260.0, 280.0],  # cx=180, cy=250, lying AR=2.67
+            score=0.9,
+            label="person",
+            timestamp=0.0,
+        )
+        self.engine.process_tracks([track], timestamp=0.0)
+
+        # Phase 1: Moving fast while lying from t=0.1 to t=2.0 (speed: 10px / 0.1s = 100px/s > 50px/s max_motion_speed)
+        for i in range(1, 21):
+            t = round(i * 0.1, 2)
+            offset = i * 10.0
+            track.update([100.0 + offset, 220.0, 260.0 + offset, 280.0], score=0.9, timestamp=t)
+            incidents = self.engine.process_tracks([track], timestamp=t)
+            self.assertEqual(incidents, [], f"Moving lying track must not trigger incident at t={t}")
+
+        # Phase 2: Stationary from t=2.1 onwards.
+        # Needs 3.0s of continuous stationary lying (until t > 2.0 + 3.0 = 5.0s, i.e., t=5.1)
+        triggered = False
+        for i in range(21, 55):
+            t = round(i * 0.1, 2)
+            offset = 200.0  # stationary
+            track.update([100.0 + offset, 220.0, 260.0 + offset, 280.0], score=0.9, timestamp=t)
+            incidents = self.engine.process_tracks([track], timestamp=t)
+            if t <= 5.0:
+                self.assertEqual(incidents, [], f"Triggered prematurely at t={t} (needs 3.0s continuous stationary)")
+            elif len(incidents) > 0:
+                self.assertEqual(len(incidents), 1)
+                self.assertEqual(incidents[0]["taxonomy"], "person_lying_persistent")
+                self.assertAlmostEqual(incidents[0]["anchor_time"], 2.0, delta=0.15)
+                triggered = True
+                break
+        self.assertTrue(triggered, "Expected persistent lying incident after 3.0s stationary")
+
+    def test_fall_candidate_motion_does_not_overwrite_onset_time(self) -> None:
+        """P1-10: Motion while in fall candidate updates lying_start_time but preserves onset_time."""
+        track = Track(
+            track_id=95,
+            bbox=[100.0, 100.0, 160.0, 260.0],  # standing
+            score=0.9,
+            label="person",
+            timestamp=0.0,
+        )
+        self.engine.process_tracks([track], timestamp=0.0)
+
+        # Drop down at t=0.5 -> triggers fall candidate onset
+        track.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=0.5)
+        self.engine.process_tracks([track], timestamp=0.5)
+        state = self.engine._states[95]
+        self.assertTrue(state.in_fall_candidate)
+        self.assertAlmostEqual(state.onset_time, 0.5)
+
+        # Continues moving fast while tumbling on floor at t=1.0 (dx=50px in 0.5s = 100px/s > 50px/s)
+        track.update([150.0, 220.0, 310.0, 280.0], score=0.9, timestamp=1.0)
+        self.engine.process_tracks([track], timestamp=1.0)
+        state = self.engine._states[95]
+        self.assertTrue(state.in_fall_candidate)
+        self.assertAlmostEqual(state.lying_start_time, 1.0)
+
+        # Now stationary lying on floor from t=1.1 until t=4.5 (> 3.0s after settling at t=1.0)
+        incidents = []
+        for i in range(11, 45):
+            t = round(i * 0.1, 2)
+            track.update([150.0, 220.0, 310.0, 280.0], score=0.9, timestamp=t)
+            res = self.engine.process_tracks([track], timestamp=t)
+            if res:
+                incidents.extend(res)
+                break
+
+        self.assertEqual(len(incidents), 1)
+        self.assertEqual(incidents[0]["taxonomy"], "person_fall")
+        # Onset time must be the original fall start at 0.5, NOT the motion settling time at 1.0!
+        self.assertAlmostEqual(incidents[0]["anchor_time"], 0.5, delta=0.05)
+
+    def test_incident_engine_roi_polygon_filtering(self) -> None:
+        """P1-13: IncidentEngine filters tracks by bounding box foot point against roi_polygon."""
+        roi = [[0.0, 0.0], [500.0, 0.0], [500.0, 400.0], [0.0, 400.0]]
+        engine = IncidentEngine(
+            min_lying_duration=3.0,
+            cooldown_seconds=30.0,
+            roi_polygon=roi,
+        )
+
+        # Track 1 inside ROI: foot point is ((100+260)/2, 280) = (180, 280) -> INSIDE
+        track_inside = Track(
+            track_id=101,
+            bbox=[100.0, 220.0, 260.0, 280.0],
+            score=0.9,
+            label="person",
+            timestamp=0.0,
+        )
+
+        # Track 2 outside ROI: foot point is ((600+760)/2, 280) = (680, 280) -> OUTSIDE
+        track_outside = Track(
+            track_id=102,
+            bbox=[600.0, 220.0, 760.0, 280.0],
+            score=0.9,
+            label="person",
+            timestamp=0.0,
+        )
+
+        emitted = []
+        for i in range(35):
+            t = round(i * 0.1, 2)
+            track_inside.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=t)
+            track_outside.update([600.0, 220.0, 760.0, 280.0], score=0.9, timestamp=t)
+            incidents = engine.process_tracks([track_inside, track_outside], timestamp=t)
+            emitted.extend(incidents)
+
+        self.assertEqual(len(emitted), 1)
+        self.assertEqual(emitted[0]["track_id"], 101)
+        self.assertEqual(emitted[0]["taxonomy"], "person_lying_persistent")
+
+
+
+
 
 class TestEdgePipelineIncidents(unittest.TestCase):
     """Integration tests for EdgePipeline incident handling (person_fall and person_lying_persistent)."""
@@ -643,16 +828,18 @@ class TestEdgePipelineIncidents(unittest.TestCase):
         self.assertEqual(payload["taxonomy"], "person_lying_persistent")
         self.assertEqual(payload["severity"], "high")
         self.assertNotIn("anchor_kind", payload)
-        self.assertAlmostEqual(payload["anchor_time"], 0.0, delta=0.05)
+        # P1-12: the track is tentative at t=0.0 and active from t=0.1, so the first
+        # qualifying observation seen by the incident engine is one frame later.
+        self.assertAlmostEqual(payload["anchor_time"], 0.1, delta=0.05)
 
         # Evidence request verification per docs/architecture/contracts.md:42
         self.assertEqual(len(payload["evidence_requests"]), 1)
         req = payload["evidence_requests"][0]
         self.assertEqual(req["evidence_anchor_kind"], "first_qualifying_observation")
         self.assertNotEqual(req["evidence_anchor_kind"], "onset")
-        self.assertAlmostEqual(req["evidence_anchor_time"], 0.0, delta=0.05)
-        self.assertAlmostEqual(req["requested_start"], -10.0, delta=0.05)
-        self.assertAlmostEqual(req["requested_end"], 20.0, delta=0.05)
+        self.assertAlmostEqual(req["evidence_anchor_time"], 0.1, delta=0.05)
+        self.assertAlmostEqual(req["requested_start"], -9.9, delta=0.05)
+        self.assertAlmostEqual(req["requested_end"], 20.1, delta=0.05)
 
         # Check outbox persistence
         pending = self.outbox.pending()
@@ -719,9 +906,10 @@ class TestEdgePipelineIncidents(unittest.TestCase):
         self.assertEqual(payload["taxonomy"], "person_lying_persistent")
         self.assertEqual(payload["severity"], "high")
         self.assertNotIn("anchor_kind", payload)
-        self.assertAlmostEqual(payload["anchor_time"], 3.0, delta=0.05)
+        # P1-12: new track is tentative for its first frame (t=3.0), active from t=3.1.
+        self.assertAlmostEqual(payload["anchor_time"], 3.1, delta=0.05)
         self.assertEqual(payload["evidence_requests"][0]["evidence_anchor_kind"], "first_qualifying_observation")
-        self.assertAlmostEqual(payload["evidence_requests"][0]["evidence_anchor_time"], 3.0, delta=0.05)
+        self.assertAlmostEqual(payload["evidence_requests"][0]["evidence_anchor_time"], 3.1, delta=0.05)
 
     def test_handle_fall_incident_backward_compatibility(self) -> None:
         """_handle_fall_incident delegates cleanly to _handle_incident without aliasing."""

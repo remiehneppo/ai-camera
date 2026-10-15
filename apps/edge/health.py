@@ -9,7 +9,6 @@ from __future__ import annotations
 import collections
 import enum
 import logging
-import os
 import shutil
 import threading
 import time
@@ -73,8 +72,7 @@ class EdgeHealthMonitor:
 
         self._lock = threading.RLock()
         self._is_started: bool = False
-        self._manual_status: HealthStatus | None = None
-        self._manual_reason: str | None = None
+        self._is_stopped: bool = False
 
         # Frame observation state
         self._last_receive_time: float | None = None
@@ -100,7 +98,24 @@ class EdgeHealthMonitor:
     def mark_started(self) -> None:
         """Mark system as transitioned past startup."""
         with self._lock:
-            self._is_started = True
+            if not self._is_stopped:
+                self._is_started = True
+
+    def mark_starting(self) -> None:
+        """Begin a new runtime session without reusing old frame liveness."""
+        with self._lock:
+            self._is_started = False
+            self._is_stopped = False
+            self._last_receive_time = None
+            self._last_capture_time = None
+            self._clock_mapping_valid = False
+            self._capabilities["camera"] = "unknown"
+
+    def mark_stopped(self) -> None:
+        """Keep shutdown unavailable even if an in-flight frame completes."""
+        with self._lock:
+            self._is_stopped = True
+            self._is_started = False
 
     def record_frame_received(
         self,
@@ -156,7 +171,14 @@ class EdgeHealthMonitor:
         elif isinstance(obj, dict):
             masked = {}
             for k, v in obj.items():
-                if any(secret_key in k.lower() for secret_key in ("password", "token", "secret", "auth", "key")):
+                key_str = str(k).lower()
+                is_secret = (
+                    any(secret_key in key_str for secret_key in ("password", "token", "secret", "auth"))
+                    or key_str == "key"
+                    or key_str.endswith("_key")
+                    or key_str.startswith("key_")
+                )
+                if is_secret:
                     masked[k] = "<redacted>"
                 else:
                     masked[k] = self._mask_secrets_in_obj(v)
@@ -196,9 +218,10 @@ class EdgeHealthMonitor:
         if self.recorder is None or not self.recorder_session_id:
             return 0.0
         try:
-            segments = self.recorder.segments(self.recorder_session_id)
-            if len(segments) < 2:
+            raw_segments = self.recorder.segments(self.recorder_session_id)
+            if len(raw_segments) < 2:
                 return 0.0
+            segments = sorted(raw_segments, key=lambda s: getattr(s, "start_seconds", 0.0))
             max_gap = 0.0
             for left, right in zip(segments, segments[1:]):
                 gap = right.start_seconds - left.end_seconds
@@ -233,6 +256,11 @@ class EdgeHealthMonitor:
     def get_health_snapshot(self) -> dict[str, Any]:
         """Produce a complete, truthful health snapshot."""
         now = time.time()
+        disk_percent, disk_free, disk_total = self._measure_disk()
+        recorder_gap = self._measure_recorder_gap()
+        outbox_pending = self._measure_outbox_pending()
+        backend_ok = self._check_backend_reachable()
+
         with self._lock:
             # 1. Evaluate metrics
             # Frame age
@@ -245,11 +273,6 @@ class EdgeHealthMonitor:
                 capture_age: float | None = max(0.0, now - self._last_capture_time)
             else:
                 capture_age = None
-
-            disk_percent, disk_free, disk_total = self._measure_disk()
-            recorder_gap = self._measure_recorder_gap()
-            outbox_pending = self._measure_outbox_pending()
-            backend_ok = self._check_backend_reachable()
 
             # Copy capabilities
             capabilities = dict(self._capabilities)
@@ -284,19 +307,19 @@ class EdgeHealthMonitor:
                     status = HealthStatus.DEGRADED
                 reasons.append("analytics_failed")
 
-            # Check recorder gap
-            if recorder_gap > self.recorder_gap_threshold:
-                if status not in (HealthStatus.UNAVAILABLE, HealthStatus.STARTING):
-                    status = HealthStatus.DEGRADED
-                reasons.append("recorder_gap_exceeded")
-                capabilities["recorder"] = "gap_detected"
-
             # Check recorder capability
             recorder_cap = capabilities.get("recorder")
             if recorder_cap in ("failed", "unavailable"):
                 if status not in (HealthStatus.UNAVAILABLE, HealthStatus.STARTING):
                     status = HealthStatus.DEGRADED
                 reasons.append("recorder_failed")
+
+            # Check recorder gap
+            if recorder_gap > self.recorder_gap_threshold:
+                if status not in (HealthStatus.UNAVAILABLE, HealthStatus.STARTING):
+                    status = HealthStatus.DEGRADED
+                reasons.append("recorder_gap_exceeded")
+                capabilities["recorder"] = "gap_detected"
 
             # Check disk
             if self.quota_manager is not None:
@@ -325,7 +348,28 @@ class EdgeHealthMonitor:
             else:
                 capabilities["backend"] = "reachable"
 
-            primary_reason = reasons[0] if reasons else None
+            if self._is_stopped:
+                status = HealthStatus.UNAVAILABLE
+                reasons.insert(0, "system_stopped")
+                capabilities["camera"] = "stopped"
+                if "system_starting" in reasons:
+                    reasons.remove("system_starting")
+
+            UNAVAILABLE_REASONS = {"system_stopped", "storage_exhausted", "disk_full", "no_frames_received"}
+            DEGRADED_REASONS = {
+                "queue_stall", "analytics_hung", "analytics_failed",
+                "recorder_gap_exceeded", "recorder_failed", "disk_near_capacity",
+                "backend_unreachable"
+            }
+
+            if status == HealthStatus.UNAVAILABLE:
+                primary_reason = next((r for r in reasons if r in UNAVAILABLE_REASONS), reasons[0] if reasons else None)
+            elif status == HealthStatus.DEGRADED:
+                primary_reason = next((r for r in reasons if r in DEGRADED_REASONS), reasons[0] if reasons else None)
+            elif status == HealthStatus.STARTING:
+                primary_reason = "system_starting"
+            else:
+                primary_reason = None
 
             metrics = {
                 "frame_age_seconds": receive_age if capture_age is None else capture_age,
@@ -333,6 +377,7 @@ class EdgeHealthMonitor:
                 "capture_age_seconds": capture_age,
                 "clock_mapping_valid": self._clock_mapping_valid,
                 "frame_drop_count": self._frame_drop_count,
+                "total_frames_received": self._total_frames_received,
                 "recorder_gap_seconds": recorder_gap,
                 "disk_usage_percent": disk_percent,
                 "disk_free_bytes": disk_free,

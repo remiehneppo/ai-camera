@@ -11,6 +11,7 @@ import tempfile
 import time
 from typing import Any
 import unittest
+from unittest import mock
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -179,7 +180,7 @@ class StorageQuotaManagerTests(unittest.TestCase):
         # Setup:
         # - unpinned segment (should be deleted under pressure)
         seg1 = self._create_dummy_segment("sess-1", "seg-unpinned", 0.0, 10.0, size_bytes=15000)
-        # - temp files (should be deleted under pressure)
+        # - unknown scratch (must be preserved under pressure)
         temp_file = self.recorder_dir / "manifests" / "dummy.tmp.mkv"
         self.recorder_dir.joinpath("manifests").mkdir(parents=True, exist_ok=True)
         temp_file.write_bytes(b"tempdata")
@@ -204,8 +205,8 @@ class StorageQuotaManagerTests(unittest.TestCase):
         cleanup_result = qm.cleanup_eligible()
         self.assertGreater(cleanup_result["cleaned_bytes"], 0)
 
-        # Verify: temp file deleted
-        self.assertFalse(temp_file.exists())
+        # Verify: suffix alone does not establish scratch ownership
+        self.assertTrue(temp_file.exists())
 
         # Verify: unpinned segment deleted
         self.assertFalse(seg1.exists())
@@ -245,7 +246,7 @@ class StorageQuotaManagerTests(unittest.TestCase):
         # With force=True, eligible data is cleaned
         res_forced = qm.cleanup_eligible(force=True)
         self.assertGreater(res_forced["cleaned_bytes"], 0)
-        self.assertFalse(temp_file.exists())
+        self.assertTrue(temp_file.exists())
 
     def test_24h_wan_outage_does_not_purge_unack_evidence(self) -> None:
         # Simulate an event created 36 hours ago (129600 seconds ago)
@@ -332,21 +333,16 @@ class StorageQuotaManagerTests(unittest.TestCase):
             make_evidence_request(req_id, sess_id, "synthetic", 50.0)
         ]
 
-        lifecycle.persist(event)
-
-        # Verify: request in outbox is failed with storage_exhausted error
-        requests = {r["request_id"]: r for r in self.outbox.evidence_requests()}
-        self.assertIn(req_id, requests)
-        self.assertEqual(requests[req_id]["state"], "failed")
-        self.assertIn("storage_exhausted", requests[req_id].get("last_error", ""))
-
-        # Verify: NO pin receipt or transfer receipt was acknowledged (no fake ACK)
-        pin_status = self.recorder.pin_status(req_id)
-        self.assertIsNone(pin_status)
-
-        # Upload attempt must not return any fake ACK
-        upload_result = lifecycle.upload_single_request(req_id)
-        self.assertIsNone(upload_result)
+        with self.assertRaises(OSError) as raised:
+            lifecycle.persist(event)
+        self.assertEqual(raised.exception.errno, errno.ENOSPC)
+        with sqlite3.connect(self.outbox_path) as db:
+            for table in ("event_revisions", "delivery_outbox", "evidence_requests"):
+                self.assertEqual(db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 0)
+        with sqlite3.connect(self.recorder._pins) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM pins").fetchone()[0], 0)
+        self.assertIsNone(self.recorder.pin_status(req_id))
+        self.assertIsNone(lifecycle.upload_single_request(req_id))
 
     def test_evidence_lifecycle_reconcile_cleans_eligible_under_pressure(self) -> None:
         # Setup unpinned segment and temp file
@@ -368,7 +364,7 @@ class StorageQuotaManagerTests(unittest.TestCase):
         lifecycle.reconcile()
 
         # Under pressure, eligible cleanup was triggered
-        self.assertFalse(temp_file.exists())
+        self.assertTrue(temp_file.exists())
         self.assertFalse(seg1.exists())
 
     def test_enospc_write_failure_graceful_handling_without_fake_success(self) -> None:
@@ -443,6 +439,96 @@ class StorageQuotaManagerTests(unittest.TestCase):
         snapshot = monitor.get_health_snapshot()
         self.assertEqual(snapshot["status"], HealthStatus.UNAVAILABLE.value)
         self.assertIn("storage_exhausted", snapshot["all_reasons"])
+
+    def test_cleanup_storage_reclaims_released_and_acked_manifests(self) -> None:
+        import hashlib
+        # 1. Active pin (released=0)
+        self.recorder.pin("req-active", "sess-1", 0.0, 10.0, "owner-1")
+        clip_active = self._create_dummy_manifest("req-active", "sess-1", size_bytes=1000)
+
+        # 2. Released pin without ACK in transfers (released=1, no transfer ACK)
+        self.recorder.pin("req-unack", "sess-1", 10.0, 20.0, "owner-2")
+        clip_unack = self._create_dummy_manifest("req-unack", "sess-1", size_bytes=2000)
+        self.recorder.release_pin("req-unack")
+
+        # 3. Released pin WITH ACK in transfers (released=1, has transfer receipt)
+        self.recorder.pin("req-acked", "sess-1", 20.0, 30.0, "owner-3")
+        clip_acked = self._create_dummy_manifest("req-acked", "sess-1", size_bytes=3000)
+        with sqlite3.connect(self.recorder._pins) as db:
+            db.execute("INSERT INTO transfers VALUES(?,?)", ("req-acked", json.dumps({"receipt": "ok"})))
+        self.recorder.release_pin("req-acked")
+
+        # 4. Unknown file in manifests/ (must never be deleted)
+        unknown_file = self.recorder_dir / "manifests" / "unknown_recording.mkv"
+        unknown_file.write_bytes(b"stranger")
+
+        # Mock storage pressure
+        mock_disk = lambda path: DiskUsage(total=100_000_000, used=95_000_000, free=5_000_000)
+        qm = StorageQuotaManager(
+            storage_path=self.root,
+            recorder=self.recorder,
+            outbox=self.outbox,
+            disk_usage_fn=mock_disk,
+        )
+
+        res = qm.cleanup_eligible(force=True)
+
+        # Verified: req-acked manifest is reclaimed
+        self.assertFalse(clip_acked.exists())
+        self.assertFalse(clip_acked.with_suffix(".json").exists())
+        self.assertIn(str(clip_acked), res["cleaned_files"])
+
+        # Preserved: unreleased pin manifest
+        self.assertTrue(clip_active.exists())
+        self.assertTrue(clip_active.with_suffix(".json").exists())
+
+        # Preserved: released but unACKed pin manifest
+        self.assertTrue(clip_unack.exists())
+        self.assertTrue(clip_unack.with_suffix(".json").exists())
+
+        # Preserved: unknown file
+        self.assertTrue(unknown_file.exists())
+
+    def test_quota_pinned_bytes_excludes_released_and_acked_manifests(self) -> None:
+        # Active pin in manifests
+        clip_active = self._create_dummy_manifest("req-p-active", "sess-1", size_bytes=1000)
+        self.recorder.pin("req-p-active", "sess-1", 0.0, 10.0, "owner-1")
+
+        # Released + ACKed pin in manifests
+        clip_acked = self._create_dummy_manifest("req-p-acked", "sess-1", size_bytes=2000)
+        self.recorder.pin("req-p-acked", "sess-1", 10.0, 20.0, "owner-2")
+        with sqlite3.connect(self.recorder._pins) as db:
+            db.execute("INSERT INTO transfers VALUES(?,?)", ("req-p-acked", json.dumps({"receipt": "ok"})))
+        self.recorder.release_pin("req-p-acked")
+
+        qm = StorageQuotaManager(
+            storage_path=self.root,
+            recorder=self.recorder,
+            outbox=self.outbox,
+        )
+        breakdown = qm.get_storage_breakdown()
+
+        # pinned_bytes must only include active (unreleased or unACKed) manifest
+        active_size = clip_active.stat().st_size + clip_active.with_suffix(".json").stat().st_size
+        self.assertEqual(breakdown.pinned_bytes, active_size)
+
+        # ring_bytes should include the released+ACKed manifest (reclaimable)
+        acked_size = clip_acked.stat().st_size + clip_acked.with_suffix(".json").stat().st_size
+        self.assertGreaterEqual(breakdown.ring_bytes, acked_size)
+
+    def test_get_active_pins_error_marks_metric_degraded(self) -> None:
+        qm = StorageQuotaManager(
+            storage_path=self.root,
+            recorder=self.recorder,
+            outbox=self.outbox,
+        )
+        with mock.patch("apps.edge.quota.sqlite3.connect", side_effect=sqlite3.OperationalError("db busy")):
+            breakdown = qm.get_storage_breakdown()
+
+        self.assertTrue(qm.degraded)
+        self.assertIn("active_pins_query_failed", qm.degraded_reason or "")
+        self.assertTrue(breakdown.degraded)
+        self.assertIn("active_pins_query_failed", breakdown.degraded_reason or "")
 
 
 if __name__ == "__main__":

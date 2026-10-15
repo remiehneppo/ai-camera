@@ -84,6 +84,14 @@ class EventOutbox:
                 if prior["event_hash"] != digest:
                     raise EventConflict("same event revision was already stored with different content")
                 return prior["message_id"]
+            max_rev_row = db.execute(
+                "SELECT MAX(revision) FROM event_revisions WHERE device_id=? AND event_id=?",
+                identity[:2],
+            ).fetchone()
+            if max_rev_row and max_rev_row[0] is not None and event["revision"] <= max_rev_row[0]:
+                raise EventConflict(
+                    f"event revision {event['revision']} must be strictly greater than current maximum revision {max_rev_row[0]}"
+                )
             first = db.execute(
                 "SELECT snapshot_json FROM event_revisions WHERE device_id=? AND event_id=? ORDER BY revision LIMIT 1",
                 identity[:2],

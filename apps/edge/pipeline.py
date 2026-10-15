@@ -14,11 +14,12 @@ import numpy as np
 
 from apps.edge.evidence import EvidenceLifecycle
 from apps.edge.health import EdgeHealthMonitor
-from apps.edge.incident import IncidentEngine
+from apps.edge.incident import IncidentEngine, point_in_polygon
 from apps.edge.oracle_detector import OnnxDetector
 from apps.edge.perception import PerceptionExecution
 from apps.edge.outbox import EventOutbox
 from apps.edge.pose import PoseManager, PoseOutcome, PoseRequest, PoseScheduler
+from apps.edge.quota import StorageQuotaManager
 from apps.edge.recorder import FileRecorder
 from apps.edge.tracker import ByteTracker
 from apps.edge.uploader import EdgeUploader
@@ -26,6 +27,22 @@ from domain.event_contract import validate_event
 from domain.evidence_contract import make_evidence_request
 
 logger = logging.getLogger(__name__)
+
+
+def evaluate_odd(rgb: np.ndarray) -> str:
+    """Minimal Operational Design Domain (ODD) assessment."""
+    if rgb is None or not isinstance(rgb, np.ndarray) or rgb.size == 0:
+        return "invalid_frame"
+    mean_val = float(np.mean(rgb))
+    if mean_val < 15.0:
+        return "low_light"
+    if mean_val > 240.0:
+        return "glare"
+    std_val = float(np.std(rgb))
+    if std_val < 5.0:
+        return "low_contrast"
+    return "normal"
+
 
 
 class PerceptionPipeline:
@@ -50,16 +67,21 @@ class PerceptionPipeline:
         config_version: str = "pipeline-v1",
         calibration_version: str = "uncalibrated",
         quality_state: str = "unknown",
+        roi_polygon: list[list[float]] | list[tuple[float, float]] | None = None,
         origin: str = "live",
         execution: PerceptionExecution | None = None,
         pose_manager: PoseManager | None = None,
         pose_scheduler: PoseScheduler | None = None,
         health: EdgeHealthMonitor | None = None,
+        quota_manager: StorageQuotaManager | None = None,
     ) -> None:
         self.recorder = recorder
         self.outbox = outbox
         self.uploader = uploader
-        self.evidence = EvidenceLifecycle(outbox, recorder, uploader)
+        self.quota_manager = quota_manager or getattr(health, "quota_manager", None) or StorageQuotaManager(
+            recorder=recorder, outbox=outbox,
+        )
+        self.evidence = EvidenceLifecycle(outbox, recorder, uploader, quota_manager=self.quota_manager)
         self.camera_id = camera_id
         self.device_id = device_id
         self.stream_session_id = stream_session_id or str(uuid4())
@@ -67,7 +89,9 @@ class PerceptionPipeline:
         self.pipeline_version = pipeline_version
         self.config_version = config_version
         self.calibration_version = calibration_version
+        self._configured_quality_state = quality_state
         self.quality_state = quality_state
+        self.roi_polygon = roi_polygon
         self.origin = origin
 
         if execution is not None and (detector is not None or manifest_path or model_path):
@@ -104,7 +128,10 @@ class PerceptionPipeline:
             min_drop_velocity=15.0,
             min_lying_duration=3.0,
             cooldown_seconds=30.0,
+            roi_polygon=self.roi_polygon,
         )
+        if incident_engine is not None and getattr(self.incident_engine, "roi_polygon", None) is None:
+            self.incident_engine.roi_polygon = self.roi_polygon
 
         provenance = self.execution.provenance
         self.model_lineage = [{"role": "detector", "version": provenance.get("model_id", "unknown")}]
@@ -115,7 +142,9 @@ class PerceptionPipeline:
             recorder_session_id=self.stream_session_id,
             outbox=self.outbox,
             backend_checker=uploader,
+            quota_manager=self.quota_manager,
         )
+        self.health.quota_manager = self.quota_manager
 
     def process_frame(self, rgb, timestamp, frame_id, *, detections=None, observation_status=None):
         with self._processing_lock:
@@ -144,22 +173,48 @@ class PerceptionPipeline:
             self._last_frame_id = -1
             self._last_timestamp = None
             self._lineage = lineage
+        if fid <= self._last_frame_id:
+            frame = self.execution.frame(self.camera_id, self.stream_session_id, self.core_epoch,
+                                         self.origin, fid, ts)
+            self.last_observation = {**frame, "detection_status": "stale", "detections": []}
+            self._observation_gap()
+            return []
+        if self._last_timestamp is not None and ts <= self._last_timestamp:
+            ts = self._last_timestamp + 1e-6
         frame = self.execution.frame(self.camera_id, self.stream_session_id, self.core_epoch,
                                      self.origin, fid, ts)
         if self.pose_manager is not None:
             self.pose_manager.cache_frame(self.camera_id, self.stream_session_id, self.core_epoch, fid, rgb)
-        if fid <= self._last_frame_id or (self._last_timestamp is not None and ts <= self._last_timestamp):
-            self.last_observation = {**frame, "detection_status": "stale", "detections": []}
-            self._observation_gap()
-            return []
         self._last_frame_id = fid
         self._last_timestamp = ts
-        observation = self.execution.execute(rgb, frame, detections=detections, status=observation_status)
+        self.health.mark_started()
+        self.health.record_frame_received(receive_time=time.time())
+        self.health.set_component_capability("analytics", "active")
+        try:
+            observation = self.execution.execute(rgb, frame, detections=detections, status=observation_status)
+        except Exception:
+            self.health.set_component_capability("analytics", "failed")
+            raise
         self.last_observation = observation
         if observation["detection_status"] not in {"ok", "ok_empty"}:
+            self.health.set_component_capability("analytics", "failed")
             self._observation_gap()
             return []
         formatted_dets = observation["detections"]
+        if self._configured_quality_state == "unknown" and rgb is not None and rgb.size > 0:
+            self.quality_state = evaluate_odd(rgb)
+        observation["quality_state"] = self.quality_state
+
+        if self.roi_polygon is not None:
+            formatted_dets = [
+                d for d in formatted_dets
+                if len(d.get("bbox", [])) >= 4 and point_in_polygon(
+                    (d["bbox"][0] + d["bbox"][2]) / 2.0,
+                    float(d["bbox"][3]),
+                    self.roi_polygon,
+                )
+            ]
+
         provenance = observation.get("provenance") or {}
         if provenance:
             self.model_lineage = [{"role": "detector", "version": provenance.get("model_id", "unknown")}]
@@ -169,7 +224,7 @@ class PerceptionPipeline:
         tracks = self.tracker.update(formatted_dets, timestamp=ts)
 
         for track in self.tracker.get_all_tracks():
-            if track.state != "active":
+            if track.state == "removed":
                 track.history.clear()
 
         # Pose candidate scheduling across branches
@@ -206,7 +261,6 @@ class PerceptionPipeline:
                 event = self._handle_incident(incident, ts)
                 emitted_events.append(event)
 
-        self.health.record_frame_received(receive_time=time.time())
         return emitted_events
 
     def observation_gap(self) -> None:

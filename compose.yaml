@@ -1,4 +1,5 @@
 services:
+  # Requires MongoDB >= 5.0 for $setWindowFields and replica set multi-document ACID transactions (pinned to 7.0.43).
   mongo:
     image: mongo:7.0.43-jammy
     command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]

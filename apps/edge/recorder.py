@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import itertools
 import json
+import logging
 import math
 import os
 import select
@@ -18,6 +19,8 @@ import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Callable, Generator, Iterator, Literal
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -69,8 +72,11 @@ class FileRecorder:
         self.root.mkdir(parents=True, exist_ok=True)
         self.ring_seconds = ring_seconds
         self._watermarks: dict[str, float] = {}
+        self._finalize_lock = threading.Lock()
+        self._pin_locks: dict[str, threading.Lock] = {}
+        self._finalizing: set[str] = set()
         self._pins = self.root / "pins.sqlite3"
-        with sqlite3.connect(self._pins) as db:
+        with contextlib.closing(sqlite3.connect(self._pins)) as db, db:
             db.execute("PRAGMA synchronous=FULL")
             db.execute("CREATE TABLE IF NOT EXISTS transfers (request_id TEXT PRIMARY KEY, receipt TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS pins (request_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, owner TEXT NOT NULL, start REAL NOT NULL, end REAL NOT NULL, released INTEGER NOT NULL DEFAULT 0, receipt TEXT NOT NULL)")
@@ -80,7 +86,7 @@ class FileRecorder:
         self._session_dir(session_id)
         if not request_id or not owner or any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) for value in (start, end)) or end <= start:
             raise ValueError("request_id and owner are required and end must follow start")
-        with sqlite3.connect(self._pins, timeout=30, isolation_level="IMMEDIATE") as db:
+        with contextlib.closing(sqlite3.connect(self._pins, timeout=30, isolation_level="IMMEDIATE")) as db, db:
             db.execute("BEGIN IMMEDIATE")
             prior = db.execute("SELECT session_id, owner, start, end, receipt FROM pins WHERE request_id=?", (request_id,)).fetchone()
             if prior:
@@ -97,17 +103,35 @@ class FileRecorder:
             return receipt
 
     def release_pin(self, request_id: str) -> bool:
-        with sqlite3.connect(self._pins, timeout=30, isolation_level="IMMEDIATE") as db:
+        with self._finalize_lock:
+            pin_lock = self._pin_locks.get(request_id)
+        if pin_lock:
+            with pin_lock:
+                released = self._do_release_pin(request_id)
+            if released:
+                # A released pin is terminal, so its per-pin lock entry is no longer needed. Drop it only
+                # if nobody else holds it, so a concurrent finalize_pin never loses its mutex.
+                with self._finalize_lock:
+                    if self._pin_locks.get(request_id) is pin_lock and pin_lock.acquire(blocking=False):
+                        try:
+                            del self._pin_locks[request_id]
+                        finally:
+                            pin_lock.release()
+            return released
+        return self._do_release_pin(request_id)
+
+    def _do_release_pin(self, request_id: str) -> bool:
+        with contextlib.closing(sqlite3.connect(self._pins, timeout=30, isolation_level="IMMEDIATE")) as db, db:
             changed = db.execute("UPDATE pins SET released=1 WHERE request_id=? AND released=0", (request_id,)).rowcount
         if changed:
-            with sqlite3.connect(self._pins) as db:
+            with contextlib.closing(sqlite3.connect(self._pins)) as db:
                 row = db.execute("SELECT session_id FROM pins WHERE request_id=?", (request_id,)).fetchone()
             if row:
                 self._prune(row[0])
         return bool(changed)
 
     def pin_status(self, request_id: str) -> dict | None:
-        with sqlite3.connect(self._pins) as db:
+        with contextlib.closing(sqlite3.connect(self._pins)) as db:
             row = db.execute("SELECT session_id, owner, start, end, released, receipt FROM pins WHERE request_id=?", (request_id,)).fetchone()
         if not row:
             return None
@@ -120,7 +144,7 @@ class FileRecorder:
                 location = {"availability": "available", "integrity": "verified"}
                 if not self._verify_artifact(artifact):
                     location = {"availability": "quarantined", "integrity": "corrupt"}
-            with sqlite3.connect(self._pins) as db:
+            with contextlib.closing(sqlite3.connect(self._pins)) as db:
                 transfer = db.execute("SELECT receipt FROM transfers WHERE request_id=?", (request_id,)).fetchone()
             return {**saved_receipt, **location, "state": "released" if released else "held",
                     "transfer_state": "acknowledged" if transfer else "not_started",
@@ -140,7 +164,7 @@ class FileRecorder:
         if any(receipt.get(key) != value for key, value in expected.items()) or not isinstance(receipt.get("location"), str) or not receipt["location"]:
             raise ValueError("transfer receipt does not match artifact")
         encoded = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
-        with sqlite3.connect(self._pins) as db:
+        with contextlib.closing(sqlite3.connect(self._pins)) as db, db:
             db.execute("BEGIN IMMEDIATE")
             prior = db.execute("SELECT receipt FROM transfers WHERE request_id=?", (request_id,)).fetchone()
             if prior and prior[0] != encoded:
@@ -167,105 +191,136 @@ class FileRecorder:
         """Materialize immutable stream-copy evidence; retry reconciles file/DB commits."""
         if request_metadata and request_metadata.keys() - {"evidence_anchor_kind", "evidence_anchor_time", "mapping_uncertainty", "policy_version", "supersedes_request_id"}:
             raise ValueError("invalid request metadata")
-        with sqlite3.connect(self._pins, timeout=30, isolation_level="IMMEDIATE") as db:
-            db.execute("BEGIN IMMEDIATE")
-            row = db.execute(
-                "SELECT session_id, owner, start, end, released, receipt FROM pins WHERE request_id=?",
-                (request_id,),
-            ).fetchone()
-            if row is None:
-                raise KeyError(request_id)
-            session_id, owner, start, end, released, receipt_json = row
-            receipt = json.loads(receipt_json)
-            if receipt.get("manifest"):
-                return receipt
-            if released:
-                raise ValueError("cannot finalize a released pin")
+
+        with self._finalize_lock:
+            if request_id not in self._pin_locks:
+                self._pin_locks[request_id] = threading.Lock()
+            pin_lock = self._pin_locks[request_id]
+
+        with pin_lock:
             directory = self.root / "manifests"
             directory.mkdir(exist_ok=True)
             self._sync_dir(self.root)
             name = hashlib.sha256(request_id.encode()).hexdigest()
             target = directory / (name + ".json")
-            # Renamed manifest survives rollback of the SQLite finalize receipt.
-            if target.exists():
-                manifest = json.loads(target.read_text())
-                if (manifest["request_id"], manifest["session_id"], manifest["owner"],
-                    manifest["requested_start"], manifest["requested_end"]) != (request_id, session_id, owner, start, end):
-                    raise ValueError("orphan manifest identity conflict")
-                if manifest.get("artifact") and not self._verify_artifact(manifest["artifact"]):
-                    raise ValueError("orphan artifact missing or corrupt")
+
+            with contextlib.closing(sqlite3.connect(self._pins, timeout=30, isolation_level="IMMEDIATE")) as db, db:
+                db.execute("BEGIN IMMEDIATE")
+                row = db.execute(
+                    "SELECT session_id, owner, start, end, released, receipt FROM pins WHERE request_id=?",
+                    (request_id,),
+                ).fetchone()
+                if row is None:
+                    raise KeyError(request_id)
+                session_id, owner, start, end, released, receipt_json = row
+                receipt = json.loads(receipt_json)
+                if receipt.get("manifest"):
+                    return receipt
+                if released:
+                    raise ValueError("cannot finalize a released pin")
+
+                # Renamed manifest survives rollback of the SQLite finalize receipt.
+                if target.exists():
+                    manifest = json.loads(target.read_text())
+                    if (manifest["request_id"], manifest["session_id"], manifest["owner"],
+                        manifest["requested_start"], manifest["requested_end"]) != (request_id, session_id, owner, start, end):
+                        raise ValueError("orphan manifest identity conflict")
+                    if manifest.get("artifact") and not self._verify_artifact(manifest["artifact"]):
+                        raise ValueError("orphan artifact missing or corrupt")
+                    receipt = {**manifest, "manifest": str(target)}
+                    db.execute("UPDATE pins SET receipt=? WHERE request_id=?",
+                               (json.dumps(receipt, separators=(",", ":")), request_id))
+                    return receipt
+
+                coverage = self.actual_range(session_id, start, end)
+                latest = max((item.end_seconds for item in self.segments(session_id)), default=float("-inf"))
+                if latest < end:
+                    if not allow_partial:
+                        raise ValueError("pin is still collecting post-roll")
+                    coverage["reason"] = coverage["reason"] or "incomplete_postroll"
+                segments = [item for item in self.segments(session_id)
+                            if item.end_seconds >= start and item.start_seconds <= end]
+
+            # Heavy I/O (ffmpeg concat + sha256) is performed OUTSIDE SQLite transaction.
+            with self._finalize_lock:
+                self._finalizing.add(request_id)
+            try:
+                artifact = None
+                if segments:
+                    clip = directory / (name + ".mkv")
+                    clip_temp = directory / (name + ".tmp.mkv")
+                    playlist = directory / (name + ".concat")
+                    playlist.write_text("".join("file '" + str(Path(item.path).resolve()).replace("'", "'\\''") + "'\nduration " + str(item.end_seconds - item.start_seconds + item.frame_interval_seconds) + "\n" for item in segments))
+                    try:
+                        subprocess.run([
+                            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat",
+                            "-safe", "0", "-i", str(playlist), "-map", "0:v:0", "-c:v", "copy", str(clip_temp),
+                        ], check=True, capture_output=True, timeout=20)
+                    except subprocess.CalledProcessError as exc:
+                        if b"Invalid data found when processing input" in (exc.stderr or b""):
+                            raise ValueError("pinned segment media is corrupt") from exc
+                        raise
+                    with clip_temp.open("rb") as source:
+                        os.fsync(source.fileno())
+                        digest = hashlib.file_digest(source, "sha256").hexdigest()
+                    artifact = {"path": str(clip), "size_bytes": clip_temp.stat().st_size,
+                                "sha256": digest, "content_type": "video/x-matroska", "codec": segments[0].codec}
+                    os.replace(clip_temp, clip)
+                    self._sync_dir(directory)
+                    playlist.unlink(missing_ok=True)
+                artifacts = []
+                for item in segments:
+                    path = Path(item.path)
+                    with path.open("rb") as source:
+                        digest = hashlib.file_digest(source, "sha256").hexdigest()
+                    artifacts.append({"path": str(path), "size_bytes": path.stat().st_size, "sha256": digest})
+                if not artifact:
+                    coverage["completeness"] = "unknown"
+                manifest = {
+                    "request_id": request_id, "session_id": session_id, "owner": owner,
+                    "requested_start": start, "requested_end": end, **coverage,
+                    "build_state": "finalized" if artifact else "failed", "state": "held", "segments": artifacts,
+                    "artifact": artifact, "transfer_state": "not_started",
+                    **(request_metadata or {}),
+                }
+                temp = target.with_suffix(".json.tmp")
+                with temp.open("w") as output:
+                    json.dump(manifest, output, separators=(",", ":"))
+                    output.flush()
+                    os.fsync(output.fileno())
+                os.replace(temp, target)
+                dir_fd = os.open(directory, os.O_DIRECTORY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
                 receipt = {**manifest, "manifest": str(target)}
+            finally:
+                with self._finalize_lock:
+                    self._finalizing.discard(request_id)
+
+            # Record final receipt under lock
+            with contextlib.closing(sqlite3.connect(self._pins, timeout=30, isolation_level="IMMEDIATE")) as db, db:
+                db.execute("BEGIN IMMEDIATE")
+                check = db.execute("SELECT released FROM pins WHERE request_id=?", (request_id,)).fetchone()
+                if check is None:
+                    raise KeyError(request_id)
+                if check[0]:
+                    raise ValueError("cannot finalize a released pin")
                 db.execute("UPDATE pins SET receipt=? WHERE request_id=?",
                            (json.dumps(receipt, separators=(",", ":")), request_id))
                 return receipt
-            coverage = self.actual_range(session_id, start, end)
-            latest = max((item.end_seconds for item in self.segments(session_id)), default=float("-inf"))
-            if latest < end:
-                if not allow_partial:
-                    raise ValueError("pin is still collecting post-roll")
-                coverage["reason"] = coverage["reason"] or "incomplete_postroll"
-            segments = [item for item in self.segments(session_id)
-                        if item.end_seconds >= start and item.start_seconds <= end]
-            artifact = None
-            if segments:
-                clip = directory / (name + ".mkv")
-                clip_temp = directory / (name + ".tmp.mkv")
-                playlist = directory / (name + ".concat")
-                playlist.write_text("".join("file '" + str(Path(item.path).resolve()).replace("'", "'\\''") + "'\nduration " + str(item.end_seconds - item.start_seconds + item.frame_interval_seconds) + "\n" for item in segments))
-                try:
-                    subprocess.run([
-                        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat",
-                        "-safe", "0", "-i", str(playlist), "-map", "0:v:0", "-c:v", "copy", str(clip_temp),
-                    ], check=True, capture_output=True, timeout=20)
-                except subprocess.CalledProcessError as exc:
-                    if b"Invalid data found when processing input" in (exc.stderr or b""):
-                        raise ValueError("pinned segment media is corrupt") from exc
-                    raise
-                with clip_temp.open("rb") as source:
-                    os.fsync(source.fileno())
-                    digest = hashlib.file_digest(source, "sha256").hexdigest()
-                artifact = {"path": str(clip), "size_bytes": clip_temp.stat().st_size,
-                            "sha256": digest, "content_type": "video/x-matroska", "codec": segments[0].codec}
-                os.replace(clip_temp, clip)
-                self._sync_dir(directory)
-                playlist.unlink(missing_ok=True)
-            artifacts = []
-            for item in segments:
-                path = Path(item.path)
-                with path.open("rb") as source:
-                    digest = hashlib.file_digest(source, "sha256").hexdigest()
-                artifacts.append({"path": str(path), "size_bytes": path.stat().st_size, "sha256": digest})
-            if not artifact:
-                coverage["completeness"] = "unknown"
-            manifest = {
-                "request_id": request_id, "session_id": session_id, "owner": owner,
-                "requested_start": start, "requested_end": end, **coverage,
-                "build_state": "finalized" if artifact else "failed", "state": "held", "segments": artifacts,
-                "artifact": artifact, "transfer_state": "not_started",
-                **(request_metadata or {}),
-            }
-            temp = target.with_suffix(".json.tmp")
-            with temp.open("w") as output:
-                json.dump(manifest, output, separators=(",", ":"))
-                output.flush()
-                os.fsync(output.fileno())
-            os.replace(temp, target)
-            dir_fd = os.open(directory, os.O_DIRECTORY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-            receipt = {**manifest, "manifest": str(target)}
-            db.execute("UPDATE pins SET receipt=? WHERE request_id=?",
-                       (json.dumps(receipt, separators=(",", ":")), request_id))
-            return receipt
 
     def cleanup_evidence_temps(self) -> list[str]:
         """Only recorder-owned scratch files, serialized with finalize_pin."""
         cleaned = []
-        with sqlite3.connect(self._pins, timeout=30) as db:
+        with contextlib.closing(sqlite3.connect(self._pins, timeout=30)) as db, db:
             db.execute("BEGIN IMMEDIATE")
+            with self._finalize_lock:
+                active_finalizing = set(self._finalizing)
             for (request_id,) in db.execute("SELECT request_id FROM pins"):
+                if request_id in active_finalizing:
+                    continue
                 name = hashlib.sha256(request_id.encode()).hexdigest()
                 for suffix in (".tmp.mkv", ".json.tmp", ".concat"):
                     path = self.root / "manifests" / (name + suffix)
@@ -273,6 +328,88 @@ class FileRecorder:
                         path.unlink()
                         cleaned.append(str(path))
         return cleaned
+
+    def cleanup_storage(self, *, target_bytes: int | None = None) -> dict:
+        """Reclaim known scratch and unowned segments under the pin/finalization lock."""
+        cleaned_files = []
+        cleaned_bytes = 0
+        with contextlib.closing(sqlite3.connect(self._pins, timeout=30, isolation_level="IMMEDIATE")) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            rows = db.execute("SELECT request_id, session_id, start, end, released FROM pins").fetchall()
+            acked_ids = {r[0] for r in db.execute("SELECT request_id FROM transfers").fetchall()}
+            pins: dict[str, list[tuple[float, float]]] = {}
+            scratch: list[Path] = []
+            eligible_manifests: list[tuple[float, Path, Path]] = []
+            manifests_dir = self.root / "manifests"
+
+            with self._finalize_lock:
+                active_finalizing = set(self._finalizing)
+
+            for request_id, session_id, start, end, released in rows:
+                if not released:
+                    pins.setdefault(session_id, []).append((start, end))
+                if request_id in active_finalizing:
+                    continue
+                name = hashlib.sha256(request_id.encode()).hexdigest()
+                scratch.extend(manifests_dir / (name + suffix)
+                               for suffix in (".tmp.mkv", ".json.tmp", ".concat"))
+                if released and request_id in acked_ids:
+                    mkv_path = manifests_dir / (name + ".mkv")
+                    json_path = manifests_dir / (name + ".json")
+                    if (mkv_path.is_file() and not mkv_path.is_symlink()) or (json_path.is_file() and not json_path.is_symlink()):
+                        eligible_manifests.append((start, mkv_path, json_path))
+
+            eligible_manifests.sort(key=lambda x: x[0])
+
+            eligible = []
+            for directory in self.root.iterdir():
+                if not directory.is_dir() or directory.name == "manifests" or directory.name.startswith("."):
+                    continue
+                for item in self.segments(directory.name):
+                    media = Path(item.path)
+                    # Sidecars outside the recorder's session are not cleanup authority.
+                    if media.resolve().parent != directory.resolve() or media.suffix != ".mkv" or media.is_symlink():
+                        continue
+                    if any(item.start_seconds <= end and item.end_seconds >= start
+                           for start, end in pins.get(directory.name, [])):
+                        continue
+                    if item.end_seconds >= self._watermarks.get(directory.name, float("inf")):
+                        continue
+                    eligible.append(item)
+            eligible.sort(key=lambda item: item.start_seconds)
+
+            # Inspect all ownership before unlinking anything: errors fail closed.
+            for path in scratch:
+                if path.is_file() and not path.is_symlink():
+                    size = path.stat().st_size
+                    path.unlink()
+                    cleaned_files.append(str(path))
+                    cleaned_bytes += size
+            for item in eligible:
+                if target_bytes is not None and cleaned_bytes >= target_bytes:
+                    break
+                for path in (Path(item.path), Path(item.path).with_suffix(".json")):
+                    try:
+                        if path.is_file() and not path.is_symlink():
+                            size = path.stat().st_size
+                            path.unlink()
+                            cleaned_files.append(str(path))
+                            cleaned_bytes += size
+                    except OSError:
+                        continue
+            for _, mkv_path, json_path in eligible_manifests:
+                if target_bytes is not None and cleaned_bytes >= target_bytes:
+                    break
+                for path in (mkv_path, json_path):
+                    try:
+                        if path.is_file() and not path.is_symlink():
+                            size = path.stat().st_size
+                            path.unlink()
+                            cleaned_files.append(str(path))
+                            cleaned_bytes += size
+                    except OSError:
+                        continue
+        return {"cleaned_bytes": cleaned_bytes, "cleaned_files": cleaned_files}
 
     def _session_dir(self, session_id: str) -> Path:
         if not session_id or session_id in {".", ".."} or Path(session_id).name != session_id:
@@ -719,7 +856,7 @@ class FileRecorder:
         finally:
             os.close(dir_fd)
 
-    def _prune(self, session_id: str) -> None:
+    def _prune(self, session_id: str, *, timeout: float = 5.0) -> None:
         segments = self.segments(session_id)
         if not segments:
             return
@@ -727,11 +864,14 @@ class FileRecorder:
         watermark = self._watermarks.get(session_id, float("inf"))
         # Hold SQLite's write lock while deleting, so a concurrent pin cannot ACK
         # ownership after cleanup has decided the same segment is unowned.
-        with sqlite3.connect(self._pins, timeout=30, isolation_level="IMMEDIATE") as db:
-            db.execute("BEGIN IMMEDIATE")
-            pins = db.execute("SELECT start, end FROM pins WHERE session_id=? AND released=0", (session_id,)).fetchall()
-            for item in segments:
-                pinned = any(item.start_seconds <= end and item.end_seconds >= start for start, end in pins)
-                if item.end_seconds < cutoff and item.end_seconds < watermark and not pinned:
-                    Path(item.path).unlink(missing_ok=True)
-                    Path(item.path).with_suffix(".json").unlink(missing_ok=True)
+        try:
+            with contextlib.closing(sqlite3.connect(self._pins, timeout=timeout, isolation_level="IMMEDIATE")) as db, db:
+                db.execute("BEGIN IMMEDIATE")
+                pins = db.execute("SELECT start, end FROM pins WHERE session_id=? AND released=0", (session_id,)).fetchall()
+                for item in segments:
+                    pinned = any(item.start_seconds <= end and item.end_seconds >= start for start, end in pins)
+                    if item.end_seconds < cutoff and item.end_seconds < watermark and not pinned:
+                        Path(item.path).unlink(missing_ok=True)
+                        Path(item.path).with_suffix(".json").unlink(missing_ok=True)
+        except sqlite3.OperationalError as exc:
+            logger.warning("Prune skipped for session %s due to lock: %s", session_id, exc)

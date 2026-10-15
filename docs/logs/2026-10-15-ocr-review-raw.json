@@ -1,0 +1,498 @@
+{
+  "status": "complete",
+  "llm": {
+    "provider": "oc",
+    "model": "Gemini 3.8 Flash (High)"
+  },
+  "message": "Review complete: 11 finding(s) across 19 selected item(s).",
+  "summary": {
+    "files_reviewed": 19,
+    "comments": 11,
+    "total_tokens": 10582625,
+    "input_tokens": 10341777,
+    "output_tokens": 240848,
+    "cache_read_tokens": 9157861,
+    "elapsed": "26m55s"
+  },
+  "tool_calls": {
+    "total": 200,
+    "by_tool": {
+      "code_comment": 4,
+      "code_search": 77,
+      "file_find": 3,
+      "file_read": 116
+    },
+    "failure": 0,
+    "failure_by_tool": {},
+    "failure_details": []
+  },
+  "comments": [
+    {
+      "path": "apps/edge/live_pipeline.py",
+      "content": "`_on_recorder_source_change` calls `self.reconnect()` while holding `self._lock`. Because `reconnect()` performs blocking network and subprocess I/O (`probe_rtsp_stream()` and `_open_capture()`, each taking up to several seconds), holding `self._lock` blocks concurrent calls to `step()` and `stop()`.\n\nTo prevent stalling perception frames and graceful shutdown, evaluate the reconnection condition under the lock, release `self._lock`, and then invoke `self.reconnect()` (which already manages its own internal locking for capture swapping).",
+      "suggestion_code": "        should_reconnect = False\n        with self._lock:\n            if source == \"fallback\":\n                self.session_id = session_id\n                self.pipeline.stream_session_id = session_id\n                if self.health is not None:\n                    self.health.recorder_session_id = session_id\n                if self.is_connected:\n                    self.handle_disconnect(\"recorder_fallback\")\n            elif source == \"rtsp\":\n                if not self.is_connected:\n                    should_reconnect = True\n        if should_reconnect:\n            self.reconnect()",
+      "existing_code": "            elif source == \"rtsp\":\n                if not self.is_connected:\n                    self.reconnect()",
+      "start_line": 341,
+      "end_line": 343,
+      "thinking": "**Code Review Deep Dive: ByteTrack Integration and Concurrency**\n\nOkay, so I've been digging into this ByteTrack implementation, and a couple of things are immediately jumping out at me. First, let's talk about the interaction between `Track.update()` and `ByteTracker.activate_after`. The way `Track.update()` currently handles the \"tentative\" state is a bit rigid. I see that if a track is tentative, it increments `consecutive_hits` and then *unconditionally* promotes the track to \"active\" if `consecutive_hits` is 2 or greater. This feels like it's stepping on the toes of `ByteTracker.activate_after`. The whole point of that parameter in the `ByteTracker` is to define how many consecutive hits are needed *before* activating. By promoting directly in `Track.update()`, we're essentially bypassing `ByteTracker`'s intended behavior, which is a problem.\n\nThe simplest fix, I think, would be to let `Track.update()` *only* increment `consecutive_hits` when `state` is \"tentative\", and leave the state promotion entirely to `ByteTracker.update()`. Alternatively, if we do want state promotion within `Track.update()`, we need to refactor it to either use an optional threshold or respect `ByteTracker.activate_after` if it's set. Basically, we should have the `ByteTracker` *decide* when the track becomes active based on its internal logic, and not hardcode it in the `Track`. I'm going to flag this as a bug with a medium severity because it is an improper implementation.\n\nNow, shifting gears, let's look at the `apps/edge/live_pipeline.py` file. I'm seeing a potential concurrency issue within the `_on_recorder_source_change` method. The code calls `self.reconnect()` inside a `with self._lock:` block. This means we're holding the lock while potentially performing a blocking operation (assuming `reconnect()` is blocking). That's a classic recipe for introducing a deadlock if another thread tries to access a resource also protected by `_lock` while `reconnect()` is busy. I need to be sure this is a high-severity concurrency issue and will request a review of that section of code.\n\nI have completed the code review and verified the key areas: `apps/edge/live_pipeline.py`, `apps/edge/pipeline.py`, `apps/edge/pose.py`, `apps/edge/recorder.py`, `apps/edge/rtsp.py`, `apps/edge/rtsp_recorder.py` and `apps/edge/tracker.py`. I have requested fixes for both of these issues in `code_comment` and I'm waiting on the next step.\n\n\n",
+      "category": "other",
+      "severity": "high"
+    },
+    {
+      "path": "apps/edge/tracker.py",
+      "content": "`Track.update()` unconditionally transitions tentative tracks to `active` when `self.consecutive_hits \u003e= 2`. In `ByteTracker.update()`, `ByteTracker` defines a configurable `activate_after` parameter, but `track.update()` is called before `if track.consecutive_hits \u003e= self.activate_after: track.state = \"active\"`.\n\nIf `ByteTracker` is initialized with `activate_after \u003e 2`, tentative tracks are promoted to `active` prematurely on the second hit, overriding the configured threshold for filtering spurious detections. `Track.update()` should not force activation to 2, letting `ByteTracker` manage promotion according to `activate_after`.",
+      "suggestion_code": "        self.consecutive_hits += 1\n        if self.state != \"tentative\":\n            self.state = \"active\"",
+      "existing_code": "        if self.state == \"tentative\":\n            self.consecutive_hits += 1\n            if self.consecutive_hits \u003e= 2:\n                self.state = \"active\"\n        else:\n            self.state = \"active\"\n            self.consecutive_hits += 1",
+      "start_line": 105,
+      "end_line": 111,
+      "thinking": "**Code Review Deep Dive: ByteTrack Integration and Concurrency**\n\nOkay, so I've been digging into this ByteTrack implementation, and a couple of things are immediately jumping out at me. First, let's talk about the interaction between `Track.update()` and `ByteTracker.activate_after`. The way `Track.update()` currently handles the \"tentative\" state is a bit rigid. I see that if a track is tentative, it increments `consecutive_hits` and then *unconditionally* promotes the track to \"active\" if `consecutive_hits` is 2 or greater. This feels like it's stepping on the toes of `ByteTracker.activate_after`. The whole point of that parameter in the `ByteTracker` is to define how many consecutive hits are needed *before* activating. By promoting directly in `Track.update()`, we're essentially bypassing `ByteTracker`'s intended behavior, which is a problem.\n\nThe simplest fix, I think, would be to let `Track.update()` *only* increment `consecutive_hits` when `state` is \"tentative\", and leave the state promotion entirely to `ByteTracker.update()`. Alternatively, if we do want state promotion within `Track.update()`, we need to refactor it to either use an optional threshold or respect `ByteTracker.activate_after` if it's set. Basically, we should have the `ByteTracker` *decide* when the track becomes active based on its internal logic, and not hardcode it in the `Track`. I'm going to flag this as a bug with a medium severity because it is an improper implementation.\n\nNow, shifting gears, let's look at the `apps/edge/live_pipeline.py` file. I'm seeing a potential concurrency issue within the `_on_recorder_source_change` method. The code calls `self.reconnect()` inside a `with self._lock:` block. This means we're holding the lock while potentially performing a blocking operation (assuming `reconnect()` is blocking). That's a classic recipe for introducing a deadlock if another thread tries to access a resource also protected by `_lock` while `reconnect()` is busy. I need to be sure this is a high-severity concurrency issue and will request a review of that section of code.\n\nI have completed the code review and verified the key areas: `apps/edge/live_pipeline.py`, `apps/edge/pipeline.py`, `apps/edge/pose.py`, `apps/edge/recorder.py`, `apps/edge/rtsp.py`, `apps/edge/rtsp_recorder.py` and `apps/edge/tracker.py`. I have requested fixes for both of these issues in `code_comment` and I'm waiting on the next step.\n\n\n",
+      "category": "bug",
+      "severity": "medium"
+    },
+    {
+      "path": "run_edge.py",
+      "content": "`signal.signal` may only be invoked from the main thread of the main Python interpreter. Because this signal registration (as well as the filesystem and database initializations on lines 16–26) runs unconditionally at the module root, importing `run_edge` from a background or worker thread (e.g., in test suites or multi-threaded tooling) will raise `ValueError: signal only works in main thread of the main interpreter`.\n\nMove the setup logic and signal handler registrations inside `if __name__ == \"__main__\":` or a dedicated entrypoint function.",
+      "suggestion_code": "if __name__ == \"__main__\":\n    signal.signal(signal.SIGINT, _handle_signal)\n    signal.signal(signal.SIGTERM, _handle_signal)",
+      "existing_code": "signal.signal(signal.SIGINT, _handle_signal)\nsignal.signal(signal.SIGTERM, _handle_signal)",
+      "start_line": 35,
+      "end_line": 36,
+      "thinking": "**Code Review Deep Dive**\n\nOkay, let's break down this code and document the potential issues. I've examined the code for any potential issues related to correctness, security, and performance.  Here's what I've found, focusing on precision and actionable feedback:\n\n1.  **`run_edge.py` - Module Level Signal Handlers (lines 35-36)**:\n    The existing code registers signal handlers at the module level:\n    ```python\n    signal.signal(signal.SIGINT, _handle_signal)\n    signal.signal(signal.SIGTERM, _handle_signal)\n    ```\n    This approach will cause errors. Specifically, `signal.signal` can only be called from the main thread in Python. Importing this module from a worker thread or a multi-threaded context will raise a `ValueError`.  To fix, these signal handler registrations, along with any other setup logic that has side effects (such as directory and database initialization, and instantiation of recorders/uploaders), should be moved inside an `if __name__ == \"__main__\":` block to ensure they only run within the main thread context.\n\n2.  **`run_edge.py` - Unused `sys` Import (line 4)**:\n    The following line is dead code:\n    ```python\n    import sys\n    ```\n    The `sys` module is imported but never used.  This import should be removed.\n\n3.  **`run_server.py` - Unhandled Subprocess Exit Code (line 17)**:\n    The existing code in `run_server.py` does not check and propagate the exit code of `uvicorn`:\n    ```python\n    cmd = [sys.executable, \"-m\", \"uvicorn\", \"apps.server.main:app\", \"--host\", \"[IP]\", \"--port\", \"8000\"]\n    subprocess.run(cmd, env=env)\n    ```\n    If Uvicorn fails to start (e.g., due to invalid configuration or port conflicts), the `subprocess.run` function returns a non-zero exit code. However, the existing code ignores this exit code, which could mask startup failures from process managers, Docker, or CI systems. The code should either raise an exception on a non-zero exit code, or properly exit with the return code to ensure that startup failures are correctly handled and reported.\n\nI've also reviewed other relevant files such as `apps/server/store.py` and `apps/server/main.py` line-by-line and found nothing of great concern.  The cursor pagination implementation appears correct, the `FileResponse` configuration for media streaming is appropriate, and the error handling within the MongoDB retry loop looks sound.\n\n\n",
+      "category": "bug",
+      "severity": "medium"
+    },
+    {
+      "path": "run_edge.py",
+      "content": "The `sys` module is imported but never referenced in `run_edge.py`. Unused imports should be removed to keep the module clean.",
+      "existing_code": "import sys",
+      "start_line": 4,
+      "end_line": 4,
+      "thinking": "**Code Review Deep Dive**\n\nOkay, let's break down this code and document the potential issues. I've examined the code for any potential issues related to correctness, security, and performance.  Here's what I've found, focusing on precision and actionable feedback:\n\n1.  **`run_edge.py` - Module Level Signal Handlers (lines 35-36)**:\n    The existing code registers signal handlers at the module level:\n    ```python\n    signal.signal(signal.SIGINT, _handle_signal)\n    signal.signal(signal.SIGTERM, _handle_signal)\n    ```\n    This approach will cause errors. Specifically, `signal.signal` can only be called from the main thread in Python. Importing this module from a worker thread or a multi-threaded context will raise a `ValueError`.  To fix, these signal handler registrations, along with any other setup logic that has side effects (such as directory and database initialization, and instantiation of recorders/uploaders), should be moved inside an `if __name__ == \"__main__\":` block to ensure they only run within the main thread context.\n\n2.  **`run_edge.py` - Unused `sys` Import (line 4)**:\n    The following line is dead code:\n    ```python\n    import sys\n    ```\n    The `sys` module is imported but never used.  This import should be removed.\n\n3.  **`run_server.py` - Unhandled Subprocess Exit Code (line 17)**:\n    The existing code in `run_server.py` does not check and propagate the exit code of `uvicorn`:\n    ```python\n    cmd = [sys.executable, \"-m\", \"uvicorn\", \"apps.server.main:app\", \"--host\", \"[IP]\", \"--port\", \"8000\"]\n    subprocess.run(cmd, env=env)\n    ```\n    If Uvicorn fails to start (e.g., due to invalid configuration or port conflicts), the `subprocess.run` function returns a non-zero exit code. However, the existing code ignores this exit code, which could mask startup failures from process managers, Docker, or CI systems. The code should either raise an exception on a non-zero exit code, or properly exit with the return code to ensure that startup failures are correctly handled and reported.\n\nI've also reviewed other relevant files such as `apps/server/store.py` and `apps/server/main.py` line-by-line and found nothing of great concern.  The cursor pagination implementation appears correct, the `FileResponse` configuration for media streaming is appropriate, and the error handling within the MongoDB retry loop looks sound.\n\n\n",
+      "category": "maintainability",
+      "severity": "low"
+    },
+    {
+      "path": "run_server.py",
+      "content": "`subprocess.run(cmd, env=env)` does not verify the exit code of the spawned Uvicorn process. If Uvicorn fails to start or exits prematurely with an error (e.g., address already in use, bad configuration), `run_server.py` silently exits with status code 0, masking the startup failure from process supervisors, Docker container runtimes, or orchestration tools.\n\nPropagate the exit code or pass `check=True` so failures are detected.",
+      "suggestion_code": "    cmd = [sys.executable, \"-m\", \"uvicorn\", \"apps.server.main:app\", \"--host\", \"[IP]\", \"--port\", \"8000\"]\n    sys.exit(subprocess.run(cmd, env=env).returncode)",
+      "existing_code": "subprocess.run(cmd, env=env)",
+      "start_line": 17,
+      "end_line": 17,
+      "thinking": "**Code Review Deep Dive**\n\nOkay, let's break down this code and document the potential issues. I've examined the code for any potential issues related to correctness, security, and performance.  Here's what I've found, focusing on precision and actionable feedback:\n\n1.  **`run_edge.py` - Module Level Signal Handlers (lines 35-36)**:\n    The existing code registers signal handlers at the module level:\n    ```python\n    signal.signal(signal.SIGINT, _handle_signal)\n    signal.signal(signal.SIGTERM, _handle_signal)\n    ```\n    This approach will cause errors. Specifically, `signal.signal` can only be called from the main thread in Python. Importing this module from a worker thread or a multi-threaded context will raise a `ValueError`.  To fix, these signal handler registrations, along with any other setup logic that has side effects (such as directory and database initialization, and instantiation of recorders/uploaders), should be moved inside an `if __name__ == \"__main__\":` block to ensure they only run within the main thread context.\n\n2.  **`run_edge.py` - Unused `sys` Import (line 4)**:\n    The following line is dead code:\n    ```python\n    import sys\n    ```\n    The `sys` module is imported but never used.  This import should be removed.\n\n3.  **`run_server.py` - Unhandled Subprocess Exit Code (line 17)**:\n    The existing code in `run_server.py` does not check and propagate the exit code of `uvicorn`:\n    ```python\n    cmd = [sys.executable, \"-m\", \"uvicorn\", \"apps.server.main:app\", \"--host\", \"[IP]\", \"--port\", \"8000\"]\n    subprocess.run(cmd, env=env)\n    ```\n    If Uvicorn fails to start (e.g., due to invalid configuration or port conflicts), the `subprocess.run` function returns a non-zero exit code. However, the existing code ignores this exit code, which could mask startup failures from process managers, Docker, or CI systems. The code should either raise an exception on a non-zero exit code, or properly exit with the return code to ensure that startup failures are correctly handled and reported.\n\nI've also reviewed other relevant files such as `apps/server/store.py` and `apps/server/main.py` line-by-line and found nothing of great concern.  The cursor pagination implementation appears correct, the `FileResponse` configuration for media streaming is appropriate, and the error handling within the MongoDB retry loop looks sound.\n\n\n",
+      "category": "bug",
+      "severity": "medium"
+    },
+    {
+      "path": "apps/edge/evidence.py",
+      "content": "When `_can_accept_evidence(estimated_bytes)` returns `False`, the outbox record is marked `state=\"failed\"`, but `self._pin(request)` has already pinned the request in `self.recorder` (or it was pinned previously). Because failed requests are skipped in future reconcile iterations (`if request[\"state\"] == \"failed\": continue`), the pin in `self.recorder` remains active (`released=0`) indefinitely. This unreleased pin prevents the underlying video segments from ever being reclaimed or rotated by the storage quota manager and recorder prune logic.\n\nCall `self.recorder.release_pin(request_id)` before marking the request as failed, or ensure the pin is released upon quota rejection.",
+      "suggestion_code": "                self._pin(request)\n                status = self.recorder.pin_status(request_id)\n                if status and status.get(\"state\") == \"collecting\" and request[\"session_id\"] not in ended:\n                    continue\n                estimated_bytes = self._estimate_segment_bytes(request)\n                if not self._can_accept_evidence(estimated_bytes):\n                    if hasattr(self.recorder, \"release_pin\"):\n                        self.recorder.release_pin(request_id)\n                    self.outbox.update_evidence(\n                        request_id,\n                        state=\"failed\",\n                        error=RuntimeError(\"storage_exhausted: cannot finalize evidence under storage exhaustion\"),\n                    )\n                    failed += 1\n                    continue",
+      "existing_code": "                self._pin(request)\n                status = self.recorder.pin_status(request_id)\n                if status and status.get(\"state\") == \"collecting\" and request[\"session_id\"] not in ended:\n                    continue\n                estimated_bytes = self._estimate_segment_bytes(request)\n                if not self._can_accept_evidence(estimated_bytes):\n                    self.outbox.update_evidence(\n                        request_id,\n                        state=\"failed\",\n                        error=RuntimeError(\"storage_exhausted: cannot finalize evidence under storage exhaustion\"),\n                    )\n                    failed += 1\n                    continue",
+      "start_line": 138,
+      "end_line": 150,
+      "thinking": "**Code Review Findings and Analysis**\n\nAlright, let's break this down. First, the initial concern about `errno` in `apps/edge/evidence.py` turned out to be a non-issue; it's indeed imported where it should be. \n\nNow, let's get into the meat of the issues. The database query in `apps/edge/quota.py` joining `pins` and `transfers` seems perfectly sound – the tables are created as expected, so no problem there.\n\nThe major issue here lies in `apps/edge/evidence.py`. It's a pin leak, plain and simple. When `_can_accept_evidence` fails *after* a pin has been created (either during `persist()` or directly), the code correctly marks the request as \"failed\" in the outbox. However, it fails to release the pin using `self.recorder.release_pin(request_id)`. This means that `released` remains at 0 in the `pins` table. Since `_reconcile` skips the \"failed\" request, and `cleanup_storage` and `_prune` don't consider this situation, these pins persist forever. They'll show up in the `active_pins` list, and their associated segments are never cleaned up, permanently consuming storage. This is a critical bug. I'm suggesting that if `_can_accept_evidence` fails, `self.recorder.release_pin(request_id)` must be called to remedy this. It should be called regardless if the pin was created just before the check or was created earlier in the session.\n\nNext, in `apps/edge/incident.py`, there's a problem with how track IDs are handled when an ROI polygon is defined. The `observed_ids` set includes all \"person\" tracks, *regardless* of whether they're actually inside the ROI. This means that if a tracked person moves outside the ROI, their track ID is *still* considered \"observed\". Consequently, their state in `self._states` is neither removed nor reset, leading to potentially stale data (timestamps, positions) lingering. When the person re-enters the ROI, these stale values can lead to incorrect incident detection. The fix here is to only include track IDs in `observed_ids` if their bounding box foot point falls within the `roi_polygon`.\n\nFinally, in `apps/edge/send_synthetic.py`, it's a minor detail but still worth noting. The `clock` variable is assigned a function, but it's never actually used anywhere in the code.\n\nI've double-checked the diffs and code snippets for each file and everything lines up as expected. The diff text matches the lines exactly. I'm satisfied that these are the key issues identified.\n\n\n",
+      "category": "bug",
+      "severity": "high"
+    },
+    {
+      "path": "apps/edge/incident.py",
+      "content": "`observed_ids` is computed without checking `self.roi_polygon`. When a person is tracked outside the ROI, their `track_id` is included in `observed_ids`, which bypasses the pruning/reset of `self._states[tid]`. The subsequent loop then skips the track due to the ROI filter (`if not point_in_polygon(...): continue`), leaving stale state (such as `last_cx`, `last_cy`, `last_timestamp`, or `first_qualifying_time`) in `_states`. If the person re-enters the ROI, outdated timestamps and motion history are used, potentially causing invalid velocity calculations or premature incident triggers.\n\n`observed_ids` should only include tracks that fall within `roi_polygon` (when defined).",
+      "suggestion_code": "        observed_ids = {\n            track.track_id\n            for track in tracks\n            if getattr(track, \"label\", None) == \"person\"\n            and (\n                self.roi_polygon is None\n                or point_in_polygon((track.bbox[0] + track.bbox[2]) / 2.0, float(track.bbox[3]), self.roi_polygon)\n            )\n        }",
+      "existing_code": "        observed_ids = {track.track_id for track in tracks if getattr(track, \"label\", None) == \"person\"}",
+      "start_line": 122,
+      "end_line": 122,
+      "thinking": "**Code Review Findings and Analysis**\n\nAlright, let's break this down. First, the initial concern about `errno` in `apps/edge/evidence.py` turned out to be a non-issue; it's indeed imported where it should be. \n\nNow, let's get into the meat of the issues. The database query in `apps/edge/quota.py` joining `pins` and `transfers` seems perfectly sound – the tables are created as expected, so no problem there.\n\nThe major issue here lies in `apps/edge/evidence.py`. It's a pin leak, plain and simple. When `_can_accept_evidence` fails *after* a pin has been created (either during `persist()` or directly), the code correctly marks the request as \"failed\" in the outbox. However, it fails to release the pin using `self.recorder.release_pin(request_id)`. This means that `released` remains at 0 in the `pins` table. Since `_reconcile` skips the \"failed\" request, and `cleanup_storage` and `_prune` don't consider this situation, these pins persist forever. They'll show up in the `active_pins` list, and their associated segments are never cleaned up, permanently consuming storage. This is a critical bug. I'm suggesting that if `_can_accept_evidence` fails, `self.recorder.release_pin(request_id)` must be called to remedy this. It should be called regardless if the pin was created just before the check or was created earlier in the session.\n\nNext, in `apps/edge/incident.py`, there's a problem with how track IDs are handled when an ROI polygon is defined. The `observed_ids` set includes all \"person\" tracks, *regardless* of whether they're actually inside the ROI. This means that if a tracked person moves outside the ROI, their track ID is *still* considered \"observed\". Consequently, their state in `self._states` is neither removed nor reset, leading to potentially stale data (timestamps, positions) lingering. When the person re-enters the ROI, these stale values can lead to incorrect incident detection. The fix here is to only include track IDs in `observed_ids` if their bounding box foot point falls within the `roi_polygon`.\n\nFinally, in `apps/edge/send_synthetic.py`, it's a minor detail but still worth noting. The `clock` variable is assigned a function, but it's never actually used anywhere in the code.\n\nI've double-checked the diffs and code snippets for each file and everything lines up as expected. The diff text matches the lines exactly. I'm satisfied that these are the key issues identified.\n\n\n",
+      "category": "bug",
+      "severity": "medium"
+    },
+    {
+      "path": "apps/edge/send_synthetic.py",
+      "content": "`clock` is initialized from `clock_fn` or `time.monotonic` but is never referenced anywhere in `deliver_pending`, leaving dead code.",
+      "existing_code": "    clock = clock_fn if clock_fn is not None else time.monotonic",
+      "start_line": 88,
+      "end_line": 88,
+      "thinking": "**Code Review Findings and Analysis**\n\nAlright, let's break this down. First, the initial concern about `errno` in `apps/edge/evidence.py` turned out to be a non-issue; it's indeed imported where it should be. \n\nNow, let's get into the meat of the issues. The database query in `apps/edge/quota.py` joining `pins` and `transfers` seems perfectly sound – the tables are created as expected, so no problem there.\n\nThe major issue here lies in `apps/edge/evidence.py`. It's a pin leak, plain and simple. When `_can_accept_evidence` fails *after* a pin has been created (either during `persist()` or directly), the code correctly marks the request as \"failed\" in the outbox. However, it fails to release the pin using `self.recorder.release_pin(request_id)`. This means that `released` remains at 0 in the `pins` table. Since `_reconcile` skips the \"failed\" request, and `cleanup_storage` and `_prune` don't consider this situation, these pins persist forever. They'll show up in the `active_pins` list, and their associated segments are never cleaned up, permanently consuming storage. This is a critical bug. I'm suggesting that if `_can_accept_evidence` fails, `self.recorder.release_pin(request_id)` must be called to remedy this. It should be called regardless if the pin was created just before the check or was created earlier in the session.\n\nNext, in `apps/edge/incident.py`, there's a problem with how track IDs are handled when an ROI polygon is defined. The `observed_ids` set includes all \"person\" tracks, *regardless* of whether they're actually inside the ROI. This means that if a tracked person moves outside the ROI, their track ID is *still* considered \"observed\". Consequently, their state in `self._states` is neither removed nor reset, leading to potentially stale data (timestamps, positions) lingering. When the person re-enters the ROI, these stale values can lead to incorrect incident detection. The fix here is to only include track IDs in `observed_ids` if their bounding box foot point falls within the `roi_polygon`.\n\nFinally, in `apps/edge/send_synthetic.py`, it's a minor detail but still worth noting. The `clock` variable is assigned a function, but it's never actually used anywhere in the code.\n\nI've double-checked the diffs and code snippets for each file and everything lines up as expected. The diff text matches the lines exactly. I'm satisfied that these are the key issues identified.\n\n\n",
+      "category": "maintainability",
+      "severity": "low"
+    },
+    {
+      "path": "apps/edge/live_pipeline.py",
+      "content": "When `_ensure_capture()` fails to open an RTSP stream, it calls `self.handle_disconnect(\"rtsp_open_failed\")` and returns `None`. Execution then reaches the end of `_read_next_frame()`, where `self.handle_disconnect(\"rtsp_unavailable\")` is called immediately again.\n\nThis causes `handle_disconnect()` to be invoked twice per failed frame read, double-incrementing `disconnect_count`, recording duplicate frame drops in health telemetry, and invoking `observation_gap()` twice. Furthermore, `handle_disconnect()` should only record disconnect events when the runner is currently connected (edge-triggered transition) rather than on every frame while disconnected.",
+      "suggestion_code": "        # Stream missing / capture unavailable\n        if self.rtsp_url and self.is_connected:\n            self.handle_disconnect(\"rtsp_unavailable\")\n        return None, \"missing\"",
+      "existing_code": "        # Stream missing / capture unavailable\n        if self.rtsp_url:\n            self.handle_disconnect(\"rtsp_unavailable\")\n        return None, \"missing\"",
+      "start_line": 495,
+      "end_line": 498,
+      "thinking": "**Comprehensive Code Review: Edge Pipeline Analysis**\n\nAlright, let's break down this review. I've been digging into the provided code snippets and here's what I've found.\n\nFirst, I identified a potential issue related to the Region of Interest (ROI) filtering in `apps/edge/pipeline.py`. It looks like `self.roi_polygon` filters detections before they're passed to the tracker and incident engine. This is fine, as both filter using the ROI.\n\nMy primary focus is on the files in `\u003creview_files\u003e`. I've uncovered a few critical issues.\n\n**Issue 1:** In `apps/edge/live_pipeline.py`, the `_read_next_frame()` method calls `handle_disconnect()` unconditionally when the RTSP stream is unavailable, *in addition to* the call already made when opening the capture fails. This results in duplicate telemetry reporting (double-counting `disconnect_count`, frame drops, and observation gaps) with high severity. I've noted this in the added lines:\n```python\n            if self._cap is not None:\n                self.is_connected = True\n                return self._cap\n            self.handle_disconnect(\"rtsp_open_failed\")\n            return None\n```\nand\n```python\n        # Stream missing / capture unavailable\n        if self.rtsp_url:\n            self.handle_disconnect(\"rtsp_unavailable\")\n        return None, \"missing\"\n```\n\n**Issue 2:** Also within `apps/edge/live_pipeline.py`, there's a potential thread leak in `LivePerceptionRunner.stop()`. If the perception loop exits first (e.g., due to an error), the `stop()` method might return early without properly stopping and joining the `_reconnect_thread`. This leaves the reconnection thread running indefinitely. The relevant lines are:\n```python\n        recon_thread = self._reconnect_thread\n        if recon_thread and recon_thread.is_alive():\n            recon_thread.join(timeout=timeout)\n```\nor\n```python\n        with self._lock:\n            self.health.mark_stopped()\n            if not self._is_running and (self._thread is None or not self._thread.is_alive()):\n```\nNote: `if not self._is_running and ...` is not added code; it's a line that will cause issues with the added code.\n\n**Issue 3:** In `apps/edge/rtsp.py`, the `ExponentialBackoff.next_delay()` method has a vulnerability. The code doesn't cap the `self.attempts` counter. With a backoff factor of 2, the `base_delay` calculation can trigger an `OverflowError` if the RTSP stream is disconnected for an extended period (more than ~8.5 hours). This can crash the background thread. The newly added calculation lines are:\n```python\n    def next_delay(self) -\u003e float:\n        base_delay = min(self.max_delay, self.initial_delay * (self.backoff_factor ** self.attempts))\n        jitter_amount = base_delay * self.jitter * (2.0 * self.random_fn() - 1.0)\n        delay = max(0.0, min(self.max_delay, base_delay + jitter_amount))\n        self.last_delay = delay\n        self.attempts += 1\n        return delay\n```\nI've checked other files such as `apps/edge/pose.py`, `apps/edge/recorder.py`, and `apps/edge/pipeline.py` and those seem to be fine.\n\n\n",
+      "category": "bug",
+      "severity": "high"
+    },
+    {
+      "path": "apps/edge/live_pipeline.py",
+      "content": "If `_run_loop` finishes or encounters an error before `stop()` is called, its `finally` block sets `self._is_running = False`. When `stop()` is called subsequently, the initial check `if not self._is_running and (self._thread is None or not self._thread.is_alive())` returns early because it does not check whether `self._reconnect_thread` is still alive.\n\nThis results in an early return where `self._stop_event` is never set and `self._reconnect_thread` is never joined, leaving the background reconnection loop thread running indefinitely. The early return condition should also verify that `self._reconnect_thread` is not alive, or ensure `_stop_event.set()` and thread cleanup always execute.",
+      "suggestion_code": "        recon_thread = self._reconnect_thread\n        if recon_thread and recon_thread.is_alive():\n            recon_thread.join(timeout=timeout)",
+      "existing_code": "        recon_thread = self._reconnect_thread\n        if recon_thread and recon_thread.is_alive():\n            recon_thread.join(timeout=timeout)",
+      "start_line": 601,
+      "end_line": 603,
+      "thinking": "**Comprehensive Code Review: Edge Pipeline Analysis**\n\nAlright, let's break down this review. I've been digging into the provided code snippets and here's what I've found.\n\nFirst, I identified a potential issue related to the Region of Interest (ROI) filtering in `apps/edge/pipeline.py`. It looks like `self.roi_polygon` filters detections before they're passed to the tracker and incident engine. This is fine, as both filter using the ROI.\n\nMy primary focus is on the files in `\u003creview_files\u003e`. I've uncovered a few critical issues.\n\n**Issue 1:** In `apps/edge/live_pipeline.py`, the `_read_next_frame()` method calls `handle_disconnect()` unconditionally when the RTSP stream is unavailable, *in addition to* the call already made when opening the capture fails. This results in duplicate telemetry reporting (double-counting `disconnect_count`, frame drops, and observation gaps) with high severity. I've noted this in the added lines:\n```python\n            if self._cap is not None:\n                self.is_connected = True\n                return self._cap\n            self.handle_disconnect(\"rtsp_open_failed\")\n            return None\n```\nand\n```python\n        # Stream missing / capture unavailable\n        if self.rtsp_url:\n            self.handle_disconnect(\"rtsp_unavailable\")\n        return None, \"missing\"\n```\n\n**Issue 2:** Also within `apps/edge/live_pipeline.py`, there's a potential thread leak in `LivePerceptionRunner.stop()`. If the perception loop exits first (e.g., due to an error), the `stop()` method might return early without properly stopping and joining the `_reconnect_thread`. This leaves the reconnection thread running indefinitely. The relevant lines are:\n```python\n        recon_thread = self._reconnect_thread\n        if recon_thread and recon_thread.is_alive():\n            recon_thread.join(timeout=timeout)\n```\nor\n```python\n        with self._lock:\n            self.health.mark_stopped()\n            if not self._is_running and (self._thread is None or not self._thread.is_alive()):\n```\nNote: `if not self._is_running and ...` is not added code; it's a line that will cause issues with the added code.\n\n**Issue 3:** In `apps/edge/rtsp.py`, the `ExponentialBackoff.next_delay()` method has a vulnerability. The code doesn't cap the `self.attempts` counter. With a backoff factor of 2, the `base_delay` calculation can trigger an `OverflowError` if the RTSP stream is disconnected for an extended period (more than ~8.5 hours). This can crash the background thread. The newly added calculation lines are:\n```python\n    def next_delay(self) -\u003e float:\n        base_delay = min(self.max_delay, self.initial_delay * (self.backoff_factor ** self.attempts))\n        jitter_amount = base_delay * self.jitter * (2.0 * self.random_fn() - 1.0)\n        delay = max(0.0, min(self.max_delay, base_delay + jitter_amount))\n        self.last_delay = delay\n        self.attempts += 1\n        return delay\n```\nI've checked other files such as `apps/edge/pose.py`, `apps/edge/recorder.py`, and `apps/edge/pipeline.py` and those seem to be fine.\n\n\n",
+      "category": "bug",
+      "severity": "medium"
+    },
+    {
+      "path": "apps/edge/rtsp.py",
+      "content": "`self.attempts` is incremented on every invocation of `next_delay()` without an upper bound. With `backoff_factor = 2.0`, `self.backoff_factor ** self.attempts` will overflow Python's IEEE 754 float representation and raise `OverflowError: (34, 'Numerical result out of range')` once `attempts \u003e= 1024`.\n\nDuring extended network outages (e.g. overnight or outages lasting \u003e 8.5 hours at a 30s max delay interval), this unhandled exception will crash the caller's background reconnect loop (`_reconnect_loop` or `RtspRingRecorder`). Capping `self.attempts` or clamping before exponentiation once `base_delay` reaches `self.max_delay` avoids this overflow.",
+      "suggestion_code": "    def next_delay(self) -\u003e float:\n        attempts = min(self.attempts, 30)\n        base_delay = min(self.max_delay, self.initial_delay * (self.backoff_factor ** attempts))",
+      "existing_code": "    def next_delay(self) -\u003e float:\n        base_delay = min(self.max_delay, self.initial_delay * (self.backoff_factor ** self.attempts))",
+      "start_line": 89,
+      "end_line": 90,
+      "thinking": "**Comprehensive Code Review: Edge Pipeline Analysis**\n\nAlright, let's break down this review. I've been digging into the provided code snippets and here's what I've found.\n\nFirst, I identified a potential issue related to the Region of Interest (ROI) filtering in `apps/edge/pipeline.py`. It looks like `self.roi_polygon` filters detections before they're passed to the tracker and incident engine. This is fine, as both filter using the ROI.\n\nMy primary focus is on the files in `\u003creview_files\u003e`. I've uncovered a few critical issues.\n\n**Issue 1:** In `apps/edge/live_pipeline.py`, the `_read_next_frame()` method calls `handle_disconnect()` unconditionally when the RTSP stream is unavailable, *in addition to* the call already made when opening the capture fails. This results in duplicate telemetry reporting (double-counting `disconnect_count`, frame drops, and observation gaps) with high severity. I've noted this in the added lines:\n```python\n            if self._cap is not None:\n                self.is_connected = True\n                return self._cap\n            self.handle_disconnect(\"rtsp_open_failed\")\n            return None\n```\nand\n```python\n        # Stream missing / capture unavailable\n        if self.rtsp_url:\n            self.handle_disconnect(\"rtsp_unavailable\")\n        return None, \"missing\"\n```\n\n**Issue 2:** Also within `apps/edge/live_pipeline.py`, there's a potential thread leak in `LivePerceptionRunner.stop()`. If the perception loop exits first (e.g., due to an error), the `stop()` method might return early without properly stopping and joining the `_reconnect_thread`. This leaves the reconnection thread running indefinitely. The relevant lines are:\n```python\n        recon_thread = self._reconnect_thread\n        if recon_thread and recon_thread.is_alive():\n            recon_thread.join(timeout=timeout)\n```\nor\n```python\n        with self._lock:\n            self.health.mark_stopped()\n            if not self._is_running and (self._thread is None or not self._thread.is_alive()):\n```\nNote: `if not self._is_running and ...` is not added code; it's a line that will cause issues with the added code.\n\n**Issue 3:** In `apps/edge/rtsp.py`, the `ExponentialBackoff.next_delay()` method has a vulnerability. The code doesn't cap the `self.attempts` counter. With a backoff factor of 2, the `base_delay` calculation can trigger an `OverflowError` if the RTSP stream is disconnected for an extended period (more than ~8.5 hours). This can crash the background thread. The newly added calculation lines are:\n```python\n    def next_delay(self) -\u003e float:\n        base_delay = min(self.max_delay, self.initial_delay * (self.backoff_factor ** self.attempts))\n        jitter_amount = base_delay * self.jitter * (2.0 * self.random_fn() - 1.0)\n        delay = max(0.0, min(self.max_delay, base_delay + jitter_amount))\n        self.last_delay = delay\n        self.attempts += 1\n        return delay\n```\nI've checked other files such as `apps/edge/pose.py`, `apps/edge/recorder.py`, and `apps/edge/pipeline.py` and those seem to be fine.\n\n\n",
+      "category": "bug",
+      "severity": "medium"
+    }
+  ],
+  "groups": [
+    {
+      "label": "Edge video streaming, tracking, and recording pipeline",
+      "files": [
+        "apps/edge/live_pipeline.py",
+        "apps/edge/pipeline.py",
+        "apps/edge/pose.py",
+        "apps/edge/recorder.py",
+        "apps/edge/rtsp.py",
+        "apps/edge/rtsp_recorder.py",
+        "apps/edge/tracker.py"
+      ]
+    },
+    {
+      "label": "Edge incident management, evidence, and sync",
+      "files": [
+        "apps/edge/evidence.py",
+        "apps/edge/health.py",
+        "apps/edge/incident.py",
+        "apps/edge/outbox.py",
+        "apps/edge/quota.py",
+        "apps/edge/send_synthetic.py",
+        "apps/edge/uploader.py"
+      ]
+    },
+    {
+      "label": "Server backend and runtime orchestration",
+      "files": [
+        "apps/server/main.py",
+        "apps/server/store.py",
+        "compose.yaml",
+        "run_edge.py",
+        "run_server.py"
+      ]
+    }
+  ],
+  "manifest": {
+    "schema_version": "ocr.run-manifest/v1",
+    "run_id": "f7d2bf94-a9e2-4c0d-8d04-e7e147ff2ec7",
+    "operation": "review",
+    "terminal_state": "complete",
+    "repository": {},
+    "input": {
+      "mode": "workspace",
+      "resolved_base": "882d8435291324683f557d133d0e5a9e7c787999",
+      "source_artifact_sha256": "8bbd14681edb6c2428b43acb31a880b3e50e6dbb63f404aa1c958436e07e7338"
+    },
+    "execution": {
+      "ocr_version": "v1.13.0",
+      "provider": "oc",
+      "model": "Gemini 3.8 Flash (High)",
+      "configured_concurrency": 8,
+      "rule_config_sha256": "891adccb133dfa0b902a7c30add344c2237bd6fcde10d356efbd68ed51154c0b",
+      "runtime_config_sha256": "bf36bfa6f928efe093722385b6f2be604b312c31eeeaab37adf37ba3537e9386"
+    },
+    "coverage": {
+      "selected": [
+        {
+          "item_id": "05151390d0f883c34d6eb4f5f34a02d0057f594d2f5d61a4912e380b2f126670",
+          "path": "apps/edge/send_synthetic.py",
+          "fingerprint": "2d5b26d8c956219279b9e280f109072b7b093cd8c98e3569e1085ebc50d495bc"
+        },
+        {
+          "item_id": "0ebb4f2c0465f03e0e31dc10a5ff9ffac69d76d2b3ee762858b52f2132c2dc1b",
+          "path": "apps/edge/pose.py",
+          "fingerprint": "054771e1213ba48d55caf2e89d3713282ade86d3ed2981a7d30053489473a1be"
+        },
+        {
+          "item_id": "15f4564900b0fdfc67cbede3dfd1d1d92a6dee30088c431ab087d134e0cd2638",
+          "path": "apps/edge/rtsp_recorder.py",
+          "fingerprint": "3cf8ea8ca1b8fc4739d60f86742583cf3e34a67c3558207339612e11697579e7"
+        },
+        {
+          "item_id": "1a57a2f4b0c3f0635b48c77674b0e3f4dea3981323e0e2704ff7c5ed903e676e",
+          "path": "apps/edge/incident.py",
+          "fingerprint": "b2b1eaee37da6b98b64f05c80056411fb3abb9c9e0ad66e2851a6a8fe3bb37dc"
+        },
+        {
+          "item_id": "4ff8434be7244bacd918006170dfa8aa0be6fed7b8b55d017679ac2864015449",
+          "path": "apps/edge/tracker.py",
+          "fingerprint": "a0f924b6b82a0abf97c3cf4ace97ae0eb3b3e9e00deee2c1ba888994a1a95bce"
+        },
+        {
+          "item_id": "6cb296ffcdb9a835baf909b1fd6e8949c966ecc42f1e2d7fd78485525203ba54",
+          "path": "apps/edge/outbox.py",
+          "fingerprint": "24a764451c67915f79b0fe127f1050e2c9fdbb3a785711307c63a3c119e71574"
+        },
+        {
+          "item_id": "6d003513fb796cd31cee2d627d0f76bde3f18fd1f54521d4a3655a68208ba675",
+          "path": "apps/edge/pipeline.py",
+          "fingerprint": "29e9bb57c561dd2044ad40464d4d70765d73edf094485cb7dda2aefaf62d0c58"
+        },
+        {
+          "item_id": "72a87da4f59154f81b16c7116059b61d4b986d14433f7103982d4111bcd32da7",
+          "path": "apps/edge/health.py",
+          "fingerprint": "a414c8169b61e350b42c46fe88ddb922a2746c8c8606ca379ab9fe97ddccfa1b"
+        },
+        {
+          "item_id": "730fb1f26cefcfe2061cedf4a1594f762ea72c9c998b9cf7979ec0619e69223a",
+          "path": "apps/server/store.py",
+          "fingerprint": "6dfe227faf510cc26dc2c68744ea58841001f4b6bd7dcb2437daa6a7570ceccb"
+        },
+        {
+          "item_id": "997ad5e90481524e7c2dc4f8a1ea1dfc8be2187e1807478dee79001a2f009de0",
+          "path": "apps/edge/rtsp.py",
+          "fingerprint": "c457c74c605566185338718649a0243f93b90077b48404023f94263f29385d50"
+        },
+        {
+          "item_id": "9cc4f244f45bd554822461989d14fd278107119f49a851ad184f197b15277672",
+          "path": "run_server.py",
+          "fingerprint": "296de1e385e9b18599140ecaf93b2eee292f2eec7593623c3b6a23c6e2868e69"
+        },
+        {
+          "item_id": "9ef868d72c222f5abdb20251914c1549fb122c49e6e65f205891d7683e64b655",
+          "path": "run_edge.py",
+          "fingerprint": "4262ba8b921d5204c1c8329f3b8782d9cff5b23a25f2f0db1e0874ea324de41a"
+        },
+        {
+          "item_id": "aed62229ccbc11bf52beb22e7b594160058e33fbdb467c7d0ad8f029b197cf38",
+          "path": "apps/edge/recorder.py",
+          "fingerprint": "a0a0479e41fed382f1289e96cafeb4ee475fafbc8fd77c33f20cc31b3681a7a7"
+        },
+        {
+          "item_id": "b12d5111a265888925379fba65a203c37d08a98da8b0ed2f4c238b8c468f5c46",
+          "path": "apps/server/main.py",
+          "fingerprint": "45db511ca216a83389b3a11fc077b76cb5de4790a33b9ee17aa0fa2fe1cb3310"
+        },
+        {
+          "item_id": "c15b6ab6fc8566cd3a9c9e0d26cbcef8a325fc10f1e504afd70f20664b5de0ee",
+          "path": "apps/edge/uploader.py",
+          "fingerprint": "f56a92890d60bca72b14cbe64d73b138a28d09fcc5a0e36cde78c3abfcf2f1d8"
+        },
+        {
+          "item_id": "c92ffebfed6cfbff2238ebda3aa22698f278cf940dafada30fdacbdb746aadec",
+          "path": "apps/edge/evidence.py",
+          "fingerprint": "d01a4a7b36ebfe21c6137e6afbaa3afd042354c35dbaa3a2a4f611fa4676d38a"
+        },
+        {
+          "item_id": "c94e35f91b31f91a5001e3c119154e4874a808a45995c2e3b52b0d5e0ed2c49c",
+          "path": "apps/edge/quota.py",
+          "fingerprint": "630f94d6cc87f28e3acf0e9981a6b21d64ab923f0ef8d41318ef03bfd0769c72"
+        },
+        {
+          "item_id": "f4897658e94f1fe538576608fa71e642822e29607834c85090fbe01181178ec4",
+          "path": "compose.yaml",
+          "fingerprint": "a6cbc71fadbeb89ac1fe3d224b08c54a1a36efbc559fc54ec6bde250a8663a02"
+        },
+        {
+          "item_id": "f645fce4dede3e9fd5bf92357753449df15ccec70246481ebba53a4e008b0c90",
+          "path": "apps/edge/live_pipeline.py",
+          "fingerprint": "adabc2be47aa6de49b175e1e5e7b2bb209e5a1805e2c607e1bde58fe52195970"
+        }
+      ],
+      "completed": [
+        {
+          "item_id": "05151390d0f883c34d6eb4f5f34a02d0057f594d2f5d61a4912e380b2f126670",
+          "path": "apps/edge/send_synthetic.py",
+          "fingerprint": "2d5b26d8c956219279b9e280f109072b7b093cd8c98e3569e1085ebc50d495bc"
+        },
+        {
+          "item_id": "0ebb4f2c0465f03e0e31dc10a5ff9ffac69d76d2b3ee762858b52f2132c2dc1b",
+          "path": "apps/edge/pose.py",
+          "fingerprint": "054771e1213ba48d55caf2e89d3713282ade86d3ed2981a7d30053489473a1be"
+        },
+        {
+          "item_id": "15f4564900b0fdfc67cbede3dfd1d1d92a6dee30088c431ab087d134e0cd2638",
+          "path": "apps/edge/rtsp_recorder.py",
+          "fingerprint": "3cf8ea8ca1b8fc4739d60f86742583cf3e34a67c3558207339612e11697579e7"
+        },
+        {
+          "item_id": "1a57a2f4b0c3f0635b48c77674b0e3f4dea3981323e0e2704ff7c5ed903e676e",
+          "path": "apps/edge/incident.py",
+          "fingerprint": "b2b1eaee37da6b98b64f05c80056411fb3abb9c9e0ad66e2851a6a8fe3bb37dc"
+        },
+        {
+          "item_id": "4ff8434be7244bacd918006170dfa8aa0be6fed7b8b55d017679ac2864015449",
+          "path": "apps/edge/tracker.py",
+          "fingerprint": "a0f924b6b82a0abf97c3cf4ace97ae0eb3b3e9e00deee2c1ba888994a1a95bce"
+        },
+        {
+          "item_id": "6cb296ffcdb9a835baf909b1fd6e8949c966ecc42f1e2d7fd78485525203ba54",
+          "path": "apps/edge/outbox.py",
+          "fingerprint": "24a764451c67915f79b0fe127f1050e2c9fdbb3a785711307c63a3c119e71574"
+        },
+        {
+          "item_id": "6d003513fb796cd31cee2d627d0f76bde3f18fd1f54521d4a3655a68208ba675",
+          "path": "apps/edge/pipeline.py",
+          "fingerprint": "29e9bb57c561dd2044ad40464d4d70765d73edf094485cb7dda2aefaf62d0c58"
+        },
+        {
+          "item_id": "72a87da4f59154f81b16c7116059b61d4b986d14433f7103982d4111bcd32da7",
+          "path": "apps/edge/health.py",
+          "fingerprint": "a414c8169b61e350b42c46fe88ddb922a2746c8c8606ca379ab9fe97ddccfa1b"
+        },
+        {
+          "item_id": "730fb1f26cefcfe2061cedf4a1594f762ea72c9c998b9cf7979ec0619e69223a",
+          "path": "apps/server/store.py",
+          "fingerprint": "6dfe227faf510cc26dc2c68744ea58841001f4b6bd7dcb2437daa6a7570ceccb"
+        },
+        {
+          "item_id": "997ad5e90481524e7c2dc4f8a1ea1dfc8be2187e1807478dee79001a2f009de0",
+          "path": "apps/edge/rtsp.py",
+          "fingerprint": "c457c74c605566185338718649a0243f93b90077b48404023f94263f29385d50"
+        },
+        {
+          "item_id": "9cc4f244f45bd554822461989d14fd278107119f49a851ad184f197b15277672",
+          "path": "run_server.py",
+          "fingerprint": "296de1e385e9b18599140ecaf93b2eee292f2eec7593623c3b6a23c6e2868e69"
+        },
+        {
+          "item_id": "9ef868d72c222f5abdb20251914c1549fb122c49e6e65f205891d7683e64b655",
+          "path": "run_edge.py",
+          "fingerprint": "4262ba8b921d5204c1c8329f3b8782d9cff5b23a25f2f0db1e0874ea324de41a"
+        },
+        {
+          "item_id": "aed62229ccbc11bf52beb22e7b594160058e33fbdb467c7d0ad8f029b197cf38",
+          "path": "apps/edge/recorder.py",
+          "fingerprint": "a0a0479e41fed382f1289e96cafeb4ee475fafbc8fd77c33f20cc31b3681a7a7"
+        },
+        {
+          "item_id": "b12d5111a265888925379fba65a203c37d08a98da8b0ed2f4c238b8c468f5c46",
+          "path": "apps/server/main.py",
+          "fingerprint": "45db511ca216a83389b3a11fc077b76cb5de4790a33b9ee17aa0fa2fe1cb3310"
+        },
+        {
+          "item_id": "c15b6ab6fc8566cd3a9c9e0d26cbcef8a325fc10f1e504afd70f20664b5de0ee",
+          "path": "apps/edge/uploader.py",
+          "fingerprint": "f56a92890d60bca72b14cbe64d73b138a28d09fcc5a0e36cde78c3abfcf2f1d8"
+        },
+        {
+          "item_id": "c92ffebfed6cfbff2238ebda3aa22698f278cf940dafada30fdacbdb746aadec",
+          "path": "apps/edge/evidence.py",
+          "fingerprint": "d01a4a7b36ebfe21c6137e6afbaa3afd042354c35dbaa3a2a4f611fa4676d38a"
+        },
+        {
+          "item_id": "c94e35f91b31f91a5001e3c119154e4874a808a45995c2e3b52b0d5e0ed2c49c",
+          "path": "apps/edge/quota.py",
+          "fingerprint": "630f94d6cc87f28e3acf0e9981a6b21d64ab923f0ef8d41318ef03bfd0769c72"
+        },
+        {
+          "item_id": "f4897658e94f1fe538576608fa71e642822e29607834c85090fbe01181178ec4",
+          "path": "compose.yaml",
+          "fingerprint": "a6cbc71fadbeb89ac1fe3d224b08c54a1a36efbc559fc54ec6bde250a8663a02"
+        },
+        {
+          "item_id": "f645fce4dede3e9fd5bf92357753449df15ccec70246481ebba53a4e008b0c90",
+          "path": "apps/edge/live_pipeline.py",
+          "fingerprint": "adabc2be47aa6de49b175e1e5e7b2bb209e5a1805e2c607e1bde58fe52195970"
+        }
+      ],
+      "reused": [],
+      "failed": [],
+      "waived": []
+    },
+    "elapsed_ms": 1615400
+  },
+  "retry_report": {
+    "schema_version": "ocr.llm-retry-report/v1",
+    "total_requests": 216,
+    "retried_requests": 3,
+    "total_retries": 3,
+    "recovered_requests": 3,
+    "failed_requests": 0,
+    "cancelled_requests": 0,
+    "requests": [
+      {
+        "logical_request_id": "3225d949b357ea25911ebeeeb1c696f21dc2269236b5b24340367b9087cb8e33",
+        "provider": "oc",
+        "model": "Gemini 3.8 Flash (High)",
+        "file_path": "apps/edge/live_pipeline.py,apps/edge/pipeline.py,apps/edge/pose.py,apps/edge/recorder.py,apps/edge/rtsp.py,apps/edge/rtsp_recorder.py,apps/edge/tracker.py",
+        "task_type": "main_task",
+        "request_no": 60,
+        "outcome": "recovered",
+        "attempts": [
+          {
+            "attempt": 1,
+            "outcome": "error",
+            "error_class": "provider",
+            "failure_phase": "http",
+            "status_code": 524,
+            "retry_after_ms": 120000,
+            "duration_to_headers_ms": 126017
+          },
+          {
+            "attempt": 2,
+            "outcome": "success",
+            "status_code": 200,
+            "observed_backoff_ms": 120010,
+            "duration_to_headers_ms": 25362
+          }
+        ]
+      },
+      {
+        "logical_request_id": "7fe9bf789019daef9795d310fe99a55519a4f377f93d7cc1b7754304220642c5",
+        "provider": "oc",
+        "model": "Gemini 3.8 Flash (High)",
+        "file_path": "apps/edge/evidence.py,apps/edge/health.py,apps/edge/incident.py,apps/edge/outbox.py,apps/edge/quota.py,apps/edge/send_synthetic.py,apps/edge/uploader.py",
+        "task_type": "plan_task",
+        "request_no": 1,
+        "outcome": "recovered",
+        "attempts": [
+          {
+            "attempt": 1,
+            "outcome": "error",
+            "error_class": "provider",
+            "failure_phase": "http",
+            "status_code": 524,
+            "retry_after_ms": 120000,
+            "duration_to_headers_ms": 126108
+          },
+          {
+            "attempt": 2,
+            "outcome": "success",
+            "status_code": 200,
+            "observed_backoff_ms": 120009,
+            "duration_to_headers_ms": 567
+          }
+        ]
+      },
+      {
+        "logical_request_id": "c978355799028e4a9880e6bde6a97cd783886783b3a65215532c628a1757e764",
+        "provider": "oc",
+        "model": "Gemini 3.8 Flash (High)",
+        "file_path": "apps/edge/live_pipeline.py,apps/edge/pipeline.py,apps/edge/pose.py,apps/edge/recorder.py,apps/edge/rtsp.py,apps/edge/rtsp_recorder.py,apps/edge/tracker.py",
+        "task_type": "plan_task",
+        "request_no": 1,
+        "outcome": "recovered",
+        "attempts": [
+          {
+            "attempt": 1,
+            "outcome": "error",
+            "error_class": "provider",
+            "failure_phase": "http",
+            "status_code": 524,
+            "retry_after_ms": 120000,
+            "duration_to_headers_ms": 126517
+          },
+          {
+            "attempt": 2,
+            "outcome": "success",
+            "status_code": 200,
+            "observed_backoff_ms": 120000,
+            "duration_to_headers_ms": 427
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -71,6 +71,7 @@ class EdgeUploader:
         timeout_seconds: float = 15.0,
         max_retries: int = 3,
         backoff_base: float = 0.5,
+        sleep_fn: Any = None,
     ) -> None:
         self.outbox = outbox if isinstance(outbox, EventOutbox) else EventOutbox(outbox)
         self.recorder = recorder if isinstance(recorder, FileRecorder) else FileRecorder(recorder)
@@ -81,6 +82,7 @@ class EdgeUploader:
         self.timeout_seconds = timeout_seconds
         self.max_retries = max_retries
         self.backoff_base = backoff_base
+        self._sleep = sleep_fn if sleep_fn is not None else time.sleep
         self._ssl_context = ssl.create_default_context()
 
     def transfer(self, endpoint, artifact, headers):
@@ -91,7 +93,7 @@ class EdgeUploader:
         for attempt in range(self.max_retries + 1):
             if attempt > 0 and self.backoff_base > 0:
                 delay = self.backoff_base * (2 ** (attempt - 1))
-                time.sleep(delay)
+                self._sleep(delay)
 
             try:
                 with artifact_path.open("rb") as stream:

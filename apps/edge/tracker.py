@@ -45,14 +45,17 @@ class Track:
         score: float,
         label: str,
         timestamp: float,
+        state: str = "active",
     ) -> None:
         self.track_id: int = track_id
         self.bbox: list[float] = [float(x) for x in bbox]
         self.score: float = float(score)
         self.label: str = str(label)
-        self.state: str = "active"
+        self.state: str = str(state)
         self.start_time: float = float(timestamp)
         self.last_time: float = float(timestamp)
+        self.consecutive_hits: int = 1
+        self.activate_after: int | None = None
         self.history: list[TrackObservation] = []
         self._record_observation(self.bbox, self.score, timestamp)
 
@@ -100,7 +103,15 @@ class Track:
         self.bbox = [float(x) for x in bbox]
         self.score = float(score)
         self.last_time = float(timestamp)
-        self.state = "active"
+        if self.state == "tentative":
+            # ByteTracker owns promotion via activate_after (set on tracks it creates); a bare Track
+            # used on its own keeps the contract default of two consecutive hits.
+            self.consecutive_hits += 1
+            if self.activate_after is None and self.consecutive_hits >= 2:
+                self.state = "active"
+        else:
+            self.state = "active"
+            self.consecutive_hits += 1
         self._record_observation(self.bbox, self.score, timestamp)
 
     def mark_lost(self) -> None:
@@ -108,6 +119,26 @@ class Track:
 
     def mark_removed(self) -> None:
         self.state = "removed"
+
+    def predict_bbox(self, timestamp: float) -> list[float]:
+        """Predicts bounding box [x1, y1, x2, y2] at timestamp using constant velocity."""
+        if len(self.history) < 2:
+            return list(self.bbox)
+        latest = self.history[-1]
+        prev = self.history[-2]
+        dt_obs = latest.timestamp - prev.timestamp
+        dt = float(timestamp) - latest.timestamp
+        if dt_obs <= 1e-6 or dt <= 0.0:
+            return list(self.bbox)
+
+        vx = (latest.cx - prev.cx) / dt_obs
+        vy = (latest.cy - prev.cy) / dt_obs
+
+        pred_cx = latest.cx + vx * dt
+        pred_cy = latest.cy + vy * dt
+        w = self.width
+        h = self.height
+        return [pred_cx - w / 2.0, pred_cy - h / 2.0, pred_cx + w / 2.0, pred_cy + h / 2.0]
 
     def vertical_velocity(self, window_seconds: float = 1.0) -> float:
         """Computes vertical velocity (pixels/second, positive = downward) over sliding window."""
@@ -153,12 +184,14 @@ class ByteTracker:
         match_threshold: float = 0.2,
         match_threshold_low: float = 0.1,
         max_lost_time: float = 2.0,
+        activate_after: int = 2,
     ) -> None:
         self.high_threshold: float = float(high_threshold)
         self.low_threshold: float = float(low_threshold)
         self.match_threshold: float = float(match_threshold)
         self.match_threshold_low: float = float(match_threshold_low)
         self.max_lost_time: float = float(max_lost_time)
+        self.activate_after: int = int(activate_after)
         self._next_track_id: int = 1
         self.tracks: list[Track] = []
 
@@ -171,14 +204,16 @@ class ByteTracker:
         tracks: list[Track],
         detections: list[dict[str, Any]],
         threshold: float,
+        timestamp: float | None = None,
     ) -> tuple[list[tuple[Track, dict[str, Any]]], list[Track], list[dict[str, Any]]]:
         if not tracks or not detections:
             return [], list(tracks), list(detections)
 
         candidates: list[tuple[float, int, int]] = []
         for t_idx, t in enumerate(tracks):
+            box = t.predict_bbox(timestamp) if timestamp is not None else t.bbox
             for d_idx, d in enumerate(detections):
-                iou = bbox_iou(t.bbox, d["bbox"])
+                iou = bbox_iou(box, d["bbox"])
                 if iou >= threshold:
                     candidates.append((iou, t_idx, d_idx))
 
@@ -215,43 +250,62 @@ class ByteTracker:
         ]
 
         active_tracks = [t for t in self.tracks if t.state == "active"]
+        tentative_tracks = [t for t in self.tracks if t.state == "tentative"]
         lost_tracks = [t for t in self.tracks if t.state == "lost"]
 
-        # Stage 1: Match active tracks with high-score detections
-        matches_1, unmatched_active, unmatched_high = self._match_iou(
-            active_tracks, high_dets, self.match_threshold
+        # Stage 1a: Match active tracks with high-score detections using motion prediction
+        matches_1, unmatched_active, remaining_high_1 = self._match_iou(
+            active_tracks, high_dets, self.match_threshold, timestamp=ts
         )
         for track, det in matches_1:
             track.update(det["bbox"], float(det["score"]), ts)
 
+        # Stage 1b: Match tentative tracks with remaining high-score detections
+        matches_tentative, unmatched_tentative, remaining_high_2 = self._match_iou(
+            tentative_tracks, remaining_high_1, self.match_threshold, timestamp=ts
+        )
+        for track, det in matches_tentative:
+            track.update(det["bbox"], float(det["score"]), ts)
+            if track.consecutive_hits >= self.activate_after:
+                track.state = "active"
+
+        # Tentative tracks that did not match high-score detections are dropped immediately
+        for track in unmatched_tentative:
+            track.mark_removed()
+
         # Stage 2: Match remaining active tracks with low-score detections
         matches_2, unmatched_active_2, _ = self._match_iou(
-            unmatched_active, low_dets, self.match_threshold_low
+            unmatched_active, low_dets, self.match_threshold_low, timestamp=ts
         )
         for track, det in matches_2:
             track.update(det["bbox"], float(det["score"]), ts)
 
         # Stage 3: Match remaining high-score detections with lost tracks
         matches_3, remaining_lost, unmatched_high_dets = self._match_iou(
-            lost_tracks, unmatched_high, self.match_threshold
+            lost_tracks, remaining_high_2, self.match_threshold, timestamp=ts
         )
         for track, det in matches_3:
             track.update(det["bbox"], float(det["score"]), ts)
+            track.state = "active"
 
         # Initialize new tracks for unmatched high-score detections
         for det in unmatched_high_dets:
+            initial_state = "active" if self.activate_after <= 1 else "tentative"
             new_track = Track(
                 track_id=self._next_track_id,
                 bbox=det["bbox"],
                 score=float(det["score"]),
                 label=str(det.get("label", "unknown")),
                 timestamp=ts,
+                state=initial_state,
             )
+            new_track.activate_after = self.activate_after
             self._next_track_id += 1
             self.tracks.append(new_track)
 
         # Mark unmatched active tracks as lost or removed if expired
         for track in unmatched_active_2:
+            track.consecutive_hits = 0
             if (ts - track.last_time) > self.max_lost_time:
                 track.mark_removed()
             else:
@@ -259,6 +313,7 @@ class ByteTracker:
 
         # Update remaining lost tracks (remove if expired)
         for track in remaining_lost:
+            track.consecutive_hits = 0
             if (ts - track.last_time) > self.max_lost_time:
                 track.mark_removed()
 

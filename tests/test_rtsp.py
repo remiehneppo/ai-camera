@@ -8,6 +8,7 @@ from unittest import mock
 
 from apps.edge.rtsp import (
     DEFAULT_ENV_FILE,
+    ExponentialBackoff,
     RtspProbeError,
     load_rtsp_config,
     probe_rtsp_stream,
@@ -208,6 +209,72 @@ class RtspProbeFailureTests(unittest.TestCase):
         sanitized = sanitize_probe_output(long_output, SECRET_URL)
         assert_no_credentials(self, sanitized)
         self.assertLessEqual(len(sanitized), 300)
+
+
+class ExponentialBackoffTests(unittest.TestCase):
+    def test_long_outage_does_not_overflow_and_stays_capped(self) -> None:
+        backoff = ExponentialBackoff(initial_delay=1.0, max_delay=30.0, backoff_factor=2.0, jitter=0.0)
+        for _ in range(5000):  # well past the 1024 float-overflow point of 2.0 ** n
+            delay = backoff.next_delay()
+        self.assertEqual(delay, 30.0)
+
+    def test_reset_restarts_progression_after_long_outage(self) -> None:
+        backoff = ExponentialBackoff(initial_delay=1.0, max_delay=30.0, backoff_factor=2.0, jitter=0.0)
+        for _ in range(2000):
+            backoff.next_delay()
+        backoff.reset()
+        self.assertEqual(backoff.next_delay(), 1.0)
+
+    def test_exponential_delay_progression_without_jitter(self) -> None:
+        backoff = ExponentialBackoff(
+            initial_delay=1.0,
+            max_delay=10.0,
+            backoff_factor=2.0,
+            jitter=0.0,
+        )
+        self.assertEqual(backoff.next_delay(), 1.0)
+        self.assertEqual(backoff.next_delay(), 2.0)
+        self.assertEqual(backoff.next_delay(), 4.0)
+        self.assertEqual(backoff.next_delay(), 8.0)
+        self.assertEqual(backoff.next_delay(), 10.0)  # capped at max_delay
+        self.assertEqual(backoff.next_delay(), 10.0)
+
+        backoff.reset()
+        self.assertEqual(backoff.attempts, 0)
+        self.assertEqual(backoff.next_delay(), 1.0)
+
+    def test_jitter_bounds_and_random_injection(self) -> None:
+        # random_fn returning 1.0 -> positive jitter (base + jitter*base)
+        backoff_max_jitter = ExponentialBackoff(
+            initial_delay=2.0,
+            max_delay=20.0,
+            backoff_factor=2.0,
+            jitter=0.25,
+            random_fn=lambda: 1.0,
+        )
+        self.assertAlmostEqual(backoff_max_jitter.next_delay(), 2.5)  # 2.0 + 0.25*2.0
+
+        # random_fn returning 0.0 -> negative jitter (base - jitter*base)
+        backoff_min_jitter = ExponentialBackoff(
+            initial_delay=2.0,
+            max_delay=20.0,
+            backoff_factor=2.0,
+            jitter=0.25,
+            random_fn=lambda: 0.0,
+        )
+        self.assertAlmostEqual(backoff_min_jitter.next_delay(), 1.5)  # 2.0 - 0.25*2.0
+
+    def test_wait_uses_injected_sleeper_without_real_sleep(self) -> None:
+        sleep_calls: list[float] = []
+        fake_sleeper = lambda d: sleep_calls.append(d)
+        backoff = ExponentialBackoff(
+            initial_delay=0.5,
+            jitter=0.0,
+            sleeper=fake_sleeper,
+        )
+        delayed = backoff.wait()
+        self.assertEqual(delayed, 0.5)
+        self.assertEqual(sleep_calls, [0.5])
 
 
 if __name__ == "__main__":

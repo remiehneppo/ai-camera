@@ -8,11 +8,18 @@ import os
 from pathlib import Path
 import subprocess
 import threading
-from typing import Any
+import time
+from typing import Any, Callable
 from uuid import uuid4
 
 from apps.edge.recorder import FileRecorder
-from apps.edge.rtsp import load_rtsp_config, probe_rtsp_stream, redact_rtsp_url, sanitize_probe_output
+from apps.edge.rtsp import (
+    ExponentialBackoff,
+    load_rtsp_config,
+    probe_rtsp_stream,
+    redact_rtsp_url,
+    sanitize_probe_output,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +38,12 @@ class RtspRingRecorder:
         session_id: str | None = None,
         probe_timeout_seconds: float = 2.0,
         recorder: FileRecorder | None = None,
+        reconnect_initial_delay: float = 1.0,
+        reconnect_max_delay: float = 30.0,
+        reconnect_backoff: ExponentialBackoff | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        sleeper: Callable[[float], None] | None = None,
+        on_source_change: Callable[[str, str], None] | None = None,
     ) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -39,6 +52,17 @@ class RtspRingRecorder:
         self.probe_timeout_seconds = float(probe_timeout_seconds)
         self.session_id = session_id or str(uuid4())
         self.recorder = recorder if recorder is not None else FileRecorder(self.root, ring_seconds=self.ring_seconds)
+        self.reconnect_backoff = (
+            reconnect_backoff
+            if reconnect_backoff is not None
+            else ExponentialBackoff(
+                initial_delay=reconnect_initial_delay,
+                max_delay=reconnect_max_delay,
+                clock=clock,
+                sleeper=sleeper,
+            )
+        )
+        self.on_source_change = on_source_change
 
         # 1. Resolve RTSP URL (secrets must never be leaked)
         if rtsp_url == "":
@@ -76,6 +100,15 @@ class RtspRingRecorder:
             f"rtsp_url={redacted!r}, session_id={self.session_id!r}, source={self._current_source!r})"
         )
 
+    def rollover_session(self, new_session_id: str | None = None) -> str:
+        """Assign a fresh session_id (rollover) to prevent FileExistsError across source transitions."""
+        with self._lock:
+            self.session_id = str(new_session_id) if new_session_id is not None else str(uuid4())
+            curr_sess = self.session_id
+        if new_session_id is None and self.on_source_change is not None:
+            self.on_source_change(self._current_source, curr_sess)
+        return curr_sess
+
     def start(self) -> None:
         """Start background ring buffer recording."""
         with self._lock:
@@ -96,24 +129,41 @@ class RtspRingRecorder:
 
     def _run_loop(self) -> None:
         try:
-            # 1. Attempt RTSP if configured
-            if self.rtsp_url:
-                try:
-                    probe_rtsp_stream(self.rtsp_url, timeout_seconds=self.probe_timeout_seconds)
-                    self._current_source = "rtsp"
-                    self._record_rtsp_stream()
-                    return
-                except Exception as exc:
-                    self._last_error = sanitize_probe_output(str(exc), self.rtsp_url)
-                    logger.warning(
-                        "RTSP probe/stream failed for %s: %s; falling back to fixture",
-                        redact_rtsp_url(self.rtsp_url),
-                        self._last_error,
-                    )
+            while not self._stop_event.is_set():
+                if self.rtsp_url:
+                    try:
+                        probe_rtsp_stream(self.rtsp_url, timeout_seconds=self.probe_timeout_seconds)
+                        if self._current_source != "rtsp":
+                            if self.on_source_change is not None:
+                                self._current_source = "rtsp"
+                                self.on_source_change("rtsp", self.session_id)
+                            else:
+                                self._current_source = "rtsp"
+                                self.rollover_session()
+                        self.reconnect_backoff.reset()
+                        self._record_rtsp_stream()
+                        if self._stop_event.is_set():
+                            break
+                    except Exception as exc:
+                        self._last_error = sanitize_probe_output(str(exc), self.rtsp_url)
+                        logger.warning(
+                            "RTSP probe/stream failed for %s: %s; falling back to fixture",
+                            redact_rtsp_url(self.rtsp_url),
+                            self._last_error,
+                        )
+                        if self._current_source != "fallback":
+                            self._current_source = "fallback"
+                            self.rollover_session()
+                        self._record_fallback_segments()
+                        self._ready_event.set()
+                        self.reconnect_backoff.wait(self._stop_event)
+                else:
                     self._current_source = "fallback"
-
-            # 2. Fallback to fixture or synthetic
-            self._record_fallback()
+                    self._record_fallback_segments()
+                    self._ready_event.set()
+                    while not self._stop_event.is_set():
+                        self._stop_event.wait(0.5)
+                    break
         except Exception as exc:
             self._last_error = str(exc)
             logger.error("RtspRingRecorder background loop error: %s", exc)
@@ -176,21 +226,26 @@ class RtspRingRecorder:
             if fifo_path.exists():
                 fifo_path.unlink(missing_ok=True)
 
-    def _record_fallback(self) -> None:
-        self._current_source = "fallback"
+    def _record_fallback_segments(self) -> None:
         fallback_file = self.fallback_path
         if fallback_file is None or not fallback_file.is_file():
             fallback_file = self._generate_synthetic_fixture()
             self.fallback_path = fallback_file
 
         try:
-            self.recorder.record_file(fallback_file, self.session_id, segment_seconds=self.segment_seconds)
+            existing = self.recorder.segments(self.session_id)
+            if not existing:
+                self.recorder.record_file(fallback_file, self.session_id, segment_seconds=self.segment_seconds)
         except Exception as exc:
             self._last_error = f"Fallback recording failed: {exc}"
             logger.error("Failed to record fallback file %s: %s", fallback_file, exc)
-        finally:
-            self._ready_event.set()
 
+    def _record_fallback(self) -> None:
+        if self._current_source != "fallback":
+            self._current_source = "fallback"
+            self.rollover_session()
+        self._record_fallback_segments()
+        self._ready_event.set()
         while not self._stop_event.is_set():
             self._stop_event.wait(0.5)
 

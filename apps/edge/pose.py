@@ -115,6 +115,19 @@ class PoseOutcome:
         return asdict(self)
 
 
+def _resolve_executed_at(req: PoseRequest, current_time: float | None = None) -> float:
+    """Resolve outcome executed_at according to the request's clock domain."""
+    if req.clock_domain == "event_time":
+        if current_time is not None:
+            return float(current_time)
+        if req.created_at is not None:
+            if req.deadline is not None and req.created_at > req.deadline and req.deadline < 1e8:
+                return float(req.deadline)
+            return float(req.created_at)
+        return float(req.deadline) if req.deadline is not None else 0.0
+    return time.time()
+
+
 class RtmposeEstimator:
     """RTMPose model inference with affine transform and SimCC coordinate decoding."""
 
@@ -386,6 +399,7 @@ class PoseScheduler:
                     deadline=current_time + deadline_offset,
                     track_id=track.track_id,
                     clock_domain="event_time",
+                    created_at=current_time,
                     branch=branch,
                     priority=priority,
                 )
@@ -419,7 +433,7 @@ class PoseScheduler:
                         track_id=request.track_id,
                         status="skipped",
                         reason="queue_full",
-                        executed_at=time.time(),
+                        executed_at=_resolve_executed_at(request),
                         branch=branch,
                     )
                     self._shed_outcomes.append(outcome)
@@ -451,7 +465,7 @@ class PoseScheduler:
                 track_id=shed_req.track_id,
                 status="skipped",
                 reason="overload_shedding_routine_pose",
-                executed_at=time.time(),
+                executed_at=_resolve_executed_at(shed_req),
                 branch="persistent_lying",
             )
             self._shed_outcomes.append(outcome)
@@ -473,7 +487,7 @@ class PoseScheduler:
                 track_id=shed_req.track_id,
                 status="skipped",
                 reason="overload_shedding_slow_collapse",
-                executed_at=time.time(),
+                executed_at=_resolve_executed_at(shed_req),
                 branch="slow_collapse",
             )
             self._shed_outcomes.append(outcome)
@@ -510,7 +524,7 @@ class PoseScheduler:
                             track_id=req.track_id,
                             status="cancelled",
                             reason="epoch_mismatch",
-                            executed_at=current_time,
+                            executed_at=_resolve_executed_at(req, current_time),
                             branch=branch,
                         )
                         expired_outcomes.append(outcome)
@@ -525,7 +539,7 @@ class PoseScheduler:
                             track_id=req.track_id,
                             status="skipped",
                             reason="deadline_exceeded",
-                            executed_at=current_time,
+                            executed_at=_resolve_executed_at(req, current_time),
                             branch=branch,
                         )
                         expired_outcomes.append(outcome)
@@ -667,7 +681,7 @@ class PoseScheduler:
                             track_id=req.track_id,
                             status="cancelled",
                             reason="epoch_mismatch",
-                            executed_at=time.time(),
+                            executed_at=_resolve_executed_at(req),
                             branch=branch,
                         )
                         cancelled.append(outcome)
@@ -744,7 +758,7 @@ class PoseManager:
                     track_id=req.track_id,
                     status="cancelled",
                     reason="epoch_mismatch",
-                    executed_at=time.time(),
+                    executed_at=_resolve_executed_at(req),
                     branch=req.branch,
                 )
                 self._terminal_outcomes.append(outcome)
@@ -753,8 +767,8 @@ class PoseManager:
                 return False
 
             accepted = self.scheduler.submit_request(req)
-            if not accepted:
-                shed = self.scheduler.poll_shed_outcomes()
+            shed = self.scheduler.poll_shed_outcomes()
+            if shed:
                 self._terminal_outcomes.extend(shed)
             return accepted
 
@@ -762,8 +776,10 @@ class PoseManager:
         """Drain and process queued requests evaluating deadline, cache existence, and estimation."""
         with self._lock:
             requests_to_process, shed_outcomes = self.scheduler.schedule_batch(current_time)
+            terminal_outcomes = list(self._terminal_outcomes)
+            self._terminal_outcomes.clear()
 
-        outcomes: list[PoseOutcome] = list(shed_outcomes)
+        outcomes: list[PoseOutcome] = terminal_outcomes + list(shed_outcomes)
         for req in requests_to_process:
             start_t = time.perf_counter()
 
@@ -778,7 +794,7 @@ class PoseManager:
                     track_id=req.track_id,
                     status="cancelled",
                     reason="epoch_mismatch",
-                    executed_at=time.time(),
+                    executed_at=_resolve_executed_at(req, current_time),
                     branch=req.branch,
                 )
                 self.scheduler.record_outcome(outcome)
@@ -796,7 +812,7 @@ class PoseManager:
                     track_id=req.track_id,
                     status="skipped",
                     reason="deadline_exceeded",
-                    executed_at=time.time(),
+                    executed_at=_resolve_executed_at(req, current_time),
                     branch=req.branch,
                 )
                 self.scheduler.record_outcome(outcome)
@@ -818,7 +834,7 @@ class PoseManager:
                     track_id=req.track_id,
                     status="skipped",
                     reason="frame_buffer_expired",
-                    executed_at=time.time(),
+                    executed_at=_resolve_executed_at(req, current_time),
                     branch=req.branch,
                 )
                 self.scheduler.record_outcome(outcome)
@@ -836,7 +852,7 @@ class PoseManager:
                     track_id=req.track_id,
                     status="failed",
                     reason="estimator_unavailable",
-                    executed_at=time.time(),
+                    executed_at=_resolve_executed_at(req, current_time),
                     branch=req.branch,
                 )
                 self.scheduler.record_outcome(outcome)
@@ -857,7 +873,7 @@ class PoseManager:
                     reason=None,
                     keypoints=kps,
                     latency_ms=latency,
-                    executed_at=time.time(),
+                    executed_at=_resolve_executed_at(req, current_time),
                     branch=req.branch,
                 )
             except Exception as exc:
@@ -870,14 +886,12 @@ class PoseManager:
                     track_id=req.track_id,
                     status="failed",
                     reason=str(exc),
-                    executed_at=time.time(),
+                    executed_at=_resolve_executed_at(req, current_time),
                     branch=req.branch,
                 )
             self.scheduler.record_outcome(outcome)
             outcomes.append(outcome)
 
-        with self._lock:
-            self._terminal_outcomes.extend(outcomes)
         return outcomes
 
     def request_pose(
@@ -907,11 +921,9 @@ class PoseManager:
                 track_id=req.track_id,
                 status="cancelled",
                 reason="epoch_mismatch",
-                executed_at=time.time(),
+                executed_at=_resolve_executed_at(req, eval_time),
                 branch=req.branch,
             )
-            with self._lock:
-                self._terminal_outcomes.append(outcome)
             self.scheduler.record_outcome(outcome)
             return outcome
 
@@ -926,11 +938,9 @@ class PoseManager:
                 track_id=req.track_id,
                 status="skipped",
                 reason="deadline_exceeded",
-                executed_at=time.time(),
+                executed_at=_resolve_executed_at(req, eval_time),
                 branch=req.branch,
             )
-            with self._lock:
-                self._terminal_outcomes.append(outcome)
             self.scheduler.record_outcome(outcome)
             return outcome
 
@@ -951,11 +961,9 @@ class PoseManager:
                 track_id=req.track_id,
                 status="skipped",
                 reason="frame_buffer_expired",
-                executed_at=time.time(),
+                executed_at=_resolve_executed_at(req, eval_time),
                 branch=req.branch,
             )
-            with self._lock:
-                self._terminal_outcomes.append(outcome)
             self.scheduler.record_outcome(outcome)
             return outcome
 
@@ -969,11 +977,9 @@ class PoseManager:
                 track_id=req.track_id,
                 status="failed",
                 reason="estimator_unavailable",
-                executed_at=time.time(),
+                executed_at=_resolve_executed_at(req, eval_time),
                 branch=req.branch,
             )
-            with self._lock:
-                self._terminal_outcomes.append(outcome)
             self.scheduler.record_outcome(outcome)
             return outcome
 
@@ -991,7 +997,7 @@ class PoseManager:
                 reason=None,
                 keypoints=kps,
                 latency_ms=latency,
-                executed_at=time.time(),
+                executed_at=_resolve_executed_at(req, eval_time),
                 branch=req.branch,
             )
         except Exception as exc:
@@ -1004,12 +1010,10 @@ class PoseManager:
                 track_id=req.track_id,
                 status="failed",
                 reason=str(exc),
-                executed_at=time.time(),
+                executed_at=_resolve_executed_at(req, eval_time),
                 branch=req.branch,
             )
 
-        with self._lock:
-            self._terminal_outcomes.append(outcome)
         self.scheduler.record_outcome(outcome)
         return outcome
 

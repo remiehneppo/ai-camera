@@ -6,12 +6,14 @@ import argparse
 from datetime import datetime, timezone
 import json
 import os
+import random
 import ssl
+import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from uuid import UUID, uuid4
-from typing import Any
+from typing import Any, Callable
 
 from apps.edge.outbox import EventOutbox
 from domain.event_contract import validate_event
@@ -67,21 +69,67 @@ def _validate_receipt(receipt: object, item: dict[str, Any]) -> dict[str, object
     return receipt
 
 
-def deliver_pending(outbox: EventOutbox, base_url: str, token: str) -> int:
+def deliver_pending(
+    outbox: EventOutbox,
+    base_url: str,
+    token: str,
+    *,
+    max_retries: int = 3,
+    backoff_base: float = 0.5,
+    max_backoff: float = 8.0,
+    jitter: bool = True,
+    sleep_fn: Callable[[float], None] | None = None,
+    clock_fn: Callable[[], float] | None = None,
+    rng_fn: Callable[[float, float], float] | None = None,
+) -> int:
     endpoint = _api_url(base_url)
     delivered = 0
+    sleep = sleep_fn if sleep_fn is not None else time.sleep
+    rng = rng_fn if rng_fn is not None else random.uniform
+    ssl_context = ssl.create_default_context()
+
     for item in outbox.pending():
         body = json.dumps(item["event"], ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
-        request = Request(endpoint, data=body, headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Idempotency-Key": item["message_id"]}, method="POST")
-        try:
-            with urlopen(request, timeout=5, context=ssl.create_default_context()) as response:
-                receipt = _validate_receipt(json.load(response), item)
-            outbox.record_attempt(item["message_id"])
-            outbox.mark_delivered(item["message_id"], receipt)
-            delivered += 1
-        except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
-            outbox.record_attempt(item["message_id"], type(exc).__name__)
-            raise
+        request = Request(
+            endpoint,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Idempotency-Key": item["message_id"],
+            },
+            method="POST",
+        )
+
+        for attempt in range(max_retries + 1):
+            if attempt > 0 and backoff_base > 0:
+                raw_delay = min(max_backoff, backoff_base * (2 ** (attempt - 1)))
+                delay = rng(0.0, raw_delay) if jitter else raw_delay
+                sleep(delay)
+
+            try:
+                with urlopen(request, timeout=5, context=ssl_context) as response:
+                    receipt = _validate_receipt(json.load(response), item)
+                outbox.record_attempt(item["message_id"])
+                outbox.mark_delivered(item["message_id"], receipt)
+                delivered += 1
+                break
+            except HTTPError as exc:
+                outbox.record_attempt(item["message_id"], type(exc).__name__)
+                # 429 and 5xx are retryable
+                if (exc.code == 429 or exc.code in {500, 502, 503, 504}) and attempt < max_retries:
+                    continue
+                raise
+            except (URLError, TimeoutError, OSError) as exc:
+                outbox.record_attempt(item["message_id"], type(exc).__name__)
+                if attempt < max_retries:
+                    continue
+                raise
+            except ValueError as exc:
+                # Receipt verification failed, non-retryable
+                outbox.record_attempt(item["message_id"], type(exc).__name__)
+                raise
+
     return delivered
 
 

@@ -8,13 +8,12 @@ from pathlib import Path
 import subprocess
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 import cv2
 import numpy as np
 
-from apps.edge.evidence import EvidenceLifecycle
 from apps.edge.health import EdgeHealthMonitor
 from apps.edge.incident import IncidentEngine
 from apps.edge.oracle_detector import OnnxDetector
@@ -22,6 +21,7 @@ from apps.edge.outbox import EventOutbox
 from apps.edge.pipeline import PerceptionPipeline
 from apps.edge.recorder import FileRecorder
 from apps.edge.rtsp import (
+    ExponentialBackoff,
     load_rtsp_config,
     probe_rtsp_stream,
     redact_rtsp_url,
@@ -58,6 +58,12 @@ class LivePerceptionRunner:
         ring_recorder: RtspRingRecorder | None = None,
         upload_interval_seconds: float | None = None,
         health: EdgeHealthMonitor | None = None,
+        drain_frames: bool = False,
+        reconnect_initial_delay: float = 1.0,
+        reconnect_max_delay: float = 30.0,
+        reconnect_backoff: ExponentialBackoff | None = None,
+        clock: Callable[[], float] = time.monotonic,
+        sleeper: Callable[[float], None] | None = None,
     ) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -68,6 +74,19 @@ class LivePerceptionRunner:
         self.camera_id = camera_id
         self.device_id = device_id
         self.upload_interval_seconds = upload_interval_seconds
+        self.drain_frames = drain_frames
+        self.clock = clock
+        self.sleeper = sleeper
+        self.reconnect_backoff = (
+            reconnect_backoff
+            if reconnect_backoff is not None
+            else ExponentialBackoff(
+                initial_delay=reconnect_initial_delay,
+                max_delay=reconnect_max_delay,
+                clock=clock,
+                sleeper=sleeper,
+            )
+        )
 
         # 1. Resolve RTSP URL safely without leaking credentials
         if rtsp_url == "":
@@ -116,6 +135,9 @@ class LivePerceptionRunner:
         if ring_recorder is not None:
             self.ring_recorder: RtspRingRecorder | None = ring_recorder
             self.recorder: FileRecorder = ring_recorder.recorder
+            if getattr(self.ring_recorder, "on_source_change", None) is None:
+                self.ring_recorder.on_source_change = self._on_recorder_source_change
+            self.ring_recorder.session_id = self.session_id
         elif pipeline is not None:
             self.recorder = pipeline.recorder
             self.ring_recorder = RtspRingRecorder(
@@ -127,6 +149,7 @@ class LivePerceptionRunner:
                 session_id=self.session_id,
                 probe_timeout_seconds=self.probe_timeout_seconds,
                 recorder=self.recorder,
+                on_source_change=self._on_recorder_source_change,
             )
         else:
             self.ring_recorder = RtspRingRecorder(
@@ -137,6 +160,7 @@ class LivePerceptionRunner:
                 segment_seconds=self.segment_seconds,
                 session_id=self.session_id,
                 probe_timeout_seconds=self.probe_timeout_seconds,
+                on_source_change=self._on_recorder_source_change,
             )
             self.recorder = self.ring_recorder.recorder
 
@@ -172,11 +196,15 @@ class LivePerceptionRunner:
         )
         if hasattr(self.pipeline, "health") and self.health is not None:
             self.pipeline.health = self.health
+            self.health.quota_manager = self.pipeline.quota_manager
 
         # 7. Internal synchronization and telemetry
         self._lock = threading.RLock()
         self._is_running: bool = False
-        self.is_connected: bool = True
+        self.is_connected: bool = (self._current_source == "rtsp") if self.rtsp_url else True
+        if self.rtsp_url and self._current_source != "rtsp":
+            if self.health is not None:
+                self.health.set_component_capability("camera", "disconnected")
         self.disconnect_count: int = 0
         self.discontinuity_count: int = 0
         self.last_disconnect_time: float | None = None
@@ -194,6 +222,7 @@ class LivePerceptionRunner:
 
         self._cap: cv2.VideoCapture | None = None
         self._thread: threading.Thread | None = None
+        self._reconnect_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._ready_event = threading.Event()
         self._last_upload_time: float = 0.0
@@ -215,9 +244,11 @@ class LivePerceptionRunner:
         try:
             if source.startswith("rtsp://") or source.startswith("rtsps://"):
                 os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = (
-                    "rtsp_transport;tcp|timeout;2000000"
+                    "rtsp_transport;tcp|fflags;nobuffer|max_delay;500000|timeout;2000000"
                 )
                 cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
+                if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             else:
                 cap = cv2.VideoCapture(source)
             if not cap.isOpened():
@@ -236,16 +267,20 @@ class LivePerceptionRunner:
             if self._cap is not None:
                 self.is_connected = True
                 return self._cap
-            self._current_source = "fallback"
+            self.handle_disconnect("rtsp_open_failed")
+            return None
 
         # Fallback file capture
-        fallback_file = self.fallback_path
-        if fallback_file is None or not fallback_file.is_file():
-            fallback_file = self._generate_synthetic_fixture()
-            self.fallback_path = fallback_file
+        if not self.rtsp_url or self._current_source == "fallback":
+            fallback_file = self.fallback_path
+            if fallback_file is None or not fallback_file.is_file():
+                fallback_file = self._generate_synthetic_fixture()
+                self.fallback_path = fallback_file
 
-        self._cap = self._open_capture(str(fallback_file))
-        return self._cap
+            self._cap = self._open_capture(str(fallback_file))
+            return self._cap
+
+        return None
 
     def _generate_synthetic_fixture(self) -> Path:
         syn_path = self.root / "synthetic-fallback-10s.mkv"
@@ -282,25 +317,94 @@ class LivePerceptionRunner:
         with self._lock:
             self.is_connected = False
             self.disconnect_count += 1
-            self.last_disconnect_time = time.monotonic()
+            self.last_disconnect_time = self.clock() if hasattr(self, "clock") else time.monotonic()
             self._last_error = reason
             if self._cap is not None:
                 self._cap.release()
                 self._cap = None
+            if self.health is not None:
+                self.health.set_component_capability("camera", "disconnected")
+                self.health.set_component_capability("analytics", "failed")
+                self.health.record_frame_drop()
             self.pipeline.observation_gap()
+
+    def _on_recorder_source_change(self, source: str, session_id: str) -> None:
+        """Handle source change reported by RtspRingRecorder."""
+        needs_reconnect = False
+        with self._lock:
+            if source == "fallback":
+                self.session_id = session_id
+                self.pipeline.stream_session_id = session_id
+                if self.health is not None:
+                    self.health.recorder_session_id = session_id
+                if self.is_connected:
+                    self.handle_disconnect("recorder_fallback")
+            elif source == "rtsp":
+                needs_reconnect = not self.is_connected
+        if needs_reconnect:
+            # reconnect() does blocking probe/open I/O and takes self._lock itself where needed;
+            # running it outside the lock keeps step() and stop() responsive.
+            self.reconnect()
 
     def handle_reconnect(self, new_session_id: str | None = None) -> int:
         """Handle stream reconnect: increment core_epoch and update lineage per contracts.md:24."""
         with self._lock:
             self.is_connected = True
             self.discontinuity_count += 1
-            self.last_reconnect_time = time.monotonic()
+            self.last_reconnect_time = self.clock() if hasattr(self, "clock") else time.monotonic()
             new_epoch = self.pipeline.core_epoch + 1
             self.pipeline.set_core_epoch(new_epoch)
-            if new_session_id is not None:
-                self.pipeline.stream_session_id = str(new_session_id)
-                self.session_id = self.pipeline.stream_session_id
+            session = str(new_session_id) if new_session_id is not None else str(uuid4())
+            self.pipeline.stream_session_id = session
+            self.session_id = session
+            if self.ring_recorder is not None:
+                self.ring_recorder.rollover_session(session)
+                self.ring_recorder._current_source = "rtsp"
+            if self.health is not None:
+                self.health.recorder_session_id = session
+                self.health.set_component_capability("camera", "active")
+                self.health.set_component_capability("analytics", "active")
+            if hasattr(self, "reconnect_backoff"):
+                self.reconnect_backoff.reset()
+            self._stream_start_monotonic = None
+            self.last_frame_time = None
+            self._frame_counter = 0
             return self.pipeline.core_epoch
+
+    def reconnect(self) -> bool:
+        """Attempt to probe and reconnect to RTSP stream.
+
+        Returns True if reconnection succeeded, False otherwise.
+        """
+        if not self.rtsp_url:
+            return False
+
+        with self._lock:
+            if self.is_connected and self._current_source == "rtsp":
+                return True
+
+        try:
+            probe_rtsp_stream(self.rtsp_url, timeout_seconds=self.probe_timeout_seconds)
+            new_cap = self._open_capture(self.rtsp_url)
+            if new_cap is None or not new_cap.isOpened():
+                return False
+
+            with self._lock:
+                if self.is_connected and self._current_source == "rtsp":
+                    new_cap.release()
+                    return True
+                if self._cap is not None:
+                    self._cap.release()
+                self._cap = new_cap
+                self._current_source = "rtsp"
+                self.handle_reconnect()
+                return True
+        except Exception as exc:
+            with self._lock:
+                self._last_error = sanitize_probe_output(str(exc), self.rtsp_url)
+                if self.health is not None:
+                    self.health.set_component_capability("camera", "disconnected")
+            return False
 
     def step(
         self,
@@ -313,15 +417,21 @@ class LivePerceptionRunner:
     ) -> list[dict[str, Any]]:
         """Process one frame step through the perception pipeline with honest monotonic tracking."""
         with self._lock:
-            now_mono = time.monotonic()
+            now_mono = self.clock() if hasattr(self, "clock") else time.monotonic()
             now_wall = time.time()
             if self._stream_start_monotonic is None:
                 self._stream_start_monotonic = now_mono
 
             if timestamp is not None:
                 ts = float(timestamp)
+                if self.last_frame_time is not None and ts <= self.last_frame_time:
+                    ts = self.last_frame_time + 1e-6
             else:
-                ts = round(now_mono - self._stream_start_monotonic, 3)
+                raw_ts = now_mono - self._stream_start_monotonic
+                if self.last_frame_time is not None and raw_ts <= self.last_frame_time:
+                    ts = self.last_frame_time + 1e-6
+                else:
+                    ts = max(0.0, raw_ts)
 
             if frame_id is not None:
                 fid = int(frame_id)
@@ -330,7 +440,13 @@ class LivePerceptionRunner:
                 fid = self._frame_counter
 
             if frame is None:
-                frame = self._read_next_frame()
+                read_frame, read_status = self._read_next_frame()
+                if read_frame is not None:
+                    frame = read_frame
+                else:
+                    frame = np.zeros((0, 0, 3), dtype=np.uint8)
+                if observation_status is None and read_status is not None:
+                    observation_status = read_status
 
             self.last_capture_time = now_mono
             self.last_receive_time = now_wall
@@ -344,6 +460,9 @@ class LivePerceptionRunner:
                 observation_status=observation_status,
             )
 
+            if not self.is_connected and self.health is not None:
+                self.health.set_component_capability("camera", "disconnected")
+
             self.frames_processed += 1
             if events:
                 self.incidents_emitted += len(events)
@@ -351,47 +470,95 @@ class LivePerceptionRunner:
 
             return events
 
-    def _read_next_frame(self) -> np.ndarray:
+    def _read_next_frame(self) -> tuple[np.ndarray | None, str | None]:
+        was_connected = self.is_connected
         cap = self._ensure_capture()
         if cap is not None and cap.isOpened():
-            ret, frame = cap.read()
-            if ret and frame is not None:
-                return frame
+            if self._current_source == "rtsp" and getattr(self, "drain_frames", False):
+                cap.grab()
+                ret, bgr_frame = cap.retrieve()
+            else:
+                ret, bgr_frame = cap.read()
+
+            if ret and bgr_frame is not None:
+                rgb_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+                return rgb_frame, None
+
             if self._current_source == "fallback":
                 # Video file reached EOF, loop back to start
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                ret, frame = cap.read()
-                if ret and frame is not None:
-                    return frame
+                ret, bgr_frame = cap.read()
+                if ret and bgr_frame is not None:
+                    rgb_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+                    return rgb_frame, None
+                return None, "missing"
             else:
-                # RTSP stream dropped
+                # RTSP stream dropped / EOF
                 self.handle_disconnect("rtsp_read_eof")
+                return None, "missing"
 
-        return self._generate_synthetic_frame()
+        # Stream missing / capture unavailable. _ensure_capture() already records the disconnect when an
+        # RTSP open fails; only record it here if that path did not (avoids double-counting drops/gaps).
+        if self.rtsp_url and was_connected and self.is_connected:
+            self.handle_disconnect("rtsp_unavailable")
+        return None, "missing"
 
     def start(self) -> None:
         """Start concurrent ring buffer recording and frame perception loop in background."""
         with self._lock:
             if self._is_running:
                 return
+            if self._thread is not None and self._thread.is_alive():
+                raise RuntimeError("previous perception loop is still stopping")
+            self.health.mark_starting()
             self._is_running = True
             self._stop_event.clear()
             self._ready_event.clear()
 
-            if self.ring_recorder is not None:
-                self.ring_recorder.start()
+            try:
+                if self.ring_recorder is not None:
+                    self.ring_recorder.start()
 
-            self._thread = threading.Thread(
-                target=self._run_loop,
-                daemon=True,
-                name=f"live-runner-{self.session_id}",
-            )
-            self._thread.start()
+                if self.rtsp_url:
+                    self._reconnect_thread = threading.Thread(
+                        target=self._reconnect_loop,
+                        daemon=True,
+                        name=f"live-reconnect-{self.session_id}",
+                    )
+                    self._reconnect_thread.start()
+
+                self._thread = threading.Thread(
+                    target=self._run_loop,
+                    daemon=True,
+                    name=f"live-runner-{self.session_id}",
+                )
+                self._thread.start()
+            except Exception:
+                self._is_running = False
+                self._stop_event.set()
+                self.health.mark_stopped()
+                if self.ring_recorder is not None:
+                    self.ring_recorder.stop()
+                raise
 
         self._ready_event.wait(timeout=10.0)
 
+    def _reconnect_loop(self) -> None:
+        while not self._stop_event.is_set():
+            if not self.is_connected and self.rtsp_url:
+                self.reconnect_backoff.wait(self._stop_event)
+                if self._stop_event.is_set():
+                    break
+                try:
+                    self.reconnect()
+                except Exception as exc:
+                    logger.debug("LivePerceptionRunner background reconnect attempt failed: %s", exc)
+            else:
+                self._stop_event.wait(0.5)
+
     def _run_loop(self) -> None:
         target_period = 1.0 / self.sample_fps if self.sample_fps > 0 else 0.2
+        self.health.mark_started()
         self._ready_event.set()
 
         try:
@@ -416,12 +583,15 @@ class LivePerceptionRunner:
                 if sleep_time > 0:
                     self._stop_event.wait(sleep_time)
         finally:
+            self.health.mark_stopped()
             self._is_running = False
 
     def stop(self, timeout: float = 5.0) -> None:
         """Stop background execution and cleanly release processes, threads, and captures."""
         with self._lock:
-            if not self._is_running and (self._thread is None or not self._thread.is_alive()):
+            self.health.mark_stopped()
+            recon_alive = self._reconnect_thread is not None and self._reconnect_thread.is_alive()
+            if not self._is_running and not recon_alive and (self._thread is None or not self._thread.is_alive()):
                 if self.ring_recorder is not None:
                     self.ring_recorder.stop()
                 return
@@ -434,6 +604,10 @@ class LivePerceptionRunner:
 
         if thread and thread.is_alive():
             thread.join(timeout=timeout)
+
+        recon_thread = self._reconnect_thread
+        if recon_thread and recon_thread.is_alive():
+            recon_thread.join(timeout=timeout)
 
         with self._lock:
             if self.ring_recorder is not None:

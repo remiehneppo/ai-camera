@@ -33,11 +33,22 @@ class EvidenceLifecycle:
 
     def persist(self, event):
         with self._worker():
+            if self.quota_manager:
+                storage = self.quota_manager.get_storage_breakdown()
+                free_bytes = storage.free_bytes
+                disk_usage = getattr(self.quota_manager, "disk_usage_fn", None)
+                storage_path = getattr(self.quota_manager, "storage_path", self.recorder.root)
+                outbox_dir = Path(self.outbox.path).resolve().parent
+                if callable(disk_usage) and outbox_dir != Path(storage_path).resolve():
+                    free_bytes = min(free_bytes, disk_usage(outbox_dir).free)
+                if free_bytes <= self.quota_manager.min_state_reserve_bytes:
+                    raise OSError(errno.ENOSPC, "storage_exhausted: state reserve protection active")
             self.outbox.enqueue(event)
             ids = {r["request_id"] for r in event["payload"].get("evidence_requests", [])}
             for request in self.outbox.evidence_requests():
                 if request["request_id"] in ids and request["state"] in {"requested", "collecting", "pending", "in_progress"}:
-                    if self.quota_manager and not self.quota_manager.can_accept_new_evidence():
+                    estimated_bytes = self._estimate_segment_bytes(request)
+                    if not self._can_accept_evidence(estimated_bytes):
                         self.outbox.update_evidence(
                             request["request_id"],
                             state="failed",
@@ -57,6 +68,34 @@ class EvidenceLifecycle:
                         self.outbox.update_evidence(request["request_id"], state=state, error=exc)
         return event
 
+    def _estimate_segment_bytes(self, request: dict) -> int:
+        session_id = request.get("session_id")
+        if not session_id or not hasattr(self.recorder, "segments"):
+            return 0
+        start = request.get("requested_start", 0.0)
+        end = request.get("requested_end", 0.0)
+        try:
+            segments = [
+                item for item in self.recorder.segments(session_id)
+                if item.end_seconds >= start and item.start_seconds <= end
+            ]
+            total = 0
+            for item in segments:
+                p = Path(item.path)
+                if p.is_file():
+                    total += p.stat().st_size
+            return total
+        except Exception:
+            return 0
+
+    def _can_accept_evidence(self, estimated_bytes: int = 0) -> bool:
+        if not self.quota_manager or not hasattr(self.quota_manager, "can_accept_new_evidence"):
+            return True
+        try:
+            return bool(self.quota_manager.can_accept_new_evidence(estimated_bytes))
+        except TypeError:
+            return bool(self.quota_manager.can_accept_new_evidence())
+
     def _pin(self, request):
         owner = f'{request["device_id"]}/{request["event_id"]}/{request["revision"]}'
         pin = self.recorder.pin(request["request_id"], request["session_id"],
@@ -69,9 +108,11 @@ class EvidenceLifecycle:
             return self._reconcile(finish_sessions=finish_sessions)
 
     def _reconcile(self, *, finish_sessions=()):
+        cleaned = []
         if self.quota_manager and self.quota_manager.is_storage_pressured():
-            self.quota_manager.cleanup_eligible()
-        cleaned = self.recorder.cleanup_evidence_temps()
+            cleaned.extend(self.quota_manager.cleanup_eligible().get("cleaned_files", []))
+        else:
+            cleaned.extend(self.recorder.cleanup_evidence_temps())
         ended = self.outbox.ended_sessions(finish_sessions)
         completed = failed = 0
         for request in self.outbox.evidence_requests():
@@ -94,7 +135,11 @@ class EvidenceLifecycle:
                     continue
                 if request["state"] == "failed":
                     continue
-                if self.quota_manager and not self.quota_manager.can_accept_new_evidence():
+                estimated_bytes = self._estimate_segment_bytes(request)
+                if not self._can_accept_evidence(estimated_bytes):
+                    # Refuse before pinning and drop any earlier pin: failed requests are skipped on later
+                    # passes, so a leftover released=0 pin would block ring reclamation forever.
+                    self.recorder.release_pin(request_id)
                     self.outbox.update_evidence(
                         request_id,
                         state="failed",
@@ -104,7 +149,7 @@ class EvidenceLifecycle:
                     continue
                 self._pin(request)
                 status = self.recorder.pin_status(request_id)
-                if status["state"] == "collecting" and request["session_id"] not in ended:
+                if status and status.get("state") == "collecting" and request["session_id"] not in ended:
                     continue
                 receipt = self.recorder.finalize_pin(request_id,
                     allow_partial=request["session_id"] in ended,

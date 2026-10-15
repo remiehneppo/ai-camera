@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+import time
 import unittest
 
 import cv2
@@ -749,6 +750,190 @@ class TestPipelinePoseIntegrationDeepened(unittest.TestCase):
         assert obs is not None
         self.assertIn("pose_capability", obs)
         self.assertIn("pose_metrics", obs)
+
+
+class TestPoseTerminalOutcomesAndClockDomain(unittest.TestCase):
+    """Tests for P0-04 (terminal outcomes delivery and deduplication) and P2-08 (clock domain standardization)."""
+
+    def setUp(self) -> None:
+        self.estimator = RtmposeEstimator()
+        self.manager = PoseManager(
+            estimator=self.estimator,
+            max_queue_size=2,
+            max_cached_frames=5,
+        )
+
+    def test_process_pending_returns_shed_outcomes_when_queue_full(self) -> None:
+        """When queue overflows, process_pending drains and returns shed outcomes exactly once."""
+        dummy_rgb = np.zeros((480, 640, 3), dtype=np.uint8)
+        self.manager.cache_frame("cam-1", "sess-1", 1, 0, dummy_rgb)
+        self.manager.cache_frame("cam-1", "sess-1", 1, 1, dummy_rgb)
+
+        for i in range(2):
+            req = PoseRequest(
+                request_id=f"req-ok-{i}",
+                camera_id="cam-1",
+                stream_session_id="sess-1",
+                core_epoch=1,
+                frame_id=i,
+                bbox=[100.0, 100.0, 200.0, 300.0],
+                deadline=100.0,
+                clock_domain="event_time",
+            )
+            accepted = self.manager.submit_request(req)
+            self.assertTrue(accepted)
+
+        # 3rd request overflows queue
+        overflow_req = PoseRequest(
+            request_id="req-overflow",
+            camera_id="cam-1",
+            stream_session_id="sess-1",
+            core_epoch=1,
+            frame_id=2,
+            bbox=[100.0, 100.0, 200.0, 300.0],
+            deadline=100.0,
+            clock_domain="event_time",
+        )
+        accepted = self.manager.submit_request(overflow_req)
+        self.assertFalse(accepted)
+
+        # process_pending must return outcomes for both queued requests AND the shed outcome
+        outcomes = self.manager.process_pending(current_time=1.0)
+        req_ids = [o.request_id for o in outcomes]
+        self.assertIn("req-overflow", req_ids)
+        self.assertIn("req-ok-0", req_ids)
+        self.assertIn("req-ok-1", req_ids)
+        self.assertEqual(len(outcomes), 3)
+
+        overflow_outcome = next(o for o in outcomes if o.request_id == "req-overflow")
+        self.assertEqual(overflow_outcome.status, "skipped")
+        self.assertEqual(overflow_outcome.reason, "queue_full")
+
+        # Second call to process_pending returns empty (no duplicate outcomes returned)
+        outcomes_second = self.manager.process_pending(current_time=2.0)
+        self.assertEqual(len(outcomes_second), 0)
+
+        # poll_terminal_outcomes is also empty (already drained)
+        outcomes_polled = self.manager.poll_terminal_outcomes()
+        self.assertEqual(len(outcomes_polled), 0)
+
+    def test_process_pending_returns_cancelled_outcomes_on_set_epoch_exactly_once(self) -> None:
+        """set_epoch cancellation outcomes are drained and returned by process_pending exactly once."""
+        req = PoseRequest(
+            request_id="req-epoch-1",
+            camera_id="cam-1",
+            stream_session_id="sess-1",
+            core_epoch=1,
+            frame_id=1,
+            bbox=[100.0, 100.0, 200.0, 300.0],
+            deadline=100.0,
+            clock_domain="event_time",
+        )
+        self.manager.submit_request(req)
+        self.assertEqual(self.manager.queued_count(), 1)
+
+        # Epoch changed: cancels req-epoch-1
+        cancelled = self.manager.set_epoch(2)
+        self.assertEqual(len(cancelled), 1)
+        self.assertEqual(self.manager.queued_count(), 0)
+
+        # process_pending must return the cancelled outcome
+        outcomes = self.manager.process_pending(current_time=5.0)
+        self.assertEqual(len(outcomes), 1)
+        self.assertEqual(outcomes[0].request_id, "req-epoch-1")
+        self.assertEqual(outcomes[0].status, "cancelled")
+        self.assertEqual(outcomes[0].reason, "epoch_mismatch")
+
+        # Second call does not duplicate
+        outcomes_second = self.manager.process_pending(current_time=6.0)
+        self.assertEqual(len(outcomes_second), 0)
+
+        # poll_terminal_outcomes is empty
+        self.assertEqual(len(self.manager.poll_terminal_outcomes()), 0)
+
+    def test_submit_request_older_epoch_returned_in_process_pending_once(self) -> None:
+        """submit_request for an older epoch is rejected and returned in process_pending exactly once."""
+        self.manager.set_epoch(3)
+        old_req = PoseRequest(
+            request_id="req-old-epoch",
+            camera_id="cam-1",
+            stream_session_id="sess-1",
+            core_epoch=2,
+            frame_id=1,
+            bbox=[100.0, 100.0, 200.0, 300.0],
+            deadline=100.0,
+            clock_domain="event_time",
+        )
+        accepted = self.manager.submit_request(old_req)
+        self.assertFalse(accepted)
+
+        outcomes = self.manager.process_pending(current_time=10.0)
+        self.assertEqual(len(outcomes), 1)
+        self.assertEqual(outcomes[0].request_id, "req-old-epoch")
+        self.assertEqual(outcomes[0].status, "cancelled")
+        self.assertEqual(outcomes[0].reason, "epoch_mismatch")
+
+        # Second call returns nothing
+        outcomes_second = self.manager.process_pending(current_time=11.0)
+        self.assertEqual(len(outcomes_second), 0)
+
+    def test_executed_at_standardized_by_clock_domain(self) -> None:
+        """executed_at must match request clock_domain (event_time vs wall_clock)."""
+        dummy_rgb = np.zeros((480, 640, 3), dtype=np.uint8)
+        self.manager.cache_frame("cam-1", "sess-1", 1, 10, dummy_rgb)
+
+        event_time_ts = 42.125
+        req_event = PoseRequest(
+            request_id="req-ev-time",
+            camera_id="cam-1",
+            stream_session_id="sess-1",
+            core_epoch=1,
+            frame_id=10,
+            bbox=[50.0, 50.0, 200.0, 300.0],
+            deadline=50.0,
+            clock_domain="event_time",
+        )
+        self.manager.submit_request(req_event)
+
+        outcomes = self.manager.process_pending(current_time=event_time_ts)
+        self.assertEqual(len(outcomes), 1)
+        self.assertEqual(outcomes[0].request_id, "req-ev-time")
+        self.assertEqual(outcomes[0].status, "ok")
+        self.assertEqual(outcomes[0].executed_at, event_time_ts)
+
+        # Wall clock request
+        req_wall = PoseRequest(
+            request_id="req-wall-time",
+            camera_id="cam-1",
+            stream_session_id="sess-1",
+            core_epoch=1,
+            frame_id=10,
+            bbox=[50.0, 50.0, 200.0, 300.0],
+            deadline=time.time() + 10.0,
+            clock_domain="wall_clock",
+        )
+        self.manager.submit_request(req_wall)
+        before_t = time.time()
+        outcomes_wall = self.manager.process_pending(current_time=100.0)
+        after_t = time.time()
+        self.assertEqual(len(outcomes_wall), 1)
+        self.assertGreaterEqual(outcomes_wall[0].executed_at, before_t - 0.1)
+        self.assertLessEqual(outcomes_wall[0].executed_at, after_t + 0.1)
+
+        # Synchronous request_pose clock domain check
+        sync_req_ev = PoseRequest(
+            request_id="req-sync-ev",
+            camera_id="cam-1",
+            stream_session_id="sess-1",
+            core_epoch=1,
+            frame_id=10,
+            bbox=[50.0, 50.0, 200.0, 300.0],
+            deadline=100.0,
+            clock_domain="event_time",
+        )
+        sync_outcome = self.manager.request_pose(sync_req_ev, rgb=dummy_rgb, current_time=77.5)
+        self.assertEqual(sync_outcome.executed_at, 77.5)
+
 
 
 if __name__ == "__main__":

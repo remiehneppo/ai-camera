@@ -1,0 +1,407 @@
+{
+  "status": "complete",
+  "llm": {
+    "provider": "oc",
+    "model": "Gemini 3.8 Flash (High)"
+  },
+  "message": "Review complete: 2 finding(s) across 19 selected item(s).",
+  "summary": {
+    "files_reviewed": 19,
+    "comments": 2,
+    "total_tokens": 8384483,
+    "input_tokens": 8154761,
+    "output_tokens": 229722,
+    "cache_read_tokens": 6487742,
+    "elapsed": "16m37s"
+  },
+  "tool_calls": {
+    "total": 196,
+    "by_tool": {
+      "code_comment": 2,
+      "code_search": 85,
+      "file_find": 3,
+      "file_read": 103,
+      "file_read_diff": 3
+    },
+    "failure": 0,
+    "failure_by_tool": {},
+    "failure_details": []
+  },
+  "comments": [
+    {
+      "path": "run_edge.py",
+      "content": "Because `signal.signal(signal.SIGINT, _handle_signal)` overrides the default SIGINT handler (which normally raises `KeyboardInterrupt`), receiving a SIGINT signal invokes `_handle_signal` to set `stop_event` instead of raising an exception. Consequently, this `try...except KeyboardInterrupt` block is unreachable dead code and can be simplified to just the loop.",
+      "suggestion_code": "        while not stop_event.is_set():\n            time.sleep(1)",
+      "existing_code": "        try:\n            while not stop_event.is_set():\n                time.sleep(1)\n        except KeyboardInterrupt:\n            pass",
+      "start_line": 46,
+      "end_line": 50,
+      "thinking": "**Review of Code Changes**\n\nOkay, let's break down this review. First, I see a change in `compose.yaml`, just a comment added about the MongoDB version requirement for features like `$setWindowFields` and ACID transactions. Nothing significant there, no code changes, no new dependencies being introduced, just a note about the MongoDB version. I'll make a mental note, but this doesn't warrant an immediate alert.\n\nNext, I check `run_server.py`. This looks like a standard dev runner script. I'm looking for anything unusual or risky: typos in environment variables, any obvious security holes, anything that could cause resource issues or concurrency problems. The environment variables seem typical. I'm checking the Uvicorn command, the host, port, and arguments passed to the python process. It looks clean and well-formed. The way it sets environment variables is a common practice, and no mutable defaults or obvious vulnerabilities are present.\n\nNow, I move on to `run_edge.py`. This is where it gets interesting. I see signal handling for SIGINT and SIGTERM using `_handle_signal`, which sets a `stop_event` that's checked in a `while` loop. The script is designed to handle graceful shutdown. Then I notice the `try...except KeyboardInterrupt` block and immediately my spidey senses are tingling. *Why is this here*? With the custom signal handler, the default `KeyboardInterrupt` from SIGINT is being *overridden*. The `except KeyboardInterrupt` block is thus, unreachable. This is dead code. It's a maintainability issue, but a low-severity one. I'll report this with a comment. I'll check the rules again and review the logic to confirm the `try...except` is unreachable. I'll make sure to get the line numbers right, then generate the comment.\n\nI'll then step back and re-evaluate my findings. No obvious issues are found in the files. I'll verify the dead code using the lines from the file in the code comment.\n\n\n",
+      "category": "maintainability",
+      "severity": "low"
+    },
+    {
+      "path": "apps/server/store.py",
+      "content": "`AutoReconnect` only catches connection drops on existing sockets. During application startup or replica set primary elections, `command(\"ping\")` and subsequent operations will raise `ServerSelectionTimeoutError` or other subclasses of `ConnectionFailure` when MongoDB is not yet reachable or the primary has not been elected.\n\nCatching only `AutoReconnect` causes `ensure_ready()` to fail immediately on the first attempt rather than executing the retries. Catching `ConnectionFailure` (imported from `pymongo.errors`) will cover `AutoReconnect`, `ServerSelectionTimeoutError`, and other transient network/election failures.",
+      "suggestion_code": "            except ConnectionFailure:\n                if attempt == 2:\n                    raise\n                time.sleep(0.1)",
+      "existing_code": "            except AutoReconnect:\n                if attempt == 2:\n                    raise\n                time.sleep(0.1)",
+      "start_line": 130,
+      "end_line": 133,
+      "thinking": "**Code Review: Found a Critical Bug \u0026 Other Minor Observations**\n\nOkay, let's break this down. First, I wanted to confirm that the `EventBodyLimitMiddleware` wasn't interfering with PUT requests to `/v1/evidence/...`.  It seems fine in that respect, it's specific to the `/v1/events` endpoint as intended.\n\nNext, I looked at `apps/server/main.py`. I checked out the `_infer_media_type` function. Initially, I was concerned about the case where `record[\"manifest\"]` might be `None`, but after reviewing the code, it seems like in the context of how `manifest` is used (specifically in lines 540 and 565), a `None` value would have already caused an `AttributeError` earlier, which doesn't seem to happen in the database. So that's a non-issue. I also looked at potential issues with streaming upload, MIME inference, and `FileResponse`, but everything looks good there.\n\nNow, the important find: the `apps/server/store.py` file. I reviewed the retry loop in the `ensure_ready` function. This is where the critical bug is. The code currently *only* catches `AutoReconnect`, which is a very specific type of connection error related to established connections. However, when the `MongoClient` is initially connecting to a replica set (or if there's a transient issue before primary election), it throws a `ServerSelectionTimeoutError` or other `ConnectionFailure` types *that are not* `AutoReconnect`. Because it *only* catches `AutoReconnect`, the retry logic is never triggered when the initial connection fails, and the application will abort on the first attempt without retrying.\n\nThe fix is simple: replace the `except AutoReconnect` with `except ConnectionFailure`.  We'll need to also make sure to import `ConnectionFailure` from `pymongo.errors`. This change ensures that both initial connection issues and transient disconnections are properly handled with the retry loop. This is a clear correctness/robustness defect.\n\nHere's the planned `code_comment` call I've prepared:\n\n-   `path`: \"apps/server/store.py\"\n-   `category`: \"bug\"\n-   `severity`: \"medium\"\n-   `existing_code`:\n    ```python\n                except AutoReconnect:\n                    if attempt == 2:\n                        raise\n                    time.sleep(0.1)\n    ```\n-   `suggestion_code`:\n    ```python\n                except ConnectionFailure:\n                    if attempt == 2:\n                        raise\n                    time.sleep(0.1)\n    ```\n\nAnd I will mention that `ConnectionFailure` should be imported from `pymongo.errors` instead of (or in addition to) `AutoReconnect`.\n\nSo, in summary,  `main.py` looks good, but the bug in `store.py` related to the `ConnectionFailure` handling needs immediate attention. I'm going to submit the code comment now.\n\n\n",
+      "category": "bug",
+      "severity": "medium"
+    }
+  ],
+  "groups": [
+    {
+      "label": "Edge video streaming, recording, and vision pipeline",
+      "files": [
+        "apps/edge/live_pipeline.py",
+        "apps/edge/pipeline.py",
+        "apps/edge/pose.py",
+        "apps/edge/recorder.py",
+        "apps/edge/rtsp.py",
+        "apps/edge/rtsp_recorder.py",
+        "apps/edge/tracker.py"
+      ]
+    },
+    {
+      "label": "Edge incident handling, health reporting, and upload queue",
+      "files": [
+        "apps/edge/evidence.py",
+        "apps/edge/health.py",
+        "apps/edge/incident.py",
+        "apps/edge/outbox.py",
+        "apps/edge/quota.py",
+        "apps/edge/send_synthetic.py",
+        "apps/edge/uploader.py"
+      ]
+    },
+    {
+      "label": "Server API and storage",
+      "files": [
+        "apps/server/main.py",
+        "apps/server/store.py"
+      ]
+    },
+    {
+      "label": "Application runners and compose configuration",
+      "files": [
+        "compose.yaml",
+        "run_edge.py",
+        "run_server.py"
+      ]
+    }
+  ],
+  "manifest": {
+    "schema_version": "ocr.run-manifest/v1",
+    "run_id": "4fd7d3ea-ee62-4cd3-a35c-4ac55790284c",
+    "operation": "review",
+    "terminal_state": "complete",
+    "repository": {},
+    "input": {
+      "mode": "workspace",
+      "resolved_base": "882d8435291324683f557d133d0e5a9e7c787999",
+      "source_artifact_sha256": "dc36eb00b500092841fe13c4aecd171b1d0e88e1201de1442b5a021d28647d01"
+    },
+    "execution": {
+      "ocr_version": "v1.13.0",
+      "provider": "oc",
+      "model": "Gemini 3.8 Flash (High)",
+      "configured_concurrency": 8,
+      "rule_config_sha256": "891adccb133dfa0b902a7c30add344c2237bd6fcde10d356efbd68ed51154c0b",
+      "runtime_config_sha256": "bf36bfa6f928efe093722385b6f2be604b312c31eeeaab37adf37ba3537e9386"
+    },
+    "coverage": {
+      "selected": [
+        {
+          "item_id": "05151390d0f883c34d6eb4f5f34a02d0057f594d2f5d61a4912e380b2f126670",
+          "path": "apps/edge/send_synthetic.py",
+          "fingerprint": "b532b9c7ee74dc4aab377bc9da031338d8fa3109c0f5594fcb759855d1d4f47e"
+        },
+        {
+          "item_id": "0ebb4f2c0465f03e0e31dc10a5ff9ffac69d76d2b3ee762858b52f2132c2dc1b",
+          "path": "apps/edge/pose.py",
+          "fingerprint": "054771e1213ba48d55caf2e89d3713282ade86d3ed2981a7d30053489473a1be"
+        },
+        {
+          "item_id": "15f4564900b0fdfc67cbede3dfd1d1d92a6dee30088c431ab087d134e0cd2638",
+          "path": "apps/edge/rtsp_recorder.py",
+          "fingerprint": "3cf8ea8ca1b8fc4739d60f86742583cf3e34a67c3558207339612e11697579e7"
+        },
+        {
+          "item_id": "1a57a2f4b0c3f0635b48c77674b0e3f4dea3981323e0e2704ff7c5ed903e676e",
+          "path": "apps/edge/incident.py",
+          "fingerprint": "c89d77779b4cf254e2fd4a7c4fa7f7d3bb1b893b57a78fe9fe0b7efcb3f19356"
+        },
+        {
+          "item_id": "4ff8434be7244bacd918006170dfa8aa0be6fed7b8b55d017679ac2864015449",
+          "path": "apps/edge/tracker.py",
+          "fingerprint": "d422a121f175f67070ccc360dd043f737913daddc91373a56b581114862cd447"
+        },
+        {
+          "item_id": "6cb296ffcdb9a835baf909b1fd6e8949c966ecc42f1e2d7fd78485525203ba54",
+          "path": "apps/edge/outbox.py",
+          "fingerprint": "24a764451c67915f79b0fe127f1050e2c9fdbb3a785711307c63a3c119e71574"
+        },
+        {
+          "item_id": "6d003513fb796cd31cee2d627d0f76bde3f18fd1f54521d4a3655a68208ba675",
+          "path": "apps/edge/pipeline.py",
+          "fingerprint": "29e9bb57c561dd2044ad40464d4d70765d73edf094485cb7dda2aefaf62d0c58"
+        },
+        {
+          "item_id": "72a87da4f59154f81b16c7116059b61d4b986d14433f7103982d4111bcd32da7",
+          "path": "apps/edge/health.py",
+          "fingerprint": "a414c8169b61e350b42c46fe88ddb922a2746c8c8606ca379ab9fe97ddccfa1b"
+        },
+        {
+          "item_id": "730fb1f26cefcfe2061cedf4a1594f762ea72c9c998b9cf7979ec0619e69223a",
+          "path": "apps/server/store.py",
+          "fingerprint": "6dfe227faf510cc26dc2c68744ea58841001f4b6bd7dcb2437daa6a7570ceccb"
+        },
+        {
+          "item_id": "997ad5e90481524e7c2dc4f8a1ea1dfc8be2187e1807478dee79001a2f009de0",
+          "path": "apps/edge/rtsp.py",
+          "fingerprint": "76251846397c37e81451029a64c3af41b963d96b99ef506302b87342260531bf"
+        },
+        {
+          "item_id": "9cc4f244f45bd554822461989d14fd278107119f49a851ad184f197b15277672",
+          "path": "run_server.py",
+          "fingerprint": "8edaf722c877a74192f379d08e5e712829837a42e13a69cf836e9b177398a0fb"
+        },
+        {
+          "item_id": "9ef868d72c222f5abdb20251914c1549fb122c49e6e65f205891d7683e64b655",
+          "path": "run_edge.py",
+          "fingerprint": "09f14d3a0da5b0affd29134da72d5181cc9e9a06af05e9d58106b5b023cf1a2b"
+        },
+        {
+          "item_id": "aed62229ccbc11bf52beb22e7b594160058e33fbdb467c7d0ad8f029b197cf38",
+          "path": "apps/edge/recorder.py",
+          "fingerprint": "7ecf3ee11b70efb893bf4c800b49134c6762b77e5d1f8d9c10e5212718b9e2dd"
+        },
+        {
+          "item_id": "b12d5111a265888925379fba65a203c37d08a98da8b0ed2f4c238b8c468f5c46",
+          "path": "apps/server/main.py",
+          "fingerprint": "45db511ca216a83389b3a11fc077b76cb5de4790a33b9ee17aa0fa2fe1cb3310"
+        },
+        {
+          "item_id": "c15b6ab6fc8566cd3a9c9e0d26cbcef8a325fc10f1e504afd70f20664b5de0ee",
+          "path": "apps/edge/uploader.py",
+          "fingerprint": "f56a92890d60bca72b14cbe64d73b138a28d09fcc5a0e36cde78c3abfcf2f1d8"
+        },
+        {
+          "item_id": "c92ffebfed6cfbff2238ebda3aa22698f278cf940dafada30fdacbdb746aadec",
+          "path": "apps/edge/evidence.py",
+          "fingerprint": "e140888484b9de12b59b3e6569599009646fbe91ccdd8ee6a0cd12fedc2b74fe"
+        },
+        {
+          "item_id": "c94e35f91b31f91a5001e3c119154e4874a808a45995c2e3b52b0d5e0ed2c49c",
+          "path": "apps/edge/quota.py",
+          "fingerprint": "630f94d6cc87f28e3acf0e9981a6b21d64ab923f0ef8d41318ef03bfd0769c72"
+        },
+        {
+          "item_id": "f4897658e94f1fe538576608fa71e642822e29607834c85090fbe01181178ec4",
+          "path": "compose.yaml",
+          "fingerprint": "a6cbc71fadbeb89ac1fe3d224b08c54a1a36efbc559fc54ec6bde250a8663a02"
+        },
+        {
+          "item_id": "f645fce4dede3e9fd5bf92357753449df15ccec70246481ebba53a4e008b0c90",
+          "path": "apps/edge/live_pipeline.py",
+          "fingerprint": "e9bf82e0ee9d801530fe087d0d732f379d180b74e5d5ecc794c36883cff3ff79"
+        }
+      ],
+      "completed": [
+        {
+          "item_id": "05151390d0f883c34d6eb4f5f34a02d0057f594d2f5d61a4912e380b2f126670",
+          "path": "apps/edge/send_synthetic.py",
+          "fingerprint": "b532b9c7ee74dc4aab377bc9da031338d8fa3109c0f5594fcb759855d1d4f47e"
+        },
+        {
+          "item_id": "0ebb4f2c0465f03e0e31dc10a5ff9ffac69d76d2b3ee762858b52f2132c2dc1b",
+          "path": "apps/edge/pose.py",
+          "fingerprint": "054771e1213ba48d55caf2e89d3713282ade86d3ed2981a7d30053489473a1be"
+        },
+        {
+          "item_id": "15f4564900b0fdfc67cbede3dfd1d1d92a6dee30088c431ab087d134e0cd2638",
+          "path": "apps/edge/rtsp_recorder.py",
+          "fingerprint": "3cf8ea8ca1b8fc4739d60f86742583cf3e34a67c3558207339612e11697579e7"
+        },
+        {
+          "item_id": "1a57a2f4b0c3f0635b48c77674b0e3f4dea3981323e0e2704ff7c5ed903e676e",
+          "path": "apps/edge/incident.py",
+          "fingerprint": "c89d77779b4cf254e2fd4a7c4fa7f7d3bb1b893b57a78fe9fe0b7efcb3f19356"
+        },
+        {
+          "item_id": "4ff8434be7244bacd918006170dfa8aa0be6fed7b8b55d017679ac2864015449",
+          "path": "apps/edge/tracker.py",
+          "fingerprint": "d422a121f175f67070ccc360dd043f737913daddc91373a56b581114862cd447"
+        },
+        {
+          "item_id": "6cb296ffcdb9a835baf909b1fd6e8949c966ecc42f1e2d7fd78485525203ba54",
+          "path": "apps/edge/outbox.py",
+          "fingerprint": "24a764451c67915f79b0fe127f1050e2c9fdbb3a785711307c63a3c119e71574"
+        },
+        {
+          "item_id": "6d003513fb796cd31cee2d627d0f76bde3f18fd1f54521d4a3655a68208ba675",
+          "path": "apps/edge/pipeline.py",
+          "fingerprint": "29e9bb57c561dd2044ad40464d4d70765d73edf094485cb7dda2aefaf62d0c58"
+        },
+        {
+          "item_id": "72a87da4f59154f81b16c7116059b61d4b986d14433f7103982d4111bcd32da7",
+          "path": "apps/edge/health.py",
+          "fingerprint": "a414c8169b61e350b42c46fe88ddb922a2746c8c8606ca379ab9fe97ddccfa1b"
+        },
+        {
+          "item_id": "730fb1f26cefcfe2061cedf4a1594f762ea72c9c998b9cf7979ec0619e69223a",
+          "path": "apps/server/store.py",
+          "fingerprint": "6dfe227faf510cc26dc2c68744ea58841001f4b6bd7dcb2437daa6a7570ceccb"
+        },
+        {
+          "item_id": "997ad5e90481524e7c2dc4f8a1ea1dfc8be2187e1807478dee79001a2f009de0",
+          "path": "apps/edge/rtsp.py",
+          "fingerprint": "76251846397c37e81451029a64c3af41b963d96b99ef506302b87342260531bf"
+        },
+        {
+          "item_id": "9cc4f244f45bd554822461989d14fd278107119f49a851ad184f197b15277672",
+          "path": "run_server.py",
+          "fingerprint": "8edaf722c877a74192f379d08e5e712829837a42e13a69cf836e9b177398a0fb"
+        },
+        {
+          "item_id": "9ef868d72c222f5abdb20251914c1549fb122c49e6e65f205891d7683e64b655",
+          "path": "run_edge.py",
+          "fingerprint": "09f14d3a0da5b0affd29134da72d5181cc9e9a06af05e9d58106b5b023cf1a2b"
+        },
+        {
+          "item_id": "aed62229ccbc11bf52beb22e7b594160058e33fbdb467c7d0ad8f029b197cf38",
+          "path": "apps/edge/recorder.py",
+          "fingerprint": "7ecf3ee11b70efb893bf4c800b49134c6762b77e5d1f8d9c10e5212718b9e2dd"
+        },
+        {
+          "item_id": "b12d5111a265888925379fba65a203c37d08a98da8b0ed2f4c238b8c468f5c46",
+          "path": "apps/server/main.py",
+          "fingerprint": "45db511ca216a83389b3a11fc077b76cb5de4790a33b9ee17aa0fa2fe1cb3310"
+        },
+        {
+          "item_id": "c15b6ab6fc8566cd3a9c9e0d26cbcef8a325fc10f1e504afd70f20664b5de0ee",
+          "path": "apps/edge/uploader.py",
+          "fingerprint": "f56a92890d60bca72b14cbe64d73b138a28d09fcc5a0e36cde78c3abfcf2f1d8"
+        },
+        {
+          "item_id": "c92ffebfed6cfbff2238ebda3aa22698f278cf940dafada30fdacbdb746aadec",
+          "path": "apps/edge/evidence.py",
+          "fingerprint": "e140888484b9de12b59b3e6569599009646fbe91ccdd8ee6a0cd12fedc2b74fe"
+        },
+        {
+          "item_id": "c94e35f91b31f91a5001e3c119154e4874a808a45995c2e3b52b0d5e0ed2c49c",
+          "path": "apps/edge/quota.py",
+          "fingerprint": "630f94d6cc87f28e3acf0e9981a6b21d64ab923f0ef8d41318ef03bfd0769c72"
+        },
+        {
+          "item_id": "f4897658e94f1fe538576608fa71e642822e29607834c85090fbe01181178ec4",
+          "path": "compose.yaml",
+          "fingerprint": "a6cbc71fadbeb89ac1fe3d224b08c54a1a36efbc559fc54ec6bde250a8663a02"
+        },
+        {
+          "item_id": "f645fce4dede3e9fd5bf92357753449df15ccec70246481ebba53a4e008b0c90",
+          "path": "apps/edge/live_pipeline.py",
+          "fingerprint": "e9bf82e0ee9d801530fe087d0d732f379d180b74e5d5ecc794c36883cff3ff79"
+        }
+      ],
+      "reused": [],
+      "failed": [],
+      "waived": []
+    },
+    "elapsed_ms": 996945
+  },
+  "retry_report": {
+    "schema_version": "ocr.llm-retry-report/v1",
+    "total_requests": 206,
+    "retried_requests": 3,
+    "total_retries": 3,
+    "recovered_requests": 3,
+    "failed_requests": 0,
+    "cancelled_requests": 0,
+    "requests": [
+      {
+        "logical_request_id": "4e987a1315e066e89d223cad696b069ae1a459de8124d3b3f3e26578ecf55ca4",
+        "provider": "oc",
+        "model": "Gemini 3.8 Flash (High)",
+        "file_path": "apps/server/main.py,apps/server/store.py",
+        "task_type": "plan_task",
+        "request_no": 1,
+        "outcome": "recovered",
+        "attempts": [
+          {
+            "attempt": 1,
+            "outcome": "error",
+            "error_class": "provider",
+            "failure_phase": "http",
+            "status_code": 524,
+            "retry_after_ms": 120000,
+            "duration_to_headers_ms": 125649
+          },
+          {
+            "attempt": 2,
+            "outcome": "success",
+            "status_code": 200,
+            "observed_backoff_ms": 120000,
+            "duration_to_headers_ms": 488
+          }
+        ]
+      },
+      {
+        "logical_request_id": "79b3f7b51ce8813237dd5a70da198fc8e44735284dabdafcbc3c74aa89bf6f85",
+        "provider": "oc",
+        "model": "Gemini 3.8 Flash (High)",
+        "file_path": "apps/edge/live_pipeline.py,apps/edge/pipeline.py,apps/edge/pose.py,apps/edge/recorder.py,apps/edge/rtsp.py,apps/edge/rtsp_recorder.py,apps/edge/tracker.py",
+        "task_type": "plan_task",
+        "request_no": 1,
+        "outcome": "recovered",
+        "attempts": [
+          {
+            "attempt": 1,
+            "outcome": "error",
+            "error_class": "provider",
+            "failure_phase": "http",
+            "status_code": 524,
+            "retry_after_ms": 120000,
+            "duration_to_headers_ms": 125859
+          },
+          {
+            "attempt": 2,
+            "outcome": "success",
+            "status_code": 200,
+            "observed_backoff_ms": 120000,
+            "duration_to_headers_ms": 883
+          }
+        ]
+      },
+      {
+        "logical_request_id": "fa3126433a43dad57161ecb12fc5bb8bf1306c99b7de97f3ab85c61976253dac",
+        "provider": "oc",
+        "model": "Gemini 3.8 Flash (High)",
+        "file_path": "apps/edge/evidence.py,apps/edge/health.py,apps/edge/incident.py,apps/edge/outbox.py,apps/edge/quota.py,apps/edge/send_synthetic.py,apps/edge/uploader.py",
+        "task_type": "plan_task",
+        "request_no": 1,
+        "outcome": "recovered",
+        "attempts": [
+          {
+            "attempt": 1,
+            "outcome": "error",
+            "error_class": "provider",
+            "failure_phase": "http",
+            "status_code": 524,
+            "retry_after_ms": 120000,
+            "duration_to_headers_ms": 125858
+          },
+          {
+            "attempt": 2,
+            "outcome": "success",
+            "status_code": 200,
+            "observed_backoff_ms": 120001,
+            "duration_to_headers_ms": 512
+          }
+        ]
+      }
+    ]
+  }
+}

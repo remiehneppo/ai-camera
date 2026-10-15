@@ -31,17 +31,31 @@ Triển khai Khối Giám sát Sức khỏe & Quản lý Bộ nhớ bao gồm:
    - Tích hợp `health` monitor và đồng bộ giữa Live Runner và Perception Pipeline.
 
 ## OpenCodeReview (OCR) Findings & Remediation
-- Quét qua `ocr review` với model `Gemini 3.8 Flash (High)`:
-  1. *Health status guard*: Không để gán `DEGRADED` vô tình ghi đè trạng thái `UNAVAILABLE` hoặc `STARTING`.
-  2. *I/O Lock latency*: Tránh gọi `get_storage_breakdown()` nhiều lần khi đang giữ `_lock` trong `get_health_snapshot()`.
-  3. *Critical usage projection*: Đưa `estimated_bytes` vào tính toán tỷ lệ phần trăm dung lượng đĩa trước khi chấp nhận clip mới.
-  4. *Active segment protection*: Không unlink nhầm các file `.segment-*.part.mkv` đang được ghi active trong lúc cleanup.
-  5. *Dead code removal*: Xóa hàm `_get_acknowledged_request_ids` không được sử dụng.
-  6. *Health synchronization*: Đồng bộ tham chiếu `health` giữa `LivePerceptionRunner` và `PerceptionPipeline`.
-  7. *Backend checker*: Truyền `backend_checker=uploader` vào `EdgeHealthMonitor` mặc định trong pipeline.
+- Quét commit `882d843` bằng `open-code-review` CLI (`ocr review -c 882d843`, Session: `57b92352-5c30-42de-bcee-b540d62ee4ab`, Model: `Gemini 3.8 Flash (High)`):
+  - **Kết quả tổng quan**: 5 files reviewed (`apps/edge/quota.py`, `apps/edge/health.py`, `apps/edge/evidence.py`, `apps/edge/pipeline.py`, `apps/edge/live_pipeline.py`), 17 findings.
+  - **Các phát hiện quan trọng (High / Medium)**:
+    1. *High*: `apps/edge/quota.py:365-380` — `cleanup_eligible()` purge unpinned segments không kiểm tra ngưỡng phục hồi áp lực và sort theo từng session thay vì global FIFO.
+    2. *High*: `apps/edge/health.py:236-252` — `get_health_snapshot()` giữ `self._lock` khi thực thi các tác vụ I/O đĩa/mạng, có thể gây frame drop / lock contention trong realtime pipeline.
+    3. *High*: `apps/edge/evidence.py:97-104` — `can_accept_new_evidence()` đánh fail request đang ở trạng thái `collecting` trước khi hoàn tất window.
+    4. *High*: `apps/edge/health.py:287-295` — `capabilities["recorder"] = "gap_detected"` ghi đè trước khi kiểm tra `recorder_cap`, che lấp lỗi thành phần recorder.
+    5. *Medium*: `apps/edge/quota.py:83-88` — `sqlite3.connect` dùng context manager không đóng connection, gây leak file descriptors trong `_get_active_pins()`.
+    6. *Medium*: `apps/edge/quota.py:130-134` — `recorder_root` fallback phụ thuộc `manifests.is_dir()` khởi tạo trễ, khiến `ring_bytes` bị tính là 0 khi chưa có manifest.
+    7. *Medium*: `apps/edge/health.py:198-207` — `_measure_recorder_gap()` tính gap pairwise mà chưa sort segments theo `start_seconds`.
+    8. *Medium*: `apps/edge/health.py:156-163` — `_mask_secrets_in_obj()` lọc substring `"key"` gây false-positive cho `"keyframe_pts"`.
+    9. *Medium*: `apps/edge/health.py:328-328` — `primary_reason` chọn `reasons[0]` theo thứ tự duyệt thay vì mức độ ưu tiên theo severity (UNAVAILABLE > DEGRADED > STARTING).
+    10. *Medium*: `apps/edge/quota.py:121-127` — `seen_wal_files` không chuẩn hóa `.resolve()`, có thể trùng lặp file giữa relative và absolute paths.
+    11. *Medium*: `apps/edge/quota.py:277-279` — Công thức `projected_used_bytes` tính cả root-reserved blocks, lệch so với `breakdown.used_percent`.
+    12. *Maintainability*: Redundant cleanup call trong `evidence.py:72`, unused import `os` trong `health.py` và `quota.py`, unused import `EvidenceLifecycle` trong `live_pipeline.py`, unused `_total_frames_received` và `_manual_status` trong `health.py`.
+  - **Khắc phục toàn diện (Remediation Applied)**:
+    - `apps/edge/quota.py`: Quản lý connection SQLite bằng `contextlib.closing`, chuẩn hóa `.resolve()` cho file WAL, tính `projected_used_bytes` nhất quán từ `breakdown.used_percent`, gom tập `all_eligible_segments` toàn cục sắp xếp FIFO theo `s_start`, tính toán ngân sách dung lượng cần giải phóng `target_bytes_to_reclaim` để xả tải lũy tiến, loại bỏ import `os` thừa.
+    - `apps/edge/health.py`: Tách đo lường đĩa/mạng/recorder ngoài lock, sắp xếp segment theo `start_seconds` khi đo gap, tinh chỉnh pattern nhận diện secret tránh false-positive trên `keyframe_pts`, kiểm tra `recorder_cap` trước khi gán `gap_detected`, phân định `primary_reason` theo độ nghiêm trọng trạng thái (UNAVAILABLE > DEGRADED > STARTING), đưa `total_frames_received` vào snapshot metrics, loại bỏ biến thừa `_manual_status`/`_manual_reason` và import `os`.
+    - `apps/edge/evidence.py`: Chuyển vị trí guard `can_accept_new_evidence()` trong `_reconcile` về ngay trước `finalize_pin`, không đánh fail oan các request đang thu thập (`collecting`); đồng bộ danh sách file dọn dẹp từ `cleanup_eligible()`.
+    - `apps/edge/live_pipeline.py`: Loại bỏ import không sử dụng `EvidenceLifecycle`.
 
 ## Verification Evidence
 - `tests.test_health`: 16/16 tests passed.
 - `tests.test_quota`: 9/9 tests passed.
-- Core regression suite (117 tests): 117/117 tests passed (17.481s).
-- Mypy: 0 errors trên toàn bộ source files liên quan.
+- `tests.test_architecture_deepening`: 14/14 tests passed.
+- `tests.test_pose`: 24/24 tests passed.
+- `tests.test_live_pipeline`: 10/10 tests passed.
+- Mypy: 0 errors trên toàn bộ 4 files mã nguồn (`apps/edge/quota.py`, `apps/edge/health.py`, `apps/edge/evidence.py`, `apps/edge/live_pipeline.py`).

@@ -174,6 +174,37 @@ class ServerEvidenceStoreTests(unittest.TestCase):
         self.assertTrue(matching[0]["review"]["needs_re_review"])
         self.assertEqual(matching[0]["review"]["decision"], "confirmed")
 
+    def test_list_current_cursor_pagination_is_stable_and_complete(self) -> None:
+        device_id = "lab-edge-01"
+        event_ids = []
+        for i in range(5):
+            ev = sample_event(device_id=device_id)
+            event_ids.append(ev["event_id"])
+            self.store.persist(ev)
+
+        # Page 1: limit 2
+        page1 = self.store.list_current(limit=2)
+        self.assertEqual(len(page1), 2)
+        self.assertIsNotNone(page1.next_cursor)
+
+        # Page 2: limit 2 with cursor from page 1
+        page2 = self.store.list_current(limit=2, cursor=page1.next_cursor)
+        self.assertEqual(len(page2), 2)
+        self.assertIsNotNone(page2.next_cursor)
+
+        # Page 3: limit 2 with cursor from page 2
+        page3 = self.store.list_current(limit=2, cursor=page2.next_cursor)
+        self.assertEqual(len(page3), 1)
+        self.assertIsNone(page3.next_cursor)
+
+        all_retrieved = [r["event"]["event_id"] for r in page1 + page2 + page3]
+        self.assertEqual(len(all_retrieved), 5)
+        self.assertEqual(len(set(all_retrieved)), 5)
+
+        # Invalid cursor raises ValueError
+        with self.assertRaises(ValueError):
+            self.store.list_current(limit=2, cursor="invalid-cursor-value")
+
 
 class ServerEvidenceApiTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -386,6 +417,107 @@ class ServerEvidenceApiTests(unittest.TestCase):
         self.assertIn("evidence", matched[0])
         self.assertEqual(len(matched[0]["evidence"]), 1)
         self.assertEqual(matched[0]["evidence"][0]["request_id"], "req-001")
+
+    def test_get_events_cursor_pagination(self) -> None:
+        # Create 3 distinct events
+        for _ in range(3):
+            ev = sample_event(device_id=self.device_id)
+            put_res = self.client.post(
+                "/v1/events",
+                headers={
+                    "Authorization": f"Bearer {self.device_token}",
+                    "Content-Type": "application/json",
+                    "Idempotency-Key": str(ev["message_id"]),
+                },
+                content=json.dumps(ev),
+            )
+            self.assertEqual(put_res.status_code, 200)
+
+        # Query page 1 with limit=2
+        res1 = self.client.get(
+            "/v1/events?limit=2",
+            headers={"Authorization": f"Bearer {self.dashboard_token}"},
+        )
+        self.assertEqual(res1.status_code, 200)
+        data1 = res1.json()
+        self.assertEqual(len(data1["events"]), 2)
+        self.assertIn("next_cursor", data1)
+        self.assertIsNotNone(data1["next_cursor"])
+
+        # Query page 2 with next_cursor
+        res2 = self.client.get(
+            f"/v1/events?limit=2&cursor={data1['next_cursor']}",
+            headers={"Authorization": f"Bearer {self.dashboard_token}"},
+        )
+        self.assertEqual(res2.status_code, 200)
+        data2 = res2.json()
+        self.assertEqual(len(data2["events"]), 2)
+
+        # Invalid cursor returns 422
+        bad_res = self.client.get(
+            "/v1/events?cursor=bad!cursor",
+            headers={"Authorization": f"Bearer {self.dashboard_token}"},
+        )
+        self.assertEqual(bad_res.status_code, 422)
+
+    def test_put_evidence_streaming_chunks(self) -> None:
+        # Stream content in chunks using generator
+        chunks = [b"chunk1-", b"chunk2-", b"chunk3-end"]
+        full_content = b"".join(chunks)
+        sha256 = hashlib.sha256(full_content).hexdigest()
+        metadata = {"actual_range": [0.0, 10.0], "completeness": "complete", "size_bytes": len(full_content)}
+        put_url = f"/v1/evidence/{self.device_id}/{self.event_id}/{self.request_id}"
+
+        def chunk_gen():
+            for c in chunks:
+                yield c
+
+        res = self.client.put(
+            put_url,
+            headers={
+                "Authorization": f"Bearer {self.device_token}",
+                "X-Evidence-Sha256": sha256,
+                "X-Evidence-Metadata": json.dumps(metadata),
+            },
+            content=chunk_gen(),
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["size_bytes"], len(full_content))
+        self.assertEqual(res.json()["sha256"], sha256)
+
+        # Download via FileResponse
+        media_url = f"/v1/evidence/{self.device_id}/{self.event_id}/{self.request_id}/media"
+        get_res = self.client.get(media_url, headers={"Authorization": f"Bearer {self.dashboard_token}"})
+        self.assertEqual(get_res.status_code, 200)
+        self.assertEqual(get_res.content, full_content)
+
+    def test_put_evidence_image_jpeg_codec_infers_extension_and_content_type(self) -> None:
+        jpeg_payload = b"\xff\xd8\xff\xe0" + b"fake-jpeg-binary-payload"
+        sha256 = hashlib.sha256(jpeg_payload).hexdigest()
+        metadata = {
+            "actual_range": [0.0, 1.0],
+            "completeness": "complete",
+            "codec": "jpeg",
+            "size_bytes": len(jpeg_payload),
+        }
+        put_url = f"/v1/evidence/{self.device_id}/{self.event_id}/{self.request_id}"
+        res = self.client.put(
+            put_url,
+            headers={
+                "Authorization": f"Bearer {self.device_token}",
+                "X-Evidence-Sha256": sha256,
+                "X-Evidence-Metadata": json.dumps(metadata),
+            },
+            content=jpeg_payload,
+        )
+        self.assertEqual(res.status_code, 200)
+
+        # GET media should have Content-Type image/jpeg
+        media_url = f"/v1/evidence/{self.device_id}/{self.event_id}/{self.request_id}/media"
+        get_res = self.client.get(media_url, headers={"Authorization": f"Bearer {self.dashboard_token}"})
+        self.assertEqual(get_res.status_code, 200)
+        self.assertEqual(get_res.headers["Content-Type"], "image/jpeg")
+        self.assertEqual(get_res.content, jpeg_payload)
 
 
 if __name__ == "__main__":

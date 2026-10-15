@@ -938,5 +938,242 @@ class FileRecorderTests(unittest.TestCase):
         self.assertEqual(restarted.finalize_pin("clip-1"), receipt)
 
 
+class RecorderStorageCleanupTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        with mock.patch("apps.edge.recorder.shutil.which", return_value="tool"):
+            self.recorder = FileRecorder(Path(self.tempdir.name) / "ring")
+        self.directory = self.recorder.root / "session"
+        self.directory.mkdir()
+        self.media = self.directory / "segment-00000.mkv"
+        self.media.write_bytes(b"media")
+        self.media.with_suffix(".json").write_text(json.dumps({
+            "path": str(self.media), "session_id": "session", "codec": "h264",
+            "time_base": "1/1000", "start_pts": 0, "end_pts": 1000,
+            "start_seconds": 0, "end_seconds": 1, "keyframe_pts": [0],
+            "frame_interval_seconds": .04,
+        }))
+
+    def test_release_pin_drops_its_per_pin_lock_entry(self):
+        """Review: _pin_locks must not grow forever, one entry per request_id for the recorder's lifetime."""
+        for index in range(5):
+            request_id = f"req-{index}"
+            self.recorder.pin(request_id, "session", 0, 10, "owner")
+            with self.recorder._finalize_lock:
+                self.recorder._pin_locks.setdefault(request_id, threading.Lock())
+            self.assertTrue(self.recorder.release_pin(request_id))
+        self.assertEqual(self.recorder._pin_locks, {}, "released pins must not leave lock entries behind")
+
+    def test_cleanup_preserves_pins_postroll_unknown_scratch_and_watermark(self):
+        from apps.edge.quota import StorageQuotaManager
+        import hashlib
+        self.recorder.pin("collecting", "session", 0, 10, "owner")
+        manifests = self.recorder.root / "manifests"
+        manifests.mkdir()
+        unknown = [manifests / "unknown.tmp.mkv", manifests / "unknown.concat",
+                   self.directory / "active.json.tmp", self.directory / ".segment-00001.part.mkv"]
+        for path in unknown:
+            path.write_bytes(b"keep")
+        owned = manifests / (hashlib.sha256(b"collecting").hexdigest() + ".concat")
+        owned.write_bytes(b"orphan")
+        result = StorageQuotaManager(recorder=self.recorder).cleanup_eligible(force=True)
+        self.assertEqual(result["cleaned_files"], [str(owned)])
+        self.assertEqual(result["cleaned_bytes"], 6)
+        self.assertTrue(self.media.exists())
+        self.assertTrue(all(path.exists() for path in unknown))
+        self.recorder.release_pin("collecting")
+        self.recorder._watermarks["session"] = 1
+        self.assertEqual(self.recorder.cleanup_storage()["cleaned_bytes"], 0)
+        self.recorder._watermarks["session"] = 2
+        result = self.recorder.cleanup_storage()
+        self.assertEqual(set(result["cleaned_files"]), {str(self.media), str(self.media.with_suffix(".json"))})
+        self.assertFalse(self.media.exists())
+
+    def test_cleanup_target_keeps_segment_pairs_and_global_fifo(self):
+        later = self.recorder.root / "later"
+        later.mkdir()
+        media = later / "segment-00000.mkv"
+        media.write_bytes(b"later")
+        metadata = json.loads(self.media.with_suffix(".json").read_text())
+        metadata.update(path=str(media), session_id="later", start_seconds=2, end_seconds=3)
+        media.with_suffix(".json").write_text(json.dumps(metadata))
+        result = self.recorder.cleanup_storage(target_bytes=1)
+        self.assertEqual(result["cleaned_files"], [str(self.media), str(self.media.with_suffix(".json"))])
+        self.assertGreater(result["cleaned_bytes"], 1)
+        self.assertTrue(media.exists())
+        self.assertTrue(media.with_suffix(".json").exists())
+
+    def test_pin_query_error_fails_closed_before_any_delete(self):
+        from apps.edge.quota import StorageQuotaManager
+        class BrokenConnection(sqlite3.Connection):
+            def execute(self, sql, *args, **kwargs):
+                if sql.startswith("SELECT") and "FROM pins" in sql:
+                    raise sqlite3.OperationalError("ownership unavailable")
+                return super().execute(sql, *args, **kwargs)
+        connect = sqlite3.connect
+        with mock.patch("apps.edge.recorder.sqlite3.connect",
+                        side_effect=lambda *a, **kw: connect(*a, **kw, factory=BrokenConnection)):
+            result = StorageQuotaManager(recorder=self.recorder).cleanup_eligible(force=True)
+        self.assertEqual(result, {"cleaned_bytes": 0, "cleaned_files": []})
+        self.assertTrue(self.media.exists())
+        self.assertTrue(self.media.with_suffix(".json").exists())
+
+    def test_active_finalization_scratch_waits_for_owner_transaction(self):
+        import hashlib
+        self.recorder.pin("building", "session", 0, 10, "owner")
+        directory = self.recorder.root / "manifests"
+        directory.mkdir()
+        scratch = directory / (hashlib.sha256(b"building").hexdigest() + ".tmp.mkv")
+        scratch.write_bytes(b"active")
+        attempted = threading.Event()
+        failures = []
+        connect = sqlite3.connect
+
+        def traced_connect(*args, **kwargs):
+            db = connect(*args, **kwargs)
+            db.set_trace_callback(lambda sql: attempted.set() if sql == "BEGIN IMMEDIATE" else None)
+            return db
+
+        def cleanup():
+            try:
+                self.recorder.cleanup_storage()
+            except BaseException as exc:
+                failures.append(exc)
+
+        # finalize_pin owns this write lock for the entire scratch-writing operation.
+        with connect(self.recorder._pins) as owner:
+            owner.execute("BEGIN IMMEDIATE")
+            with mock.patch("apps.edge.recorder.sqlite3.connect", side_effect=traced_connect):
+                worker = threading.Thread(target=cleanup)
+                worker.start()
+                try:
+                    self.assertTrue(attempted.wait(5))
+                    self.assertTrue(scratch.exists())
+                finally:
+                    owner.commit()
+                    worker.join(5)
+                self.assertFalse(worker.is_alive())
+        self.assertEqual(failures, [])
+        self.assertFalse(scratch.exists())
+        self.assertTrue(self.media.exists())
+
+    def test_malformed_sidecar_fails_closed_before_scratch_delete(self):
+        import hashlib
+        self.recorder.pin("known", "session", 0, 10, "owner")
+        directory = self.recorder.root / "manifests"
+        directory.mkdir()
+        scratch = directory / (hashlib.sha256(b"known").hexdigest() + ".concat")
+        scratch.write_bytes(b"orphan")
+        (self.directory / "bad.json").write_text("invalid")
+        with self.assertRaises(json.JSONDecodeError):
+            self.recorder.cleanup_storage()
+        self.assertTrue(scratch.exists())
+        self.assertTrue(self.media.exists())
+
+    def test_concurrent_pin_commits_before_cleanup_inspects_ownership(self):
+        pin_holds_lock = threading.Event()
+        cleanup_attempts_lock = threading.Event()
+        release_pin = threading.Event()
+        failures = []
+        actual_range = self.recorder.actual_range
+        connect = sqlite3.connect
+
+        def coverage(*args):
+            pin_holds_lock.set()
+            if not release_pin.wait(5):
+                raise AssertionError("pin release timed out")
+            return actual_range(*args)
+
+        def traced_connect(*args, **kwargs):
+            db = connect(*args, **kwargs)
+            if threading.current_thread().name == "cleanup":
+                db.set_trace_callback(lambda sql: cleanup_attempts_lock.set()
+                                      if sql == "BEGIN IMMEDIATE" else None)
+            return db
+
+        def run(action):
+            try:
+                action()
+            except BaseException as exc:
+                failures.append(exc)
+
+        with mock.patch.object(self.recorder, "actual_range", side_effect=coverage), \
+                mock.patch("apps.edge.recorder.sqlite3.connect", side_effect=traced_connect):
+            pin = threading.Thread(target=lambda: run(lambda: self.recorder.pin("race", "session", 0, 10, "owner")))
+            cleanup = threading.Thread(name="cleanup", target=lambda: run(self.recorder.cleanup_storage))
+            pin.start()
+            try:
+                self.assertTrue(pin_holds_lock.wait(5))
+                cleanup.start()
+                self.assertTrue(cleanup_attempts_lock.wait(5))
+                self.assertTrue(self.media.exists())
+            finally:
+                release_pin.set()
+                pin.join(5)
+                if cleanup.ident is not None:
+                    cleanup.join(5)
+            self.assertFalse(pin.is_alive())
+            self.assertFalse(cleanup.is_alive())
+        self.assertEqual(failures, [])
+        self.assertTrue(self.media.exists())
+        self.assertEqual(self.recorder.pin_status("race")["state"], "collecting")
+
+    def test_prune_database_locked_logs_warning_and_skips_without_failing_publisher(self):
+        # Database is locked by an external write transaction
+        with sqlite3.connect(self.recorder._pins, timeout=0.1) as locking_conn:
+            locking_conn.execute("BEGIN IMMEDIATE")
+            with self.assertLogs("apps.edge.recorder", level="WARNING") as logs:
+                # _prune should catch OperationalError, log warning, and return cleanly
+                self.recorder._prune("session", timeout=0.05)
+            self.assertTrue(any("Prune skipped" in msg or "database is locked" in msg.lower() for msg in logs.output))
+            self.assertTrue(self.media.exists())
+
+            # Also verify _publish_closed does not stop process due to locked database prune
+            fake_process = mock.MagicMock()
+            fake_process.poll.side_effect = [0]
+            failures = []
+            real_prune = self.recorder._prune
+            with mock.patch.object(self.recorder, "_stop") as mock_stop, \
+                    mock.patch.object(self.recorder, "_prune", side_effect=lambda s, **kw: real_prune(s, timeout=0.05)):
+                self.recorder._publish_closed(self.directory, "session", fake_process, poll_seconds=0.01, failures=failures)
+                self.assertEqual(failures, [])
+                mock_stop.assert_not_called()
+
+    def test_finalize_pin_does_not_hold_sqlite_lock_during_ffmpeg_and_hashing(self):
+        self.recorder.pin("clip-lock-test", "session", 0, 1, "owner")
+        can_acquire_lock_during_ffmpeg = threading.Event()
+        ffmpeg_executed = threading.Event()
+
+        real_run = subprocess.run
+
+        def wrapped_run(cmd, *args, **kwargs):
+            if cmd and cmd[0] == "ffmpeg":
+                ffmpeg_executed.set()
+                # Verify that SQLite is NOT locked while ffmpeg runs
+                try:
+                    with sqlite3.connect(self.recorder._pins, timeout=0.1) as db:
+                        db.execute("BEGIN IMMEDIATE")
+                        row = db.execute("SELECT session_id FROM pins WHERE request_id='clip-lock-test'").fetchone()
+                        if row and row[0] == "session":
+                            can_acquire_lock_during_ffmpeg.set()
+                        db.commit()
+                except sqlite3.OperationalError:
+                    pass
+                # Create destination clip_temp so finalize can proceed
+                dest = Path(cmd[-1])
+                dest.write_bytes(b"finalized_clip_data")
+                return subprocess.CompletedProcess(cmd, 0, stdout=b"", stderr=b"")
+            return real_run(cmd, *args, **kwargs)
+
+        with mock.patch("apps.edge.recorder.subprocess.run", side_effect=wrapped_run):
+            receipt = self.recorder.finalize_pin("clip-lock-test")
+
+        self.assertTrue(ffmpeg_executed.is_set(), "ffmpeg should have been invoked")
+        self.assertTrue(can_acquire_lock_during_ffmpeg.is_set(),
+                        "Should be able to acquire SQLite write lock during ffmpeg concat")
+        self.assertEqual(receipt["build_state"], "finalized")
+
+
 if __name__ == "__main__":
     unittest.main()

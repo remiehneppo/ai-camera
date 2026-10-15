@@ -306,6 +306,25 @@ class EdgeUploaderTests(unittest.TestCase):
         outbox_requests = self.outbox.evidence_requests()
         self.assertEqual(outbox_requests[0]["state"], "acknowledged")
 
+    def test_uploader_injectable_sleep_fn(self) -> None:
+        data = self._create_evidence("req-sleep-fn")
+        self.server_state["fail_503_count"] = 1
+
+        sleep_calls: list[float] = []
+        uploader = EdgeUploader(
+            outbox=self.outbox,
+            recorder=self.recorder,
+            server_url=self.server_url,
+            device_token=self.device_token,
+            max_retries=2,
+            backoff_base=0.1,
+            sleep_fn=sleep_calls.append,
+        )
+        uploaded = uploader.upload_pending()
+        self.assertEqual(uploaded, 1)
+        self.assertEqual(len(sleep_calls), 1)
+        self.assertAlmostEqual(sleep_calls[0], 0.1)
+
     def test_503_retries_exhausted_records_error_without_crash(self) -> None:
         data = self._create_evidence("req-503-exhausted")
         self.server_state["fail_503_count"] = 5  # Continually fail

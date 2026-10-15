@@ -12,8 +12,11 @@ import json
 import math
 import os
 from pathlib import Path
+import random
 import subprocess
-from typing import Mapping
+import threading
+import time
+from typing import Callable, Mapping
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 STREAM_URL_FIELD = "CAMERA_RTSP_URL"
@@ -58,6 +61,58 @@ def redact_rtsp_url(url: str) -> str:
 
 class RtspProbeError(RuntimeError):
     """Raised when a bounded ffprobe run yields no usable video stream metadata."""
+
+
+class ExponentialBackoff:
+    """Configurable exponential backoff with jitter and clock/sleeper injection."""
+
+    def __init__(
+        self,
+        initial_delay: float = 1.0,
+        max_delay: float = 30.0,
+        backoff_factor: float = 2.0,
+        jitter: float = 0.1,
+        clock: Callable[[], float] = time.monotonic,
+        sleeper: Callable[[float], None] | None = None,
+        random_fn: Callable[[], float] = random.random,
+    ) -> None:
+        self.initial_delay = float(initial_delay)
+        self.max_delay = float(max_delay)
+        self.backoff_factor = float(backoff_factor)
+        self.jitter = float(jitter)
+        self.clock = clock
+        self.sleeper = sleeper
+        self.random_fn = random_fn
+        self.attempts: int = 0
+        self.last_delay: float = 0.0
+
+    def next_delay(self) -> float:
+        try:
+            base_delay = min(self.max_delay, self.initial_delay * (self.backoff_factor ** self.attempts))
+        except OverflowError:
+            # An outage long enough to overflow the float power is already far past the cap.
+            base_delay = self.max_delay
+        jitter_amount = base_delay * self.jitter * (2.0 * self.random_fn() - 1.0)
+        delay = max(0.0, min(self.max_delay, base_delay + jitter_amount))
+        self.last_delay = delay
+        if base_delay < self.max_delay:
+            # Once capped, stop counting so `attempts` stays bounded during multi-day outages.
+            self.attempts += 1
+        return delay
+
+    def wait(self, stop_event: threading.Event | None = None) -> float:
+        delay = self.next_delay()
+        if self.sleeper is not None:
+            self.sleeper(delay)
+        elif stop_event is not None:
+            stop_event.wait(delay)
+        else:
+            time.sleep(delay)
+        return delay
+
+    def reset(self) -> None:
+        self.attempts = 0
+        self.last_delay = 0.0
 
 
 @dataclass(frozen=True)

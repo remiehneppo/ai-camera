@@ -4,13 +4,17 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from copy import deepcopy
+import base64
 import hashlib
+import json
 from pathlib import Path
+import time
 from typing import Any
 from uuid import uuid4
 
+from bson import ObjectId
 from pymongo import MongoClient, ReadPreference
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import AutoReconnect, DuplicateKeyError
 from pymongo.read_concern import ReadConcern
 from pymongo.write_concern import WriteConcern
 
@@ -49,6 +53,34 @@ def cleanup_temp_evidence(evidence_dir: str | Path) -> list[str]:
     return cleaned
 
 
+class PaginatedEvents(list):
+    def __init__(self, items: list[dict[str, Any]], next_cursor: str | None = None) -> None:
+        super().__init__(items)
+        self.next_cursor = next_cursor
+
+
+def encode_cursor(updated_at: str, doc_id: Any) -> str:
+    raw = json.dumps({"u": updated_at, "i": str(doc_id)}, separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
+
+
+def decode_cursor(cursor_str: str) -> tuple[str, Any]:
+    try:
+        raw = base64.urlsafe_b64decode(cursor_str.encode("ascii")).decode("utf-8")
+        data = json.loads(raw)
+        u = data["u"]
+        i_str = data["i"]
+        if not isinstance(u, str) or not isinstance(i_str, str):
+            raise ValueError
+        try:
+            doc_id = ObjectId(i_str)
+        except Exception:
+            doc_id = i_str
+        return u, doc_id
+    except Exception as exc:
+        raise ValueError(f"invalid cursor: {cursor_str}") from exc
+
+
 class EventStore:
     def __init__(self, uri: str, database_name: str) -> None:
         if "replicaSet=" not in uri:
@@ -63,34 +95,42 @@ class EventStore:
         self.evidence_manifests = self.database.get_collection("evidence_manifests")
 
     def ensure_ready(self) -> None:
-        self.client.admin.command("ping")
-        self.revisions.create_index(
-            [("device_id", 1), ("event_id", 1), ("revision", 1)], unique=True, name="event_revision_identity"
-        )
-        self.current.create_index([("device_id", 1), ("event_id", 1)], unique=True, name="current_event_identity")
-        self.outbox.create_index(
-            [("device_id", 1), ("event_id", 1), ("revision", 1)], unique=True, name="downstream_intent_identity"
-        )
-        self.reviews.create_index([("device_id", 1), ("event_id", 1)], unique=True, name="event_review_identity")
-        self.review_audit.create_index(
-            [("device_id", 1), ("event_id", 1), ("review_version", 1)], unique=True, name="event_review_version"
-        )
-        self.evidence_manifests.create_index(
-            [("device_id", 1), ("event_id", 1), ("request_id", 1)], unique=True, name="evidence_manifest_identity"
-        )
-        with self.client.start_session() as session:
-            def probe(active: Any) -> None:
-                probes = self.database.get_collection("readiness_probes")
-                probe_id = str(uuid4())
-                probes.insert_one({"_id": probe_id, "created_at": datetime.now(timezone.utc)}, session=active)
-                probes.delete_one({"_id": probe_id}, session=active)
+        for attempt in range(3):
+            try:
+                self.client.admin.command("ping")
+                self.revisions.create_index(
+                    [("device_id", 1), ("event_id", 1), ("revision", 1)], unique=True, name="event_revision_identity"
+                )
+                self.current.create_index([("device_id", 1), ("event_id", 1)], unique=True, name="current_event_identity")
+                self.current.create_index([("updated_at", -1), ("_id", -1)], name="current_event_cursor")
+                self.outbox.create_index(
+                    [("device_id", 1), ("event_id", 1), ("revision", 1)], unique=True, name="downstream_intent_identity"
+                )
+                self.reviews.create_index([("device_id", 1), ("event_id", 1)], unique=True, name="event_review_identity")
+                self.review_audit.create_index(
+                    [("device_id", 1), ("event_id", 1), ("review_version", 1)], unique=True, name="event_review_version"
+                )
+                self.evidence_manifests.create_index(
+                    [("device_id", 1), ("event_id", 1), ("request_id", 1)], unique=True, name="evidence_manifest_identity"
+                )
+                with self.client.start_session() as session:
+                    def probe(active: Any) -> None:
+                        probes = self.database.get_collection("readiness_probes")
+                        probe_id = str(uuid4())
+                        probes.insert_one({"_id": probe_id, "created_at": datetime.now(timezone.utc)}, session=active)
+                        probes.delete_one({"_id": probe_id}, session=active)
 
-            session.with_transaction(
-                probe,
-                read_concern=ReadConcern("snapshot"),
-                write_concern=WriteConcern(w="majority", j=True),
-                read_preference=ReadPreference.PRIMARY,
-            )
+                    session.with_transaction(
+                        probe,
+                        read_concern=ReadConcern("snapshot"),
+                        write_concern=WriteConcern(w="majority", j=True),
+                        read_preference=ReadPreference.PRIMARY,
+                    )
+                break
+            except AutoReconnect:
+                if attempt == 2:
+                    raise
+                time.sleep(0.1)
 
     @staticmethod
     def _key(event: dict[str, Any]) -> dict[str, Any]:
@@ -180,11 +220,35 @@ class EventStore:
                     raise EventHashConflict("event revision already exists with different content")
                 raise
 
-    def list_current(self, limit: int) -> list[dict[str, Any]]:
-        cursor = self.current.find({}, {"_id": 0, "event": 1, "event_hash": 1, "updated_at": 1}).sort("updated_at", -1).limit(limit)
-        rows = list(cursor)
+    def list_current(self, limit: int, cursor: str | None = None) -> PaginatedEvents:
+        query: dict[str, Any] = {}
+        if cursor:
+            cursor_updated_at, cursor_id = decode_cursor(cursor)
+            query = {
+                "$or": [
+                    {"updated_at": {"$lt": cursor_updated_at}},
+                    {"updated_at": cursor_updated_at, "_id": {"$lt": cursor_id}},
+                ]
+            }
+
+        mongo_cursor = (
+            self.current.find(query, {"_id": 1, "event": 1, "event_hash": 1, "updated_at": 1})
+            .sort([("updated_at", -1), ("_id", -1)])
+            .limit(limit + 1)
+        )
+        raw_rows = list(mongo_cursor)
+        has_next = len(raw_rows) > limit
+        rows = raw_rows[:limit]
+        next_cursor: str | None = None
+        if has_next and rows:
+            last = rows[-1]
+            next_cursor = encode_cursor(last["updated_at"], last["_id"])
+
+        for row in rows:
+            row.pop("_id", None)
+
         if not rows:
-            return rows
+            return PaginatedEvents([], next_cursor=None)
         keys = [{"device_id": row["event"]["device_id"], "event_id": row["event"]["event_id"]} for row in rows]
         selector = {"$or": keys}
         states = {
@@ -230,7 +294,7 @@ class EventStore:
                 **event["payload"].get("evidence_versions", {}),
                 **{item["request_id"]: item.get("manifest_version", 1) for item in row["evidence"]},
             }
-        return rows
+        return PaginatedEvents(rows, next_cursor=next_cursor)
 
     def record_review(self, key: dict[str, str], request: dict[str, Any], actor: str) -> dict[str, Any]:
         now = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")

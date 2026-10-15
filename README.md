@@ -4,7 +4,7 @@ Implemented software-lab slices: synthetic event/dashboard (#01), lab facts/prot
 
 ## Run the lab stack
 
-The MongoDB 7.0.43 service is a one-member replica set with a persistent Docker volume. This is a lab topology, not high availability. MongoDB 8.0.32 refused to start on this host's Linux 6.19 kernel, so the lab is pinned to the supported 7.0 line. Supply separate device and dashboard tokens through the environment; do not put tokens in source files:
+The MongoDB 7.0.43 service is a one-member replica set with a persistent Docker volume. This is a lab topology, not high availability. MongoDB >= 5.0 is strictly required because the backend event store relies on multi-document ACID transactions and the `$setWindowFields` aggregation operator in `list_current`. MongoDB 8.0.32 refused to start on this host's Linux 6.19 kernel, so the lab is pinned to the supported 7.0 line. Supply separate device and dashboard tokens through the environment; do not put tokens in source files:
 
 ```sh
 export DEVICE_TOKENS='{"replace-with-device-token":"lab-edge-01"}'
@@ -138,6 +138,17 @@ python3 -m apps.edge.pin_budget_lab /tmp/camera-fixture.mp4 \
 This scenario persists an intent, prunes before first pin, restarts the recorder/outbox, then reconciles at explicit EOF. Theoretical requirement is caller delay + pre10 + caller margin, separate from actual keyframe-aligned coverage. These values are **scenarios, not approved or measured verification/handoff/recovery maxima or RTO**. Ring8 in this example produces partial pre-roll; anchor0 with verification15/handoff10/recovery12 and ring8 produces known `missing` request coverage with a failed build and `unknown` artifact completeness (there is no artifact).
 
 Both diagnostics remove temporary artifacts after reporting; use small fixtures. Neither establishes live RTSP, bounded queue/drop stress, target/storage sizing, power-cut, production clearance or evidence upload/playback acceptance. #06/#07 remain partial; #08 remains blocked.
+
+## Server and edge behavior notes
+
+- `GET /api/events` is cursor-paginated: `limit` is 1-100 and the response carries `events`, `next_cursor` and `review_enabled`. Pass `next_cursor` back as `cursor` for the next page; a malformed cursor is rejected with 422.
+- Evidence upload is streamed to a temporary file with a rolling sha256 and then linked into place; a clip larger than `MAX_EVIDENCE_BYTES` (100 MiB, `apps/server/main.py`) is rejected with 413. Treat this ceiling as provisional until target bitrate sizing is signed off.
+- `deliver_pending` retries network errors, HTTP 5xx and 429 with capped exponential backoff and jitter; other 4xx responses fail immediately.
+- RTSP loss does not switch the live runner to the fallback permanently: the reconnect loop retries with capped backoff, and the stream session, recorder session and health session stay equal across source changes. A lost frame is reported as a missing observation, never as a synthetic image.
+- Tracks start `tentative` and become `active` after `activate_after` consecutive hits (default 2); `person_lying_persistent` anchors on the first stationary observation.
+- An unreleased pin is never created for a request refused for storage; released and acknowledged pins have their manifests reclaimed by `cleanup_storage`.
+
+Full change record: `docs/logs/2026-10-15-implement-dispatch-summary.md` and `docs/logs/2026-10-15-code-review-of-implementation.md`.
 
 ## Checks
 

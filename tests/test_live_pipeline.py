@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import tempfile
+import threading
+from unittest.mock import patch
 import time
 import unittest
 from uuid import uuid4
 
+import cv2
 import numpy as np
 
 from apps.edge.incident import IncidentEngine
@@ -20,6 +24,57 @@ from apps.edge.rtsp import redact_rtsp_url
 from apps.edge.rtsp_recorder import RtspRingRecorder
 from apps.edge.tracker import ByteTracker
 from domain.event_contract import validate_event
+
+
+class TestLiveRuntimeHealth(unittest.TestCase):
+    def test_recorder_start_failure_never_reports_running_or_healthy(self):
+        with tempfile.TemporaryDirectory() as root:
+            runner = LivePerceptionRunner(root, rtsp_url="")
+            with patch.object(runner.ring_recorder, "start", side_effect=RuntimeError("recorder failed")):
+                with self.assertRaisesRegex(RuntimeError, "recorder failed"):
+                    runner.start()
+            self.assertEqual(runner.status()["status"], "stopped")
+            self.assertEqual(runner.health.get_health_snapshot()["reason"], "system_stopped")
+
+    def test_readiness_stall_shutdown_and_restart_are_truthful(self):
+        with tempfile.TemporaryDirectory() as root:
+            runner = LivePerceptionRunner(root, rtsp_url="", sample_fps=0.01)
+            first_step = threading.Event()
+            release_step = threading.Event()
+            real_step = runner.step
+
+            def blocked_step():
+                first_step.set()
+                release_step.wait(2)
+
+            with patch.object(runner.ring_recorder, "start"), patch.object(runner.ring_recorder, "stop"), \
+                    patch.object(runner, "step", side_effect=blocked_step):
+                self.assertEqual(runner.health.get_health_snapshot()["status"], "starting")
+                runner.start()
+                try:
+                    self.assertTrue(first_step.wait(2))
+                    self.assertEqual(runner.health.get_health_snapshot()["reason"], "no_frames_received")
+                    with patch("time.time", return_value=100.0):
+                        real_step(frame=np.zeros((16, 16, 3), dtype=np.uint8), timestamp=0, frame_id=1,
+                                  detections=[])
+                        self.assertEqual(runner.health.get_health_snapshot()["status"], "healthy")
+                    with patch("time.time", return_value=106.0):
+                        self.assertEqual(runner.health.get_health_snapshot()["reason"], "queue_stall")
+                    runner.stop(timeout=0)
+                    self.assertEqual(runner.health.get_health_snapshot()["reason"], "system_stopped")
+                    real_step(frame=np.zeros((16, 16, 3), dtype=np.uint8), timestamp=1, frame_id=2,
+                              detections=[])
+                    self.assertEqual(runner.health.get_health_snapshot()["reason"], "system_stopped")
+                finally:
+                    release_step.set()
+                    runner.stop()
+                first_step.clear()
+                runner.start()
+                try:
+                    self.assertTrue(first_step.wait(2))
+                    self.assertEqual(runner.health.get_health_snapshot()["reason"], "no_frames_received")
+                finally:
+                    runner.stop()
 
 
 class TestLivePerceptionRunnerInit(unittest.TestCase):
@@ -251,9 +306,9 @@ class TestLivePerceptionRunnerIncidents(unittest.TestCase):
             events = self.runner.step(frame=dummy_rgb, timestamp=t, frame_id=frame_id, detections=dets)
             self.assertEqual(events, [])
 
-        # Trigger at t = 3.2 (> 3.0s persistent lying)
+        # Trigger at t = 3.3 (> 3.0s persistent lying after track activation)
         frame_id += 1
-        t_trigger = 3.2
+        t_trigger = 3.3
         dets = [{"bbox": [100.0, 200.0, 260.0, 260.0], "score": 0.88, "label": "person"}]
         events = self.runner.step(frame=dummy_rgb, timestamp=t_trigger, frame_id=frame_id, detections=dets)
 
@@ -383,6 +438,313 @@ class TestLivePerceptionRunnerLifecycle(unittest.TestCase):
             self.assertEqual(status["status"], "running")
 
         self.assertEqual(runner.status()["status"], "stopped")
+
+
+class TestLivePipelineP0P1Improvements(unittest.TestCase):
+    """Test suite for P0-03, P1-07, P1-08, P1-09, and Mục 15 specifications."""
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.sample_fixture = Path(".scratch/replay-measurements/h264-10s.mkv")
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_bgr_to_rgb_conversion_before_pipeline(self) -> None:
+        """P1-07: cv2.VideoCapture BGR frames are converted to RGB (cv2.COLOR_BGR2RGB)
+        before being passed to pipeline.process_frame."""
+        runner = LivePerceptionRunner(
+            root=self.root / "bgr_test",
+            rtsp_url="",
+            fallback_path=self.sample_fixture,
+        )
+        # Create a distinct BGR test frame: Blue channel=255, Green=0, Red=0
+        bgr_frame = np.zeros((16, 16, 3), dtype=np.uint8)
+        bgr_frame[:, :] = (255, 0, 0)
+
+        received_frames: list[np.ndarray] = []
+        original_process = runner.pipeline.process_frame
+
+        def capture_process_frame(rgb, *args, **kwargs):
+            received_frames.append(np.copy(rgb))
+            return original_process(rgb, *args, **kwargs)
+
+        fake_cap = unittest.mock.MagicMock()
+        fake_cap.isOpened.return_value = True
+        fake_cap.read.return_value = (True, bgr_frame)
+
+        with patch.object(runner, "_ensure_capture", return_value=fake_cap), \
+             patch.object(runner.pipeline, "process_frame", side_effect=capture_process_frame):
+            runner.step()
+
+        self.assertEqual(len(received_frames), 1)
+        # In RGB, BGR (255, 0, 0) becomes (0, 0, 255) (Red=0, Green=0, Blue=255)
+        # OpenCV converts BGR [B, G, R] to RGB [R, G, B]
+        np.testing.assert_array_equal(received_frames[0][0, 0], np.array([0, 0, 255], dtype=np.uint8))
+
+    def test_low_latency_capture_options_configured(self) -> None:
+        """P1-08: OPENCV_FFMPEG_CAPTURE_OPTIONS includes low latency flags
+        (rtsp_transport;tcp|fflags;nobuffer|max_delay;500000) before VideoCapture open."""
+        runner = LivePerceptionRunner(
+            root=self.root / "low_latency",
+            rtsp_url="",
+            fallback_path=self.sample_fixture,
+        )
+        with patch("cv2.VideoCapture") as mock_vc:
+            mock_inst = unittest.mock.MagicMock()
+            mock_inst.isOpened.return_value = True
+            mock_vc.return_value = mock_inst
+
+            cap = runner._open_capture("rtsp://camera.test:554/live")
+            self.assertIsNotNone(cap)
+            opts = os.environ.get("OPENCV_FFMPEG_CAPTURE_OPTIONS", "")
+            self.assertIn("fflags;nobuffer", opts)
+            self.assertIn("max_delay;500000", opts)
+            mock_inst.set.assert_any_call(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    def test_monotonic_timestamp_without_round_collision(self) -> None:
+        """P1-09: Timestamp generation removes round(..., 3) and guarantees strict monotonicity."""
+        runner = LivePerceptionRunner(
+            root=self.root / "mono_ts",
+            rtsp_url="",
+            fallback_path=self.sample_fixture,
+        )
+        dummy = np.zeros((16, 16, 3), dtype=np.uint8)
+
+        # Simulate two frames processed at the exact same monotonic time
+        fixed_mono = 100.0
+        with patch("time.monotonic", return_value=fixed_mono):
+            runner.step(frame=dummy)
+            ts1 = runner.last_frame_time
+            runner.step(frame=dummy)
+            ts2 = runner.last_frame_time
+
+        self.assertIsNotNone(ts1)
+        self.assertIsNotNone(ts2)
+        assert ts1 is not None and ts2 is not None
+        self.assertGreater(ts2, ts1)
+
+    def test_eof_stream_loss_emits_missing_status_instead_of_synthetic_gray(self) -> None:
+        """Mục 15: When RTSP stream drops / EOF, do NOT inject synthetic gray frame (35,35,35).
+        Emit observation status missing/failed instead."""
+        runner = LivePerceptionRunner(
+            root=self.root / "eof_test",
+            rtsp_url="rtsp://camera.test:554/live",
+            fallback_path=self.sample_fixture,
+        )
+        # Mock capture that fails read (stream EOF)
+        fake_cap = unittest.mock.MagicMock()
+        fake_cap.isOpened.return_value = True
+        fake_cap.read.return_value = (False, None)
+        runner._cap = fake_cap
+        runner._current_source = "rtsp"
+        runner.is_connected = True
+
+        runner.step()
+
+        # Last observation must have detection_status 'missing' or 'failed'
+        last_obs = runner.pipeline.last_observation
+        self.assertIsNotNone(last_obs)
+        assert last_obs is not None
+        self.assertIn(last_obs["detection_status"], {"missing", "failed"})
+        self.assertEqual(last_obs["detections"], [])
+
+        # Camera capability in health must reflect disconnected
+        health_snap = runner.health.get_health_snapshot()
+        self.assertEqual(health_snap["capabilities"]["camera"], "disconnected")
+
+    def test_failed_rtsp_open_counts_exactly_one_disconnect_per_read(self) -> None:
+        """ocr #9: _ensure_capture and _read_next_frame must not both call handle_disconnect."""
+        runner = LivePerceptionRunner(
+            root=self.root / "dbl_disc",
+            rtsp_url="rtsp://camera.test:554/live",
+            fallback_path=self.sample_fixture,
+        )
+        runner._current_source = "rtsp"
+        runner._cap = None
+        before = runner.disconnect_count
+        with patch.object(runner, "_open_capture", return_value=None):
+            frame, status = runner._read_next_frame()
+        self.assertIsNone(frame)
+        self.assertEqual(status, "missing")
+        self.assertEqual(runner.disconnect_count - before, 1)
+
+    def test_recorder_rtsp_callback_does_not_hold_runner_lock_during_reconnect(self) -> None:
+        """ocr #1: reconnect() does blocking probe/open I/O; it must run without self._lock held.
+        The lock is an RLock, so probe it from a different thread."""
+        runner = LivePerceptionRunner(
+            root=self.root / "cb_lock",
+            rtsp_url="rtsp://camera.test:554/live",
+            fallback_path=self.sample_fixture,
+        )
+        runner.is_connected = False
+        probe_results: list[bool] = []
+
+        def fake_reconnect() -> bool:
+            def try_lock() -> None:
+                got = runner._lock.acquire(timeout=0.2)
+                if got:
+                    runner._lock.release()
+                probe_results.append(got)
+
+            worker = threading.Thread(target=try_lock)
+            worker.start()
+            worker.join()
+            return True
+
+        with patch.object(runner, "reconnect", side_effect=fake_reconnect):
+            runner._on_recorder_source_change("rtsp", runner.session_id)
+        self.assertEqual(probe_results, [True], "runner lock must be free while reconnect() performs I/O")
+
+    def test_stop_joins_reconnect_thread_even_if_run_loop_already_ended(self) -> None:
+        """ocr #10: stop() must not early-return and leak a live reconnect thread."""
+        runner = LivePerceptionRunner(
+            root=self.root / "stop_recon",
+            rtsp_url="rtsp://camera.test:554/live",
+            fallback_path=self.sample_fixture,
+        )
+        runner._is_running = False
+        runner._thread = None
+        runner._stop_event.clear()
+        reconnect_thread = threading.Thread(target=lambda: runner._stop_event.wait(5.0), daemon=True)
+        reconnect_thread.start()
+        runner._reconnect_thread = reconnect_thread
+
+        runner.stop(timeout=2.0)
+
+        self.assertTrue(runner._stop_event.is_set())
+        self.assertFalse(reconnect_thread.is_alive(), "reconnect thread must be stopped and joined")
+
+    def test_rtsp_reconnect_exponential_backoff_and_epoch_increment(self) -> None:
+        """P0-03: When RTSP drops, runner does not switch permanently to fallback.
+        Reconnect backoff retries RTSP, and on success calls handle_reconnect()
+        (epoch incremented, new session_id, health restored)."""
+        sleep_durations: list[float] = []
+        runner = LivePerceptionRunner(
+            root=self.root / "recon_test",
+            rtsp_url="rtsp://camera.test:554/live",
+            fallback_path=self.sample_fixture,
+            reconnect_initial_delay=0.01,
+            sleeper=lambda d: sleep_durations.append(d),
+        )
+        initial_epoch = runner.pipeline.core_epoch
+        initial_session = runner.session_id
+
+        # 1. Trigger disconnect
+        runner.handle_disconnect("network_drop")
+        self.assertFalse(runner.is_connected)
+        health_snap = runner.health.get_health_snapshot()
+        self.assertEqual(health_snap["capabilities"]["camera"], "disconnected")
+
+        # 2. Simulate RTSP recovery: probe succeeds and capture opens
+        fake_cap = unittest.mock.MagicMock()
+        fake_cap.isOpened.return_value = True
+
+        with patch("apps.edge.live_pipeline.probe_rtsp_stream", return_value=None), \
+             patch.object(runner, "_open_capture", return_value=fake_cap):
+            reconnected = runner.reconnect()
+
+        self.assertTrue(reconnected)
+        self.assertTrue(runner.is_connected)
+        self.assertEqual(runner.pipeline.core_epoch, initial_epoch + 1)
+        self.assertNotEqual(runner.session_id, initial_session)
+        self.assertEqual(runner.current_source, "rtsp")
+        self.assertEqual(runner.health.get_health_snapshot()["capabilities"]["camera"], "active")
+
+    def test_session_id_invariant_across_disconnect_fallback_and_reconnect(self) -> None:
+        """Requirement 2 & 3: Invariant must hold across the entire sequence:
+        rtsp -> disconnect -> fallback -> reconnect success:
+        pipeline.stream_session_id == ring_recorder.session_id == health.recorder_session_id.
+        """
+        runner = LivePerceptionRunner(
+            root=self.root / "invariant_test",
+            rtsp_url="rtsp://camera.test:554/live",
+            fallback_path=self.sample_fixture,
+            reconnect_initial_delay=0.01,
+            sleeper=lambda d: None,
+        )
+        # Step 1: Initial state on RTSP
+        runner._current_source = "rtsp"
+        runner.is_connected = True
+        s1 = runner.session_id
+        self.assertEqual(runner.pipeline.stream_session_id, s1)
+        self.assertEqual(runner.ring_recorder.session_id, s1)
+        self.assertEqual(runner.health.recorder_session_id, s1)
+        epoch1 = runner.pipeline.core_epoch
+
+        # Step 2: RTSP disconnects -> recorder enters fallback
+        runner.handle_disconnect("network_drop")
+        # When ring_recorder enters fallback, rollover_session generates fallback session
+        # and notifies runner via on_source_change callback
+        if runner.ring_recorder is not None:
+            runner.ring_recorder._current_source = "fallback"
+            fallback_id = runner.ring_recorder.rollover_session()
+            if getattr(runner.ring_recorder, "on_source_change", None) is not None:
+                runner.ring_recorder.on_source_change("fallback", fallback_id)
+
+        # Invariant must hold in fallback
+        self.assertEqual(runner.pipeline.stream_session_id, runner.ring_recorder.session_id)
+        self.assertEqual(runner.ring_recorder.session_id, runner.health.recorder_session_id)
+        self.assertEqual(runner.session_id, runner.ring_recorder.session_id)
+        s2 = runner.session_id
+        self.assertNotEqual(s2, s1)
+        # Core epoch must NOT increment on disconnect/fallback
+        self.assertEqual(runner.pipeline.core_epoch, epoch1)
+
+        # Step 3: Reconnect succeeds
+        fake_cap = unittest.mock.MagicMock()
+        fake_cap.isOpened.return_value = True
+        with patch("apps.edge.live_pipeline.probe_rtsp_stream", return_value=None), \
+             patch.object(runner, "_open_capture", return_value=fake_cap):
+            reconnected = runner.reconnect()
+
+        self.assertTrue(reconnected)
+        self.assertTrue(runner.is_connected)
+        s3 = runner.session_id
+        self.assertNotEqual(s3, s2)
+        self.assertNotEqual(s3, s1)
+        # Invariant must hold after reconnect:
+        self.assertEqual(runner.pipeline.stream_session_id, s3)
+        self.assertEqual(runner.ring_recorder.session_id, s3)
+        self.assertEqual(runner.health.recorder_session_id, s3)
+        # Core epoch must have incremented by exactly 1
+        self.assertEqual(runner.pipeline.core_epoch, epoch1 + 1)
+
+    def test_reconnect_increments_core_epoch_exactly_once_no_double_increment(self) -> None:
+        """Requirement 4: Each successful reconnect increments core_epoch exactly once,
+        even if reconnect is triggered from multiple paths (e.g. reconnect() and recorder callback).
+        """
+        runner = LivePerceptionRunner(
+            root=self.root / "epoch_test",
+            rtsp_url="rtsp://camera.test:554/live",
+            fallback_path=self.sample_fixture,
+            reconnect_initial_delay=0.01,
+            sleeper=lambda d: None,
+        )
+        initial_epoch = runner.pipeline.core_epoch
+
+        # Disconnect
+        runner.handle_disconnect("network_drop")
+        self.assertFalse(runner.is_connected)
+
+        fake_cap = unittest.mock.MagicMock()
+        fake_cap.isOpened.return_value = True
+
+        with patch("apps.edge.live_pipeline.probe_rtsp_stream", return_value=None), \
+             patch.object(runner, "_open_capture", return_value=fake_cap):
+            # Path 1: reconnect() is called
+            ok1 = runner.reconnect()
+            self.assertTrue(ok1)
+            # Path 2: simulate secondary path (e.g. second call or recorder callback)
+            if runner.ring_recorder and getattr(runner.ring_recorder, "on_source_change", None):
+                runner.ring_recorder.on_source_change("rtsp", runner.ring_recorder.session_id)
+            ok2 = runner.reconnect()
+            self.assertTrue(ok2)
+
+        # core_epoch must increment exactly ONCE (initial_epoch + 1), NOT twice
+        self.assertEqual(runner.pipeline.core_epoch, initial_epoch + 1)
+        self.assertEqual(runner.discontinuity_count, 1)
 
 
 if __name__ == "__main__":
