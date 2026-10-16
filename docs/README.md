@@ -1,6 +1,6 @@
 # Tài liệu hệ thống AI Camera
 
-Cập nhật 2026-10-11. Trạng thái hiện tại: thiết kế/backlog đã duyệt; runtime, benchmark và pilot chưa nghiệm thu. Bắt đầu ở đây thay vì đọc log theo thời gian.
+Cập nhật 2026-10-15. Đã có implementation software lab cho perception/live runner, recorder/evidence, delivery/server và pose tùy chọn; benchmark target, chất lượng person-down và pilot chưa nghiệm thu. [Research §14](../traffic-ai-camera-research/report.md#14-cập-nhật-theo-implementation-và-thử-nghiệm-15-10-2026) phân biệt mã hiện có, log test và gate còn mở. Bắt đầu ở đây thay vì đọc log theo thời gian.
 
 ## Đọc theo nhu cầu
 
@@ -15,7 +15,7 @@ Cập nhật 2026-10-11. Trạng thái hiện tại: thiết kế/backlog đã d
 | Chi tiết nghiệm thu theo module | [18 checklist module](implementation-checklists/README.md) |
 | Cross-module failure tests và release | [Integration/G0–G5](implementation-checklists/integration-release.md) |
 | Facts/ODD/sizing/benchmark còn cần | [Deployment readiness](architecture/deployment-readiness.md) |
-| Nghiên cứu model/camera/data/chi phí | [Research](../traffic-ai-camera-research/README.md) — giá có ngày quan sát, không là quote hiện tại |
+| Nghiên cứu model/camera/data/chi phí và phản biện bước tiếp theo | [Research](../traffic-ai-camera-research/README.md) — cập nhật implementation15-10; giá giữ ngày quan sát, không là quote hiện tại |
 
 ## Nguồn chuẩn và cập nhật
 

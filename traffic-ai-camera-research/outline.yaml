@@ -1,13 +1,15 @@
 topic: 'AI Camera giao thông xử lý tại edge: tai nạn, té ngã, vi phạm'
 research_date: '2026-10-09'
-updated_date: '2026-10-11'
+updated_date: '2026-10-15'
 architecture_reference: '../docs/architecture/system-architecture.md'
 language: vi
-status: 'Đồng bộ thiết kế/contracts; chưa benchmark, giá giữ ngày quan sát09–10-10'
+status: 'Đối chiếu implementation/log/artifact replay; target capacity và event quality chưa nghiệm thu; giá giữ09–10-10'
+implementation_snapshot: '6fff369f4c30dd6faff0150b660cf5e065207daa; đối chiếu thêm working tree, không là release sign-off'
 scope:
   literature: 'Không giới hạn; ưu tiên nguồn gốc còn phù hợp'
   prices: 'Quan sát lịch sử09–10-10-2026; cần quote mới trước procurement'
-  baseline: 'Một camera person-down; ONNX/native C++ + Python; capacity/FPS theo target benchmark'
+  baseline: 'Một camera person-down; runtime Python + ONNX/FFmpeg; native C++ là thiết kế, đề xuất đánh giá lại thứ tự sau profiling'
+  update_sources: 'Ưu tiên nguồn chính thức/paper từ2024; giữ nguồn nền tảng cũ khi cần; không refresh giá/pháp lý'
   medical_boundary: 'Cảnh báo ngã/quỵ xuống/bất động; không chẩn đoán đột quỵ'
 items:
   - {id: camera, name: 'Camera IP cố định RTSP/ONVIF, WDR, ánh sáng, ống kính, PoE'}
@@ -30,6 +32,16 @@ items:
   - {id: operations, name: 'OTA, watchdog, health, tủ, UPS, chống sét, bảo trì'}
   - {id: governance, name: 'Giấy phép thương mại, chuỗi bằng chứng, dữ liệu cá nhân Việt Nam'}
   - {id: acceptance, name: 'Event-level metrics, camera-ngày, P95/P99, overload, pilot'}
+  - {id: implementation_evidence, name: 'Mã hiện có, log test, snapshot replay, tracker drift và gate chưa nghiệm thu'}
+  - {id: quality_ablation, name: 'Rule-only/pose verifier, FPS sweep, onset error và domain shift'}
+  - {id: migration_decisions, name: 'Stage profiling, native C++/provider/RKNN migration gate và TCO'}
+  - {id: durability_runtime, name: 'SQLite runtime/backport, pin concurrency,413, filesystem/outbox/receipt crash windows'}
+execution:
+  batch_size: 1
+  items_per_agent: 5
+  output_dir: '.'
+  mode: 'Một agent bổ sung web; đối chiếu repo và cập nhật trực tiếp tài liệu hiện có'
+  configuration_status: 'Mặc định lượt cập nhật, chưa phải cấu hình deep-research được người dùng xác nhận'
 deliverables:
   - fields.yaml
   - report.md

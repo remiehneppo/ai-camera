@@ -1,5 +1,7 @@
 # Báo cáo nghiên cứu: AI Camera giao thông xử lý tại edge
 
+**Cập nhật thực nghiệm/implementation: 15-10-2026**, đối chiếu commit `6fff369f4c30dd6faff0150b660cf5e065207daa` và working tree hiện có. Đọc [§14](#14-cập-nhật-theo-implementation-và-thử-nghiệm-15-10-2026) trước: đây là đánh giá hiện trạng và đề xuất tiếp theo. Các mục phần cứng/giá bên dưới giữ mốc lịch sử; lựa chọn native C++ là thiết kế đã duyệt, chưa phải runtime hiện có. Lượt này chỉ sửa tài liệu, không chạy lại benchmark hay ký gate.
+
 **Mốc nghiên cứu theo đồng hồ hệ thống: 09-10-2026.** Phạm vi được người dùng đồng ý: tài liệu không giới hạn thời gian, ưu tiên giá bán hiện hành Việt Nam, bổ sung quốc tế; PoC 1–4 camera, luồng 1080p, phân tích mục tiêu 10–15 FPS/camera. Báo cáo là nghiên cứu và đề xuất thiết kế, không phải benchmark trên phần cứng hoặc báo giá mua hàng đã xác nhận. Website được truy xuất trong phiên, không phải bản lưu lịch sử; ngày cập nhật/tồn kho của website có thể lệch đồng hồ hệ thống.
 
 **Đồng bộ thiết kế: 11-10-2026.** Nguồn chuẩn là [mục lục thiết kế](../docs/README.md), [kiến trúc](../docs/architecture/system-architecture.md) và [contracts](../docs/architecture/contracts.md). Bản đầu: person-down một camera cố định, ONNX/native C++ + Python, recorder độc lập, HTTPS→FastAPI/MongoDB và dev demo. RKNN chỉ khi chọn target; vehicle là nhánh sau. Nghiên cứu giữ lý do lựa chọn và bất định, không là backlog thứ hai.
@@ -93,7 +95,7 @@ Nguồn gốc: [YOLOX](https://github.com/Megvii-BaseDetection/YOLOX/blob/main/L
 
 Apache/MIT cho phép sử dụng code thương mại với nghĩa vụ license/notice tương ứng; AGPL không cấm kiếm tiền, nhưng có nghĩa vụ copyleft/source tùy phân phối, sửa đổi và truy cập mạng. Với sản phẩm proprietary dùng Ultralytics, cần đánh giá pháp lý và Enterprise/OEM terms thay vì suy luận AGPL tự động được phép hay bị cấm. Không thấy mức phí Enterprise công khai đủ để lập dự toán.
 
-**Stack hiện hành:** YOLOX-small hoặc tiny → ByteTrack → RTMPose nhẹ → state machine/temporal classifier tự huấn luyện trên dữ liệu có quyền sử dụng. RTMDet là đối chứng tùy kết quả, không bắt buộc PoC và không cài song song trong baseline. Detector COCO mặc định không có nhãn tai nạn, ngã, helmet hoặc biển số.
+**Stack thực tế tại 15-10:** YOLOX-Tiny ONNX → tracker Python hai giai đoạn → rule bbox/chuyển động/thời gian. RTMPose estimator/scheduler đã có implementation tùy chọn; pose outcomes chưa được IncidentEngine dùng để quyết định sự kiện. Temporal classifier tự huấn luyện chưa được xác nhận. RTMDet là đối chứng tùy kết quả, không bắt buộc PoC và không cài song song trong baseline. Detector COCO mặc định không có nhãn tai nạn, ngã, helmet hoặc biển số.
 
 ## 4. Thiết kế nhận diện sự kiện
 
@@ -142,6 +144,7 @@ ANPR/helmet/vi phạm đèn đỏ, radar, ReID và nhận dạng danh tính khô
 ## 5. Video pipeline, runtime và edge–server
 
 ```text
+Thiết kế đích (runtime hiện tại xem §14):
 Camera RTSP đã nén
   ├── compressed segment/ring buffer → pin clip trước/sau → event upload / truy hồi
   └── native software decode (hardware khi được chọn/đo) → quality metrics → resize/crop → detector → tracker
@@ -351,3 +354,82 @@ Các hợp đồng và trạng thái chuẩn nằm ở [contracts](../docs/archi
 - 10-10-2026: đồng bộ camera budget/H1c/IMX219/native analytics; portable modules và tham chiếu kiến trúc; đọc lại4giá Tapo. Các16giá cũ/BOM không được refresh, H1c/RPi5/OrangePi5 Việt Nam chưa có quote mới.
 
 - 11-10-2026: đồng bộ thiết kế/contracts/target gates và bỏ PostgreSQL, native-after-profiling, MQTT ingress, ngưỡng/timeline PoC cũ khỏi định hướng hiện hành. Giá/nguồn thị trường giữ ngày quan sát, không refresh.
+
+- 15-10-2026: đối chiếu implementation, log thử nghiệm/review và số đo replay; bổ sung §14, cập nhật outline/fields/sources. Phản biện native-first, pose verification, FPS và sizing evidence. Không đổi ADR, ticket Execution, giá hoặc runtime.
+
+## 14. Cập nhật theo implementation và thử nghiệm 15-10-2026
+
+### 14.1 Phạm vi và độ tin cậy
+
+Snapshot nền: `6fff369f4c30dd6faff0150b660cf5e065207daa`. Đã dùng CodeGraph để xác định đường chạy, đọc các hàm pipeline/incident liên quan, log triển khai và artifact replay. File chưa tracked trong working tree không tự trở thành bằng chứng release. Ngày báo cáo theo môi trường; ngày truy cập web không chứng minh nguồn được xuất bản đúng ngày đó.
+
+Phân loại: **mã hiện có** xác nhận cấu trúc/hành vi dự kiến; **log test** là kết quả lịch sử với giới hạn ghi trong log; **số đo artifact** chỉ áp dụng workload/snapshot đã đo; **nghiệm thu** cần report và sign-off theo gate. Lượt cập nhật này không chạy lại suite, camera, browser hay board.
+
+Tracker hiện có độ lệch nội bộ: phần “Cách chọn việc” nói #08 chưa bắt đầu nhưng bảng ghi done; #13 mang tên native nhưng implementation được đối chiếu là Python. Vì vậy không dùng số ticket done để suy native parity/G1 đã đạt. Cần chủ sở hữu đồng bộ acceptance/evidence trong tracker; research không tự đổi Execution.
+
+### 14.2 Những gì đã có và phần chưa được chứng minh
+
+| Thành phần | Hiện trạng được đối chiếu | Bằng chứng và giới hạn |
+|---|---|---|
+| Detector | YOLOX-Tiny ONNX, runtime/model pins, preprocess raw BGR, inclusive-pixel per-class NMS | [Oracle #11](../docs/logs/2026-10-12-ticket-11.md); independent goldens là parity fixtures, không phải event recall |
+| Tracking | Python two-stage score association, tentative mặc định 2 hits, dự đoán vận tốc hằng từ observation history | [Triển khai tracker](../docs/logs/2026-10-15-impl-tracker-detector.md) và `apps/edge/tracker.py`; chưa phải full reference ByteTrack/Kalman, chưa có ID-switch report ngoài đường |
+| Pose | RTMPose estimator, cache frame, scheduler nhiều nhánh, deadline/terminal outcomes; tùy chọn qua PoseManager | [Pose fixes](../docs/logs/2026-10-15-impl-pose.md); `pipeline.py` lưu outcomes vào observation nhưng `IncidentEngine.process_tracks(tracks, timestamp)` không nhận keypoints. Chưa có pose-based event verifier |
+| Person-down | Rule person-only, ROI, bbox aspect ratio, vận tốc pixel, persistence/cooldown; giữ onset khi người còn chuyển động | [Incident fixes](../docs/logs/2026-10-15-impl-incident-pipeline.md), `apps/edge/incident.py`; chưa xác nhận chất lượng ngã nhanh/chậm/che khuất theo site |
+| Live source | Runner OpenCV và recorder FFmpeg, reconnect/backoff, đồng bộ session, observation gap; có tùy chọn drain frames | [RTSP fixes](../docs/logs/2026-10-15-impl-rtsp-live.md); constructor `drain_frames=False`, không mặc định mọi entrypoint đã bật. Mock/fake capture không chứng minh latency camera thật |
+| Ring/evidence/quota | Stream-copy segments, pin/finalize/receipt, reconcile, bảo vệ unACK và state reserve, cleanup ACK/released | [Storage fixes](../docs/logs/2026-10-15-impl-storage.md), [#51 hardening](../docs/logs/2026-10-13-ticket-51-hardening.md); race finalize/prune/release chưa có stress đa luồng thực tế |
+| Delivery/backend | SQLite outbox; FastAPI/MongoDB revisions/review/dataset; evidence streaming, cursor pagination | [Server/outbox fixes](../docs/logs/2026-10-15-impl-server-outbox.md); một-member MongoDB không HA, chưa chứng minh WAN autonomy/restore/pilot |
+| ODD | Mean brightness/contrast thành trạng thái chất lượng; ROI có qua constructor | `evaluate_odd` trong `apps/edge/pipeline.py`; heuristic này không chứng minh ODD supported, blur/freeze/occlusion monitoring hoặc signed site activation đầy đủ |
+| Native/target | Native C++ vẫn là hướng thiết kế P1/P2; RKNN có điều kiện theo target | Chưa có bằng chứng C++ detector/tracker/pose hoặc target capacity trong phạm vi đối chiếu. Có Python gọi thư viện native không tương đương hoàn thành native boundary |
+
+Các log triển khai là lịch sử: thay đổi NMS/scale trong log tracker đã được **hoàn tác** ở [dispatch summary](../docs/logs/2026-10-15-implement-dispatch-summary.md). Không lấy một log trung gian làm trạng thái cuối. Cùng summary ghi **409 passed**, gồm 11 regression mới sau sửa; đây là kết quả ghi lại, không phải suite vừa chạy trong lượt research. [Code-review sau sửa](../docs/logs/2026-10-15-code-review-of-implementation.md) còn giới hạn camera thật và concurrency.
+
+### 14.3 Kết quả thử nghiệm có thể dùng
+
+| Evidence | Kết quả ghi nhận | Kết luận được phép |
+|---|---|---|
+| Oracle #11, pinned CPU runtime | 85/85 tại mốc 12-10; ảnh original 13 detections/10 person, crop 9/7, negative 0 | Pre/postprocess và artifact parity trên fixture; không suy recall/FP/pose accuracy |
+| Suite sau sửa 15-10 | Log ghi 409 passed | Regression phần mềm trong môi trường log; không tự đạt G1/G2/G3 hoặc mất điện an toàn |
+| Replay synthetic 320×180 H.264, 30 FPS nguồn, fast mode, 10/100/1.000/10.000 giây | Đọc lại12 record trong `results-final.jsonl`:12/12 callback trước EOF; first callback0,079–0,105s; Python RSS21.320–22.316KiB; simultaneous Python+ffprobe RSS71.996–74.712KiB | Timestamp replay incremental trong envelope này; sampled RSS không bảo đảm peak; không phải decode+detector+pose benchmark |
+| RTSP reconnect/pose scheduling/quota faults | Có tests dùng fake/mock và regression trong log | Chứng minh case phần mềm cụ thể; chưa đo reconnect camera/codec change, thermal, real power-cut hoặc WAN24h |
+
+Artifact replay và [script tái lập](../.scratch/replay-measurements/reproduce.sh) đang ở thư mục chưa tracked. Snapshot recorder trong JSONL khác mã hiện tại; không gán số đo này cho HEAD. Script ghi đè snapshot/results khi chạy, nên phải lưu bản cũ trước tái lập. Không so throughput từ callback timestamp với inference FPS. Hash trong record nhận diện snapshot, không thay manifest hash fixture/model/config đầy đủ. Bước tiếp theo là đóng gói evidence cần giữ bằng version/manifest; không tự thêm video lớn vào Git.
+
+### 14.4 Phản biện và quyết định kỹ thuật đề xuất
+
+Các dòng **đề xuất** dưới đây chưa được accepted; chúng không sửa Q1–Q19/ADR. Nếu thay scope hoặc gate thì phải cập nhật plan/contracts/ticket tương ứng trong một quyết định riêng.
+
+| Vấn đề | Nhận định và khuyến nghị | Điều kiện quyết định |
+|---|---|---|
+| Native C++ P1/P2 đã chốt | **Đề xuất mở lại thứ tự đầu tư**, không bỏ semantic boundary. ORT/FFmpeg đã làm phần nặng ở native; viết lại orchestration khi chưa profile có thể tăng chi phí mà không giảm frame age | Đo stage time/queue age dưới recording+upload+pose. Chỉ chuyển hotspot khi nó gây vi phạm SLO và thử nghiệm native cải thiện đủ để bù maintenance; owner duyệt mức cải thiện trước A/B. [ORT profiling](https://onnxruntime.ai/docs/performance/tune-performance/profiling-tools.html) |
+| 3 FPS live so với mục tiêu nghiên cứu 10–15 FPS | Cả hai đều chưa có quality acceptance. 3 FPS có thể bỏ diễn biến onset; tăng toàn pipeline lên 15 FPS có thể tăng queue age và tải pose | Replay cùng clip ở 3/5/10/15 FPS, đo event recall, onset error, FP/camera-hour, track fragmentation và P95 frame age; chọn mức thấp nhất đạt mục tiêu đã duyệt |
+| Pose hiện có nhưng chưa quyết định event | Ưu tiên chứng minh pose tạo lợi ích trước thêm temporal classifier. So rule-only với pose verifier cùng tập; pose missing phải có trạng thái coverage rõ | Report gain về recall/FP, coverage và latency; không biến thiếu keypoints thành “an toàn”. Giữ đường persistent-lying khi onset không quan sát được |
+| Pixel velocity/aspect ratio dùng chung site | 15 px/s, aspect ratio 1.2 và dwell 3s là heuristic lab, không quy đổi vật lý hoặc probability. Detector score đang được đưa thành incident confidence; không diễn giải như xác suất ngã | A/B motion chuẩn hóa theo chiều cao bbox và camera/site; held-out test. Chỉ thêm homography khi use case cần, không giả định khớp nằm trên mặt đường |
+| ODD “normal” | Brightness/contrast bình thường không chứng minh đủ pixel người, không che khuất hoặc không freeze | Tách image-quality signal khỏi supported-ODD acceptance; version policy/site và kiểm tra blur/freeze/ROI invalid. ROI chân bbox có thể loại nhầm người đang nằm sát biên; thử polygon overlap/center trên hard negatives trước đổi rule |
+| Latest-frame/drain | Hợp lý cho live latency nhưng bỏ frame làm giảm temporal coverage; default flag chưa đủ chứng minh entrypoint áp dụng đúng | Đo frame age, dropped coverage và continuity; reset certainty qua gap. Raw recorder tiếp tục độc lập; không dùng latest-only cho deterministic replay |
+| NMS/scale parity | Giữ golden-v1 hiện tại; “sửa toán học” không đủ lý do phá parity | Khi có lỗi chất lượng đo được: version model/postprocess/golden mới, ghi migration và event regression; không sửa golden chỉ để test xanh |
+| RKNN/INT8/board | Chưa nên chọn từ TOPS hoặc giá box. Ưu tiên workload thật và phương án ONNX hiện có | Pin toolkit/runtime/driver/artifact, conversion parity và event quality ngày/đêm, record+upload+pose soak trên board. [RKNN releases](https://github.com/airockchip/rknn-toolkit2/releases) là khả năng SDK, không bằng chứng dự án |
+| MongoDB | Giữ lựa chọn đã accepted; đổi database lúc này chưa có bottleneck/TCO report hỗ trợ | Đo transaction latency/outage/restore trên version đang pin. One-member lab có transaction không đồng nghĩa central HA |
+
+### 14.5 Tối ưu evidence và độ bền cần ưu tiên
+
+**Giữ stream-copy raw.** FFmpeg segment muxer cắt theo keyframe nên segment target2s không bảo đảm mọi segment đúng2s; phải đo GOP, actual ranges và gap bằng PTS. Không chuyển sang re-encode chỉ để cửa sổ đẹp hơn nếu chưa có yêu cầu; bản derived cần provenance riêng. [FFmpeg segment documentation](https://ffmpeg.org/ffmpeg-formats.html#segment_002c-stream_005fsegment_002c-ssegment)
+
+**Trần upload100 MiB cần sizing và hành vi từ chối rõ.** 30s clip đạt100 MiB ở bitrate trung bình khoảng28 Mb/s (`100×2^20×8/30`), chưa container/GOP margin. Clip dài do segment/keyframe có thể chạm trần sớm hơn. Giữ giới hạn bảo vệ RAM/disk, nhưng xác định max artifact theo VBR/GOP thực, test413 ở edge, bảo toàn local pin và hiển thị operational fault thay vì retry mù. ACK metadata không giải phóng clip. Đo B/U/G và drain backlog khi upload cạnh tranh recording; outage24h vẫn là mục tiêu chưa nghiệm thu.
+
+**SQLite cần xác minh bản vá runtime.** Probe read-only trong lượt này: `.venv-oracle/bin/python -c 'import sqlite3; print(sqlite3.sqlite_version)'` → **3.45.1**. SQLite công bố WAL-reset race khi nhiều connection write/checkpoint đồng thời, sửa ở3.51.3 và backport3.44.6/3.50.7. Số version chưa xác nhận distro có backport; chưa quan sát corruption tại dự án. Đề xuất platform kiểm tra package patch/source ID rồi pin bản đã sửa và chạy recovery/concurrency trước pilot; không tự nâng dependency trong lượt docs. [SQLite WAL §11](https://www.sqlite.org/wal.html#walresetbug)
+
+**Không giảm durability để lấy benchmark đẹp.** Giữ bảo vệ journal/evidence; đo fsync/checkpoint/lock contention, peak WAL, temp+pin overlap và time-to-full trước tuning. Race finalize/prune/release cần stress đa luồng; process kill không thay power-cut/PLP/endurance. WAL, filesystem clip và remote receipt có các crash window riêng, cần reconcile/idempotency xuyên suốt.
+
+### 14.6 Thứ tự thử nghiệm và đầu ra cần có
+
+Owner là vai trò đề xuất, người thực hiện/sign-off còn pending. Bảng này là chương trình nghiên cứu bổ sung vào tickets hiện có, không là backlog Execution thứ hai.
+
+| Ưu tiên / tham chiếu | Owner, dependency | Đầu ra và acceptance |
+|---|---|---|
+| A. Đóng snapshot/evidence; #02/#19 | QA + edge; commit/config/model/fixture pins | Manifest môi trường, lệnh/run ID và evidence links; xử lý lệch tracker/native naming. Không tự ký G1 từ log409 tests |
+| B. Camera correlation/latency; #15/#16/#17/#19 | Edge + QA; camera/firmware/session facts | RTSP thật record+analytics; disconnect/reconnect, frame age và anchor↔PTS, missing/partial; Q16 commit→dashboard đo riêng với clock uncertainty |
+| C. Event-quality A/B; #21–#28 | ML + product; ODD/label/split và quyền data | Rule-only/pose, FPS sweep, lying/onset, người nhỏ/đêm/che khuất/hard negatives; event recall/FP, uncertainty và review minutes. Threshold/sign-off pending |
+| D. Storage/transfer/recovery; #18/#31/#36/#37/#43 | Platform + backend + QA; bitrate/event burst/quota | SQLite patch verification,413, pin race, crash windows, WAN resume B/U/G, disk pressure; không mất protected data/ACK giả. Power-cut chỉ sau device/recovery approval |
+| E. Chọn compute/native; #10/#12/#29–#31 | Edge + ML; kết quả B/C/D | Stage profile, bottleneck, điện/thermal/TCO; A/B native/provider/board cần cùng input và quality. G3 trên target thật, không kế thừa x86 replay |
+
+Nguồn ngoài bổ sung [ORT threading](https://onnxruntime.ai/docs/performance/tune-performance/threading.html) hỗ trợ thử thread-pool contention; không đổi thread count theo số core một cách máy móc. [OmniFall](https://arxiv.org/abs/2505.19889) củng cố nhu cầu đánh giá staged-to-wild, không thay dataset camera đường phố địa phương. [RTMO](https://arxiv.org/abs/2312.07526) chỉ là đối chứng nếu per-person pose burst trở thành bottleneck; chưa có lý do cài thêm framework bây giờ. Nguồn và tiêu chí chi tiết ở [sources](sources.md), [fields](fields.yaml).

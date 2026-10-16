@@ -1,0 +1,72 @@
+{
+  "source_sections": 14,
+  "price_observations": 20,
+  "tables": 13,
+  "headings": 77,
+  "external_sources": 75,
+  "reference_sha256": "ba1e11258ff52659318a321462a5e598c7bed33cf991329eb91150788fcd1a7b",
+  "content_chars": 72932,
+  "source_sha256": {
+    "fields.yaml": "7165b84bca94315f0c14ca28a5edfbe2c8ca34fe30e8dc87aa2e8011651ac775",
+    "prices.csv": "628ea1d92f372b6b22edbb557497aff31bf4951289ac9d2edca741585064636a",
+    "outline.yaml": "15c96b6b8e3a9997cf629249cfca607f95af90b972fc3c47bb5080197b530231",
+    "report.md": "65893043c1c2055fe6bb5c6c83148b741a9c930e0b778a77d2221326de875e2f",
+    "sources.md": "037c4c404f753bce5db7cff39afbdddb4890f31e1ac3e90d3af2d98789bfb692",
+    "README.md": "121a3f06aaf189174d14b5d672a53216f4909b6e7b74c7dc4e0f178742d8526e"
+  },
+  "style": "OneChain Web, user-supplied tokens; web px converted to pt at 96dpi",
+  "font_sha256": "a9ac770798857d5e8ac593ced42b22e40a7c08cec98319f92b0eccc2783a77ba",
+  "code_snapshot": "6fff369f4c30dd6faff0150b660cf5e065207daa",
+  "replay_runs": 12,
+  "replay_results_sha256": "4e1d4af4f3ce858eb6a76026d77c6409c4e1f850bf4ba1fafee1b57ff11c69ee",
+  "scope": "Documentation only; no application UI edits or new benchmark; no unittest counts",
+  "template_deviations": "OneChain font/colors replace template typography; cover photo replaced by architecture illustration; page setup, sections, TOC, headers/footers retained",
+  "verification": {
+    "pages": 63,
+    "font_families": [
+      "Google Sans Flex"
+    ],
+    "weights": [
+      400,
+      500,
+      600,
+      700
+    ],
+    "tagged_pdf": true,
+    "checks": [
+      "No template placeholders",
+      "No unittest counts",
+      "No internal-document referrals",
+      "13 content tables and 20 price observations",
+      "Replay chart inputs: 12 existing records, three per duration",
+      "Retained template hash unchanged"
+    ],
+    "limits": [
+      "No new camera/board/quality benchmark",
+      "Historical prices, not current quotes",
+      "DOCX pagination may vary by editor"
+    ]
+  },
+  "outputs": {
+    "report-content.md": {
+      "bytes": 84553,
+      "sha256": "0904c36d66ca6ae7873b893b0df057d78b85d63164061202d3039f8d6179cdb2"
+    },
+    "AI-Camera-OneChain-Design-Report-2026-10-16.docx": {
+      "bytes": 4095300,
+      "sha256": "2fbea7a4f445e1cf87e268879b02a719eeeac6169dae4017e762c49f75ca9296"
+    },
+    "replay-latency.png": {
+      "bytes": 117376,
+      "sha256": "1cb34fbee82db7c1e753a9406806c3d8fe4e41432c507f1fd508c01b18fdec0f"
+    },
+    "AI-Camera-OneChain-Design-Report-2026-10-16.pdf": {
+      "bytes": 729885,
+      "sha256": "10896ad29c3ab5e1a40bf8cf711cd99d5221c120e87e26e711293bcb9c8f69f9"
+    },
+    "replay-memory.png": {
+      "bytes": 96540,
+      "sha256": "91b49d617a0b17404b78035a63f46e75fb304b2a6c25be5227fbb8633bf4c433"
+    }
+  }
+}

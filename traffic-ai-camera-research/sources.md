@@ -1,5 +1,23 @@
 # Nguồn nghiên cứu
 
+## Bổ sung implementation/thử nghiệm — 15-10-2026
+
+Mốc theo môi trường. Nguồn chính thức được truy xuất cho cập nhật kỹ thuật; không refresh retailer, hardware specs, giấy phép thương mại hoặc pháp lý. Ngày truy cập không là ngày xuất bản. Nguồn mô tả khả năng công cụ/paper, không chứng minh dự án đã đạt chất lượng/capacity.
+
+| Nguồn | Dùng cho nhận định | Giới hạn |
+|---|---|---|
+| [ORT profiling](https://onnxruntime.ai/docs/performance/tune-performance/profiling-tools.html), [thread management](https://onnxruntime.ai/docs/performance/tune-performance/threading.html) | Profile operator/stage/thread contention trước quyết định native/provider | Tuning vẫn phải đo trên workload dự án; không suy Python rewrite sẽ tăng FPS |
+| [FFmpeg segment muxer](https://ffmpeg.org/ffmpeg-formats.html#segment_002c-stream_005fsegment_002c-ssegment) | Keyframe/segment duration và actual evidence ranges | Không bảo đảm source PTS mapping hoặc recorder isolation đã pass |
+| [SQLite WAL §11](https://www.sqlite.org/wal.html#walresetbug), [release history](https://www.sqlite.org/changes.html) | WAL-reset race và bản sửa3.51.3/backports3.44.6/3.50.7 | Lab probe3.45.1 chưa xác nhận distro backport, không là quan sát corruption |
+| [MMPose deployment](https://github.com/open-mmlab/mmpose/blob/main/docs/en/user_guides/how_to_deploy.md) | Pin preprocess/export/backend parity của pose | Cấu hình backend có sẵn không chứng minh checkpoint/board đã được dự án test |
+| [RKNN-Toolkit2 releases](https://github.com/airockchip/rknn-toolkit2/releases) | Pin toolkit/runtime/operator/precision khi chọn RKNN | Không lấy release mới nhất làm tổ hợp tương thích mặc định |
+| [OmniFall paper](https://arxiv.org/abs/2505.19889) (2025) | Nhu cầu staged-to-wild/domain-shift evaluation | Không thay held-out road-camera data hoặc clearance từng video |
+| [RTMO paper](https://arxiv.org/abs/2312.07526) (2023, CVPR2024) | Đối chứng one-stage pose khi per-person burst là bottleneck | Chỉ nghiên cứu có điều kiện, không mở thêm framework trong baseline |
+
+Bằng chứng nội bộ chính: [oracle #11](../docs/logs/2026-10-12-ticket-11.md), [dispatch15-10](../docs/logs/2026-10-15-implement-dispatch-summary.md), [review sau sửa](../docs/logs/2026-10-15-code-review-of-implementation.md), [replay artifact](../.scratch/replay-measurements/results-final.jsonl). Artifact replay hiện chưa tracked; log409 tests là lịch sử, không phải chạy lại trong lượt research. Chi tiết phân loại bằng chứng và quyết định đề xuất ở [report §14](report.md#14-cập-nhật-theo-implementation-và-thử-nghiệm-15-10-2026).
+
+## Nguồn lịch sử 09–11-10-2026
+
 Ngày hệ thống khi nghiên cứu: **2026-10-09**. Trang web được đọc trong phiên; không phải ảnh chụp lịch sử và không đảm bảo thời điểm cập nhật website trùng đồng hồ hệ thống. Giá công khai không phải báo giá giao hàng đã xác nhận. Các nguồn dưới đây hỗ trợ từng khẳng định cụ thể; không phải mọi quyền weights/dataset đã được xác minh.
 
 Lượt đồng bộ thiết kế 11-10-2026 không truy xuất lại các nguồn dưới đây. Đặc tả hiện hành ở [docs index](../docs/README.md); nguồn này giữ ngày quan sát và giới hạn xác minh, không là quyết định triển khai.

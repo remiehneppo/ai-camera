@@ -3,6 +3,8 @@ categories:
   identification:
     - {name: name_version_sku, description: 'Tên, tag/commit, SKU và biến thể đúng', detail_level: moderate}
     - {name: source_evidence, description: 'URL gốc, thời điểm đọc; trực tiếp/snippet/quảng bá/benchmark/ước lượng', detail_level: detailed}
+    - {name: implementation_snapshot, description: 'Commit/worktree, runtime/build/model/config/fixture hashes và lệnh tái lập', detail_level: detailed}
+    - {name: claim_evidence_level, description: 'Mã hiện có, log lịch sử, số đo artifact hoặc gate có sign-off; không trộn các mức', detail_level: detailed}
   technical:
     - {name: operational_domain, description: 'Góc nhìn, pixel đối tượng, ánh sáng, mưa, che khuất và ngoài miền', detail_level: detailed}
     - {name: event_taxonomy, description: 'Ngã/người nằm, va chạm/near-miss, mức ưu tiên và hành động', detail_level: detailed}
@@ -12,6 +14,9 @@ categories:
     - {name: quality_metrics, description: 'Event precision/recall, false alerts/camera-ngày, latency và CI', detail_level: detailed}
     - {name: native_camera_analytics, description: 'Event-only/trigger/dense metadata; payload, IDs, rate, coverage và firmware', detail_level: detailed}
     - {name: camera_local_access, description: 'RTSP local, authentication, no-WAN/reconnect, FPS thực và thông số theo hardware version', detail_level: detailed}
+    - {name: stage_profile, description: 'Decode/preprocess/inference/tracker/pose/I/O, thread contention, frame/queue age P95/P99 và dropped coverage', detail_level: detailed}
+    - {name: quality_ablation, description: 'Rule-only so pose verifier, FPS sweep, event recall/FP/onset error, cùng held-out site/time split', detail_level: detailed}
+    - {name: migration_gate, description: 'Bottleneck đo được, lợi ích tối thiểu cần duyệt, parity/quality và maintenance trước native/provider/RKNN', detail_level: detailed}
   commercial:
     - {name: license_provenance, description: 'Code, weights, dataset, SDK, codec, redistribution, hash và nghĩa vụ', detail_level: detailed}
     - {name: retail_price, description: 'Giá đang bán đúng SKU, URL, stock, VAT, ship, bảo hành; không dùng MSRP thay quote', detail_level: detailed}
@@ -25,6 +30,9 @@ categories:
     - {name: portability_contract, description: 'PerceptionPipeline, full snapshots/origin, pin receipt/anchor, evidence states, review freshness và target conformance', detail_level: detailed}
     - {name: backend_conversion, description: 'Artifact riêng, operators/layout/quantization/NMS, golden regression và capability/fallback', detail_level: detailed}
     - {name: resource_scheduling, description: 'Bounded queues, pose fairness/deadlines, ordered tracking, recorder độc lập inference', detail_level: detailed}
+    - {name: durability_runtime, description: 'SQLite library/source/backport, WAL/checkpoint/fsync, filesystem/outbox/remote receipt crash windows và recovery', detail_level: detailed}
+    - {name: evidence_transfer_envelope, description: 'VBR/GOP/actual range, max artifact,413/retry/local pin protection, B/U/G và temp space', detail_level: detailed}
+    - {name: acceptance_owner_status, description: 'Owner/signer, dependency, output, pass criteria; pending/host/board/field evidence riêng', detail_level: detailed}
 uncertain:
   - 'Quyền thương mại của từng pretrained checkpoint và dữ liệu huấn luyện'
   - 'Thông số tồn kho, VAT và giá checkout có thể khác giá hiển thị'
@@ -35,3 +43,8 @@ uncertain:
   - 'Dense object metadata của Hikvision DS-2CD2T43G2-4I chưa xác minh'
   - 'RKNN checkpoint support và MPP/RGA/NPU zero-copy chưa benchmark'
   - 'Chưa có giá mới H1c hoặc board RPi5/OrangePi5 tại Việt Nam'
+  - 'Pose outcomes chưa được IncidentEngine dùng; lợi ích quality và missing-pose policy chưa nghiệm thu'
+  - '3 FPS live và10–15 FPS nghiên cứu chưa có FPS sweep/event acceptance'
+  - 'SQLite lab3.45.1: cần kiểm tra distro backport WAL-reset fix và deployment image thực'
+  - 'Trần upload100 MiB: max bitrate/GOP/artifact và hành vi edge khi413 chưa nghiệm thu'
+  - 'Native-first là thiết kế accepted; đề xuất profiling-first chưa được duyệt thay plan/contracts'
