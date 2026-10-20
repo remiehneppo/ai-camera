@@ -12,6 +12,8 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 Target ONNX dùng C05/N05/P03/I05 và actual-target conformance; target chưa chọn hoặc thiếu report thì acceptance chưa đạt.
 
+**Conditional blockers (deployment đã chọn):** [#56: Orin NX actual baseline conformance](56-orin-nx-actual-baseline-conformance.md) khi deploy Orin NX; [#54: RF-DETR candidate](54-rf-detr-candidate-qua-detection-event-evidence.md) khi deploy RF-DETR; [#55: ViTPose candidate](55-vitpose-candidate-qua-pose-event-evidence.md) khi deploy ViTPose. Không áp dụng cho ứng viên chưa chọn/disabled.
+
 ## Acceptance criteria
 
 - [ ] 24–72h có per-camera P95/P99/gaps/fsync/WAL/outbox/thermal/power/copies và actual workload manifest.
@@ -20,6 +22,12 @@ Target ONNX dùng C05/N05/P03/I05 và actual-target conformance; target chưa ch
 - [ ] Trên target ONNX: native/oracle detector/pose/tracker/event conformance và actual decode/buffer tests trước soak; target khác baseline phải rerun. RKNN thêm #30, không bỏ G3 khi deferred RKNN.
 
 Chuẩn semantic: [Hợp đồng tích hợp](../../../docs/architecture/contracts.md).
+
+## Delta requirement được duyệt — 2026-10-20
+
+- [ ] Capacity sign-off khóa actual SKU/RAM/OS/SDK, camera profiles, danh sách module enabled và exact model/config versions trong workload manifest; đo toàn pipeline decode/perception/tracking/temporal rules/ring/clip/upload đồng thời, queue/drop/gaps và headroom, không chỉ inference FPS.
+- [ ] Exploratory profiling/measurement được chạy trước signed G2 với workload và missing gates ghi rõ; chỉ capacity acceptance mới cần approved quality/ODD/workload và named owner ký. Số đo exploratory không được ghi thành accepted capacity hoặc production clearance.
+- [ ] Conditional target/model gates chỉ áp dụng thành phần thực sự được deploy: Orin NX cần [#56: Orin NX actual baseline conformance](56-orin-nx-actual-baseline-conformance.md); RF-DETR cần [#54: RF-DETR candidate qua detection/event/evidence](54-rf-detr-candidate-qua-detection-event-evidence.md); ViTPose cần [#55: ViTPose candidate qua pose/event/evidence](55-vitpose-candidate-qua-pose-event-evidence.md). Baseline không dùng các ứng viên không bị chặn bởi chúng; RKNN vẫn giữ #30.
 
 ## Traceability
 
@@ -36,3 +44,5 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
 
 - 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.
+
+- 2026-10-20: Đồng bộ breakdown T3 theo [requirement tình huống/Q36](../../../docs/requirements/urban-safety-scenarios.md) và [ứng viên công nghệ](../../../docs/requirements/technology-candidates.md). Chỉ bổ sung phạm vi/acceptance/gates và dependency được duyệt; giữ Status/Execution, checked criteria, evidence và lịch sử cũ. Không có evidence implementation/benchmark/nghiệm thu mới; mọi acceptance bổ sung còn unchecked.

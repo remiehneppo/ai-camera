@@ -1,6 +1,6 @@
 # Plan xây dựng hệ thống AI Camera giao thông
 
-**Ngày:** 2026-10-11. **Trạng thái:** Thiết kế/backlog đã được duyệt và cập nhật theo review; tracker slices là đơn vị thực thi. Chưa triển khai runtime, chưa có nghiệm thu hardware. Facts, targets theo site và quyết định production được xử lý ở các gate tương ứng.
+**Ngày thiết kế:** 2026-10-11; **cập nhật nghiệp vụ:** 2026-10-20. **Trạng thái:** Thiết kế/backlog đã được duyệt và cập nhật theo review; tracker slices là đơn vị thực thi. Đã có software-lab implementation từng phần; trạng thái runtime/partial/blockers theo tracker, chưa có nghiệm thu hardware/quality/pilot từ bản cập nhật tài liệu này. Facts, targets theo site và quyết định production được xử lý ở các gate tương ứng.
 
 Nguồn chuẩn: [kiến trúc hệ thống](system-architecture.md), [deployment readiness](deployment-readiness.md), [hợp đồng tích hợp](contracts.md) và [tracker thực thi](../../.scratch/system-build-slices/PRD.md). [Mục lục docs](../README.md) xác định nguồn chuẩn; log/research không ghi đè thiết kế hiện hành. Các đường dẫn source dưới đây là vị trí dự kiến, chỉ tạo khi task tương ứng bắt đầu.
 
@@ -9,6 +9,8 @@ Nguồn chuẩn: [kiến trúc hệ thống](system-architecture.md), [deploymen
 Xây một luồng hoàn chỉnh: nguồn video → perception → sự kiện nghi ngờ → clip gốc có provenance → lưu bền vững tại edge → gửi server → người trực review. Person-down là use case đầu; tai nạn xe là nhánh sau khi person-down đạt gate. Sự kiện AI, quyết định review và trạng thái evidence độc lập.
 
 Đơn vị triển khai ban đầu là một camera và một edge. Sau khi có benchmark mới mở rộng số camera; 1–4 camera, 1080p và 10–15 analysis FPS trong báo cáo nghiên cứu là workload mong muốn để thử, chưa phải capacity được chấp nhận. Không dùng throughput inference riêng để ký capacity cả hệ thống.
+
+Danh mục mục tiêu và định nghĩa chuẩn nằm tại [requirement tình huống an toàn đô thị](../requirements/urban-safety-scenarios.md): đủ 13 nhóm và nhánh phá hoại riêng, không yêu cầu bật đồng loạt. Các nhóm ngoài person-down/tai nạn mở theo giai đoạn, mỗi nhóm cần ODD, tham số, positives/hard negatives và gate riêng; chưa thêm ticket thực thi hoặc hứa lịch trong bản cập nhật requirement.
 
 Không implement đồng thời nhiều detector/backend, không tạo tất cả ports/folders từ đầu. Không thêm ANPR, nhận diện danh tính, chẩn đoán y khoa hoặc tự động điều phối cứu hộ vào scope này.
 
@@ -51,6 +53,8 @@ Không implement đồng thời nhiều detector/backend, không tạo tất c�
 Lựa chọn triển khai tối thiểu theo Q19: HTML/CSS/JavaScript nhỏ được FastAPI phục vụ, gọi cùng public API; không đọc DB/file trực tiếp, không chứa business transitions. Evidence lab tạm dùng filesystem qua storage adapter như lựa chọn triển khai có thể đảo ngược, không phải quyết định production đã được người dùng chốt. Demo dùng polling đủ đạt target Q16, không cần WebSocket chỉ để hiển thị. Đội UI nhận OpenAPI/JSON schemas, fixtures, auth/error/revision semantics và browser flow; không phụ thuộc mã demo.
 
 Q1–Q19 đã chốt hướng, không có nghĩa inventory hoặc capacity đã được đo. Task chỉ mang `needs-info` nếu còn thiếu đầu vào cụ thể. Khi có camera, đo sessions/codec để chốt dual-session hoặc relay, main/sub và timestamp mapping. Các giá trị evidence Q6 là target lab, chưa phải storage guarantee; còn cần bitrate/event rate/quota để tính BOM. Endpoint lab còn cần xác định; cloud/on-prem production cần ADR riêng trước field pilot. Q11 chốt scope lab; kích thước người/ánh sáng/che khuất trong ODD cần dữ liệu thực. Không hỏi người dùng những facts có thể probe từ thiết bị.
+
+Requirement Q1–Q36 ngày 2026-10-20 là bộ quyết định mở rộng riêng, không đánh lại số Q1–Q19 ở bảng trên. Q36 giữ anchor baseline person-down onset/first qualifying observation theo contracts §3; các nhóm mới dùng mốc đủ điều kiện tạo cảnh báo. Cả hai cố định pre10/post20, policy theo loại; không đổi code hoặc immutable request đã có. Trước mở nhóm mới cần policy version và fixtures/event regression; metadata duration không thay video, complete clip không nghĩa full episode. Xem requirement §4/§6.
 
 Các số cần ký ở P0: vùng ODD, latency, false-alert/review capacity, recall mục tiêu, pre/post, ring/pinned retention, thời gian WAN outage, RPO/RTO và recorder gap budget. Nếu chưa có dữ liệu, ghi preliminary target chưa nghiệm thu; không tự đặt threshold sản phẩm.
 
@@ -238,7 +242,9 @@ Theo Q5/Q9, mỗi tính năng cảnh báo được đóng gói thành pipeline �
 | I05 | Version rule sets và event regression qua cả oracle/native/backend | I02,I03,C05 | Same semantic inputs cho same outcomes; thay threshold có report drift/FP/recall |
 | I06 | Rule tai nạn xe tách khỏi person-down: near-miss/stop/crash-suspected | G02,M02,I05 | TTC/overlap không đủ tự kết luận; stop đèn đỏ/kẹt xe là negatives; gate riêng |
 
-Stationary vehicle hazard chỉ mở khi product xác nhận; không kéo traffic-signal/violation vào baseline person-down.
+Stationary vehicle hazard chỉ mở khi product xác nhận; không kéo traffic-signal/violation vào baseline person-down. I06 bao gồm xe–xe, xe–người và xe tự ngã/lật/đâm vật cố định; trạng thái tĩnh thiếu diễn biến chỉ là nguy hiểm/chưa rõ, không tự kết luận va chạm.
+
+Nhóm mở rộng theo requirement không gộp vào một FSM: module register riêng, logic/state/config theo module × camera; reuse perception tương thích, enabled invalid config fail-fast theo Q13. Trước mở từng nhóm cần phê duyệt ROI/lịch/ngưỡng/ngoại lệ, quality gate (bỏ sót, FP/camera/giờ, latency từ diễn biến đủ điều kiện đến cảnh báo, tải review) và capacity tổ hợp thực tế. Mọi số mới pending theo site/workload. [Ứng viên công nghệ](../requirements/technology-candidates.md) là nhánh đánh giá, không thay baseline hoặc chứng minh coverage. Dashboard/người trực trước; chưa thêm SMS/Zalo/cuộc gọi.
 
 ### M10 — Recorder, pin và RetentionManager (P1 tối thiểu; P4 đầy đủ)
 
@@ -419,7 +425,7 @@ Plan này chỉ tạo công việc và acceptance. Mọi trạng thái `đạt` 
 
 ## 8. Bộ checklist để thực hiện backlog
 
-Bộ checklist ngày 2026-10-11 giữ nguyên 18 module/89 task IDs ở trên và bổ sung từng bước implement, SOLID theo module, contract/caller scope, failure checks và evidence record. Đây là tài liệu kế hoạch, chưa claim hoặc triển khai runtime, chưa xác nhận gate đạt.
+Bộ checklist ngày 2026-10-11 giữ nguyên 18 module/89 task IDs ở trên và bổ sung từng bước implement, SOLID theo module, contract/caller scope, failure checks và evidence record. Đây là tài liệu kế hoạch, không phải trạng thái Execution: tracker giữ tiến độ software-lab/runtime; bộ checklist và bản cập nhật requirement không tự xác nhận gate đạt.
 
 - [Mục lục checklist và dependency/ownership](../implementation-checklists/README.md).
 - [Phân tích kiến trúc và làm rõ contract/integration dependencies](../implementation-checklists/architecture-analysis.md).

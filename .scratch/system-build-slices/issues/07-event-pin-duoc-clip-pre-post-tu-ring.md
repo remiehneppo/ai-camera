@@ -23,6 +23,11 @@ Chuẩn semantic: [Hợp đồng tích hợp](../../../docs/architecture/contrac
 
 - Software anchor/partial behavior đã kiểm thử; chưa có proof ring budget maximum verification/handoff/recovery trên runtime/target. #06 vẫn partial (analytics parity/RTSP). Không đóng #07 hoặc mở #08 bằng unit fixture.
 
+## Delta requirement được duyệt — 2026-10-20
+
+- [ ] Q36 giữ baseline person-down: fall dùng onset estimate có provenance; persistent lying/on-vehicle thiếu onset dùng first qualifying observation của chuỗi đang xét; raw pre10/post20 không dịch theo trigger muộn, ACK hoặc dashboard time.
+- [ ] Kiểm tra lineage/request bất biến khi retry/supersede; completeness chỉ theo requested interval, không tuyên bố clip đầy đủ bao phủ full episode hoặc metadata duration thay video. Generic alert-condition anchor cho module mới được triển khai riêng qua [#57: Vùng nguy hiểm module × camera E2E](57-vung-nguy-hiem-module-camera-e2e.md), không đóng gate ring-budget còn mở của ticket này.
+
 ## Traceability
 
 Task nguồn: R02, R03, C03, I01.
@@ -45,3 +50,5 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 - 2026-10-12 follow-up: User duyệt software lab harness/report và public seams replay/raw coverage, delayed pin/outbox reconciliation. Thêm CLI `apps.edge.replay_lab`, regression sau raw pruning thực và immutable requested interval. Full suite 43/43 pass; semantic traces không thay analytics/domain parity, realtime queue/drop stress hoặc maximum verification/handoff/recovery sizing proof. Execution giữ partial; #08 vẫn blocked. Evidence: [follow-up log](../../../docs/logs/2026-10-12-ticket-06-07-followup.md).
 
 - Follow-up dispatch wave (baseline `162a850`): thêm caller-scenario pin-budget CLI, actual pruning trước first pin và restart persisted pending intent; báo theoretical requirement tách actual coverage. Review phát hiện artifact completeness không cho enum missing; người dùng Q5 chọn giữ contract. Report tách retained/request coverage missing khỏi failed build/unknown artifact completeness; không mở rộng schema. Real FFmpeg complete/partial/missing scenarios kiểm; lead full suite94/94 và mypy3 changed modules pass. Scenario delays không phải measured/signed maximum budget/RTO; #06/#07 vẫn partial, #08 blocked. Evidence: [dispatch log](../../../docs/logs/implementation-dispatch-next-wave.md).
+
+- 2026-10-20: Đồng bộ breakdown T3 theo [requirement tình huống/Q36](../../../docs/requirements/urban-safety-scenarios.md) và [ứng viên công nghệ](../../../docs/requirements/technology-candidates.md). Chỉ bổ sung phạm vi/acceptance/gates và dependency được duyệt; giữ Status/Execution, checked criteria, evidence và lịch sử cũ. Không có evidence implementation/benchmark/nghiệm thu mới; mọi acceptance bổ sung còn unchecked.

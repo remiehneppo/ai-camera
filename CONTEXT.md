@@ -1,6 +1,6 @@
 # AI Camera giao thông
 
-Hệ thống quan sát sự kiện đường bộ từ video, giữ bằng chứng và hỗ trợ người trực xác minh. Ngôn ngữ dưới đây phản ánh [thiết kế hiện hành](docs/architecture/system-architecture.md); không ngụ ý đã triển khai.
+Hệ thống quan sát sự kiện an toàn đô thị từ video, giữ bằng chứng và hỗ trợ người trực xác minh. Ngôn ngữ dưới đây phản ánh [thiết kế hiện hành](docs/architecture/system-architecture.md); không ngụ ý đã triển khai.
 
 ## Language
 
@@ -35,7 +35,7 @@ _Avoid_: Video có overlay, proxy hoặc redaction.
 _Avoid_: Bản gốc.
 
 **Complete evidence**: Evidence bao phủ đủ khoảng thời gian được yêu cầu và không có gap vượt mức cho phép.
-_Avoid_: Partial có lý do nên vẫn complete.
+_Avoid_: Partial có lý do nên vẫn complete; clip đầy đủ nghĩa là quan sát trọn sự kiện kéo dài.
 
 **ODD**: Phạm vi điều kiện hiện trường mà một khả năng quan sát đã được kiểm thử và chấp nhận hỗ trợ.
 _Avoid_: Mọi cảnh camera nhìn thấy.
@@ -55,9 +55,28 @@ _Avoid_: Đổi replay thành live ở revision sau.
 **Review freshness**: Quan hệ giữa quyết định review và event/evidence versions đã được người trực xem. Thông tin mới có ý nghĩa tạo cờ cần xem lại, không tự xóa quyết định trước.
 _Avoid_: Mọi AI revision mới tự reset review.
 
+**Alert-condition anchor**: Mốc trên thời gian nguồn khi diễn biến đủ điều kiện tạo cảnh báo theo vùng, lịch và ngưỡng của tình huống.
+_Avoid_: Mặc nhiên là onset, thời điểm dashboard nhận hoặc thời điểm người trực review.
+
+**Observation duration**: Khoảng thời gian hệ thống có quan sát hỗ trợ một trạng thái, với giới hạn về độ phủ được thể hiện rõ.
+_Avoid_: Video chứng minh toàn bộ thời gian tồn tại của sự kiện.
+
+**Urban safety scenario**: Nhóm tình huống an toàn đô thị cần người trực xác minh, được định nghĩa bằng dấu hiệu quan sát và ranh giới riêng.
+_Avoid_: Một khả năng đã triển khai; kết luận nguyên nhân, ý định hoặc trách nhiệm.
+
+**Crowd concentration**: Tập trung đông người theo số lượng, mật độ và thời gian trong vùng quan sát.
+_Avoid_: Gây rối mặc nhiên.
+
+**Suspected public disorder**: Nghi ngờ gây rối dựa trên hành vi xô đẩy/đánh nhau, đập phá, ném vật vào người/tài sản hoặc cùng chiếm/chặn luồng giao thông.
+_Avoid_: Đông người, chạy hoặc vung tay riêng lẻ.
+
+**Suspected property vandalism**: Nghi ngờ tác động đập/đá/phá kéo hoặc ném vật vào tài sản; độc lập với tương tác bạo lực giữa người.
+_Avoid_: Thiệt hại hoặc ý định đã xác định; mọi thao tác sửa chữa/dọn dẹp.
+
 ## Tài liệu liên quan
 
 - [Mục lục tài liệu](docs/README.md) và [hợp đồng tích hợp](docs/architecture/contracts.md).
+- [Requirement tình huống an toàn đô thị](docs/requirements/urban-safety-scenarios.md).
 - [Plan theo module](docs/architecture/implementation-plan.md).
 - [Deployment readiness](docs/architecture/deployment-readiness.md).
 - Quyết định chưa chốt nằm trong plan/readiness; không coi đề xuất là quyết định accepted.

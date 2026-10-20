@@ -46,6 +46,10 @@ Manifest/request mang `evidence_anchor_kind`, `evidence_anchor_time`, `requested
 
 MVP pin khi event cần evidence được persist; **không tạo candidate pins mặc định**. F03 phải chứng minh ring10 phút bao phủ maximum anchor-to-pin delay (verification + scheduling/handoff + recovery), pre-roll và mapping/keyframe margin. Nếu không đủ, báo partial/missing; không ký completeness cho profile đó. Tăng ring hoặc thêm candidate hold chỉ qua policy/budget được duyệt, không pin vô hạn hoặc làm yếu bảo vệ unACK.
 
+**Mở rộng nhóm mới — Q36 ngày 2026-10-20:** Bảng baseline person-down phía trên giữ nguyên: fall dùng onset estimate, persistent lying/on-vehicle thiếu onset dùng first qualifying observation của chuỗi persistence. Các nhóm mới trong [requirement tình huống an toàn đô thị](../requirements/urban-safety-scenarios.md) dùng source-time tại **mốc đủ điều kiện tạo cảnh báo** theo rule/ROI/lịch/ngưỡng đã phê duyệt. Cả hai policy giữ requested interval cố định anchor − 10s đến anchor + 20s; `evidence_anchor_kind` và policy version phải phân biệt theo loại, không đồng nhất onset với alert-condition anchor. Đây là đặc tả mở rộng, không tuyên bố code đã đổi; nhóm mới cần fixtures/conformance và event regression trước triển khai. Không thay protocol request/ACK hoặc sửa interval của request đã có.
+
+Với sự kiện kéo dài, complete chỉ xác nhận coverage requested interval, không có nghĩa full episode. Mốc bắt đầu quan sát/duration/vùng/config phải có provenance; metadata không thay video hoặc chứng minh toàn bộ thời gian tồn tại. Onset ngoài clip/không quan sát được phải thể hiện rõ; không tự thêm nhiều clip hoặc NVR dài ngày.
+
 ### 3.1 Protocol commit và recovery
 
 1. Cùng SQLite transaction: persist event revision, delivery outbox và evidence request intent (`request_id`, owner event/revision, immutable interval, state=requested). Metadata được gửi trước clip; chưa pin xong không chặn ingestion.

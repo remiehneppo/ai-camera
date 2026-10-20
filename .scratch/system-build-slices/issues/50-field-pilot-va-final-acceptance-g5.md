@@ -13,6 +13,11 @@ Owner: Product/operations + ML/QA; chưa claim.
 - [ ] Ngày/đêm/mưa/occlusion/camera-days/sampling đủ theo protocol; reports có uncertainty, missed events và operator workload.
 - [ ] Central restore/revoke/canary drills theo SLA, TCO dùng số đo; đổi site/camera/engine ngoài envelope cần tái kiểm, chưa đủ mẫu không ký scale.
 
+## Delta requirement được duyệt — 2026-10-20
+
+- [ ] Final acceptance/scale theo capability thực sự activated × site × workload và tổ hợp module/model/target đã khóa, không ký toàn catalog từ một pilot person-down. Đổi profile ngoài envelope phải tái kiểm quality/ODD/capacity và các gate liên quan.
+- [ ] Vehicle enabled cần #48; nhóm mới enabled cần qualification/quality, config/evidence/ODD và capacity tổ hợp tương ứng trước sign-off. Nhóm chưa bật ghi disabled/deferred rõ, không làm blocker toàn bộ catalog hoặc được suy là pass.
+
 ## Traceability
 
 Task nguồn: D04, D05, F03.
@@ -30,3 +35,5 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 ## Comments
 
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
+
+- 2026-10-20: Đồng bộ breakdown T3 theo [requirement tình huống/Q36](../../../docs/requirements/urban-safety-scenarios.md) và [ứng viên công nghệ](../../../docs/requirements/technology-candidates.md). Chỉ bổ sung phạm vi/acceptance/gates và dependency được duyệt; giữ Status/Execution, checked criteria, evidence và lịch sử cũ. Không có evidence implementation/benchmark/nghiệm thu mới; mọi acceptance bổ sung còn unchecked.

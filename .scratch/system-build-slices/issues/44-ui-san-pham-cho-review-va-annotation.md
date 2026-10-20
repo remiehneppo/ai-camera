@@ -6,7 +6,7 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 **What to build:** Đội UI tích hợp API thật thành queue person-down/on-vehicle/ambiguous và annotation feedback phục vụ người trực.
 
-**Blocked by:** [#20: Feedback review thành nhãn dataset có lineage](20-feedback-review-thanh-nhan-dataset-co-lineage.md); [#27: On-vehicle vẫn review với ưu tiên riêng](27-on-vehicle-van-review-voi-uu-tien-rieng.md); [#28: Negative audit và quality regression G2](28-negative-audit-va-quality-regression-g2.md).
+**Blocked by:** [#04: Review event có kiểm soát phiên bản](04-review-event-co-kiem-soat-phien-ban.md); [#20: Feedback review thành nhãn dataset có lineage](20-feedback-review-thanh-nhan-dataset-co-lineage.md); [#27: On-vehicle vẫn review với ưu tiên riêng](27-on-vehicle-van-review-voi-uu-tien-rieng.md).
 
 ## Acceptance criteria
 
@@ -16,6 +16,12 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 - [ ] Queue hiển thị needs_re_review/lý do khi clip mới complete, severity/taxonomy đổi hoặc evidence đã xem corrupt/missing; metadata-only update không gây bão review.
 
 Chuẩn semantic: [Hợp đồng tích hợp](../../../docs/architecture/contracts.md).
+
+## Delta requirement được duyệt — 2026-10-20
+
+- [ ] Queue/detail hỗ trợ các nhãn liên kết cùng diễn biến và chống lặp theo nhóm; không ép một nhãn duy nhất hoặc tự hợp nhất danh tính liên camera. Severity/ưu tiên độc lập AI confidence và review decision, có policy site rõ.
+- [ ] Hiển thị requested/actual clip ranges, mốc anchor theo loại Q36, provenance, observation duration và gaps/partial/missing; complete clip không nghĩa full episode, metadata không thay video hoặc bảo đảm xem được onset ngoài clip.
+- [ ] #28 là gate quality/operator-workload sign-off theo capability/site trước nghiệm thu UI vận hành, không phải blocker để xây UI/API integration; prototype/demo không thay operator acceptance.
 
 ## Traceability
 
@@ -32,3 +38,5 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
 
 - 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.
+
+- 2026-10-20: Đồng bộ breakdown T3 theo [requirement tình huống/Q36](../../../docs/requirements/urban-safety-scenarios.md) và [ứng viên công nghệ](../../../docs/requirements/technology-candidates.md). Chỉ bổ sung phạm vi/acceptance/gates và dependency được duyệt; giữ Status/Execution, checked criteria, evidence và lịch sử cũ. Không có evidence implementation/benchmark/nghiệm thu mới; mọi acceptance bổ sung còn unchecked.

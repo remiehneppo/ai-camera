@@ -1,7 +1,7 @@
 # Kiến trúc hệ thống AI Camera giao thông tại edge
 
-**Trạng thái:** Thiết kế tham chiếu để triển khai; chưa phải đặc tả API đã implement hoặc cam kết hiệu năng.  
-**Cập nhật:** 2026-10-11. [Mục lục tài liệu](../README.md) · [Hợp đồng tích hợp chuẩn](contracts.md) · [Plan triển khai](implementation-plan.md).
+**Trạng thái:** Thiết kế tham chiếu; đã có software-lab implementation từng phần (xem mục lục/tracker), không phải tuyên bố mọi API/runtime đã implement hoặc cam kết hiệu năng.
+**Cập nhật nghiệp vụ:** 2026-10-20. [Mục lục tài liệu](../README.md) · [Hợp đồng tích hợp chuẩn](contracts.md) · [Plan triển khai](implementation-plan.md).
 **Phạm vi:** Edge analytics, evidence, server cảnh báo/truy hồi và quản trị thiết bị.  
 **Cơ sở:** Các quyết định kỹ thuật trong hội thoại và [báo cáo nghiên cứu](../../traffic-ai-camera-research/report.md).
 
@@ -14,6 +14,12 @@
 - Tái sử dụng domain logic khi đổi camera và compute platform: RTSP test → IP production, Raspberry Pi 5/ONNX Runtime → Orange Pi 5/RKNN → Jetson/TensorRT.
 - Đảm bảo kết quả có provenance, timestamp, chất lượng quan sát và trạng thái xác minh; không báo im lặng khi hệ thống mất năng lực.
 - Cho phép kiểm thử offline/replay cùng pipeline realtime, benchmark toàn hệ thống trước mở rộng.
+
+### 1.1a Danh mục an toàn đô thị đã xác nhận
+
+[Requirement tình huống](../requirements/urban-safety-scenarios.md) xác định 13 nhóm: cháy/khói, ngập, đổ trộm rác, lấn chiếm vỉa hè, đỗ sai chỗ, tụ tập/gây rối, ẩu đả, tai nạn có xe, person-down, vào vùng nguy hiểm, vật bỏ quên, cây đổ, đèn đường không sáng; bổ sung nhánh nghi ngờ phá hoại tài sản độc lập. Đây là danh mục mục tiêu theo giai đoạn, không phải triển khai đồng loạt hoặc capability đã đạt. Person-down tại ROI lòng đường vẫn trước, tai nạn có xe sau theo ADR-0001.
+
+Camera cố định ngoài trời đường phố/vỉa hè; vùng/lịch/ngoại lệ cấu hình theo camera, không yêu cầu AI tự suy mọi quy định. AI tạo nghi ngờ, dashboard và người trực xác minh; không tự suy pháp lý, y tế, nguyên nhân/trách nhiệm hoặc điều phối cứu hộ. Ngày/đêm/mưa chỉ hỗ trợ trong ODD đã kiểm thử riêng từng nhóm. Severity cấu hình theo site và độc lập confidence; priority mặc định, ranh giới nhãn, hard negatives và ngưỡng pending theo requirement. Nhiều nhãn có thể liên kết một diễn biến, dedup riêng nhóm; không bắt buộc hợp nhất liên camera chính xác.
 
 ### 1.2 Không thuộc mục tiêu
 
@@ -303,7 +309,7 @@ Contract phải khóa reconnect owner, session/discontinuity IDs, PTS/time mappi
 Quyết định Q5/Q9 ngày 2026-10-11: IncidentEngine nằm trong từng pipeline tính năng cảnh báo đăng ký riêng; lifecycle/config/state tách theo pipeline và camera/session. Pipeline dùng chung semantic event contract có producer pipeline provenance, chia sẻ source/detector/tracker/pose khi tương thích. Chỉ tách process khi cần fault/resource isolation; tách logic không ngăn native crash hoặc quá tải shared resource. Xem [ADR-0001](../adr/0001-feature-pipeline-boundaries.md) và [plan triển khai](implementation-plan.md).
 
 **Port:** evaluate observations/features/time→event transitions; reset/restore policy explicit.  
-**Nhiệm vụ:** tai nạn/ngã/bất động, temporal verification, hysteresis, cooldown, dedup nội bộ; attach supporting evidence/uncertainty.  
+**Nhiệm vụ:** rule tình huống theo module × camera, bắt đầu person-down rồi tai nạn có xe; các nhóm mở rộng theo requirement và gate riêng. Temporal verification, hysteresis, cooldown, dedup nội bộ; attach supporting evidence/uncertainty. Module enabled thiếu/sai config bắt buộc phải fail-fast; state/config độc lập không chứng minh đủ tài nguyên bật mọi nhóm đồng thời.
 **Dự kiến:** deterministic FSM + heuristic baseline; TCN/feature classifier hoặc video classifier khi data chứng minh cần.  
 **Giao tiếp:** tracks/motion/pose/quality/native events/optional traffic-signal→IncidentEvent.  
 **Chú ý:** không chứa vendor tensors, DB calls hoặc code gọi cấp cứu. Missing observation không phải negative. Phân biệt falling/fallen, crash/near-miss/stop; đèn đỏ cần signal timestamp và luật site. Cross-camera dedup chỉ khi có bằng chứng/geometry; giữ original alerts để audit.
@@ -324,6 +330,7 @@ Quyết định Q5/Q9 ngày 2026-10-11: IncidentEngine nằm trong từng pipeli
 **Nhiệm vụ:** ring buffer segments, pre/post clip, keyframe-aware boundaries, manifests, quota, retention, crash recovery.  
 **Dự kiến:** FFmpeg/GStreamer segment/remux hoặc MediaMTX, chạy **process riêng** (xem §2); filesystem + SQLite metadata.  
 **Phạm vi hiện hành:** event ring 10 phút + clip sự kiện, không có continuous-NVR backlog. Pre10/post20 theo anchor trong contracts §3; retention/quota phải được sizing trước chọn SKU. Ví dụ 4 Mbps liên tục ≈ 43,2 GB/ngày/camera (GB thập phân, chưa overhead; `GB/day ≈ 10.8 × Mbps`). Ring ngắn giảm dung lượng chiếm dụng nhưng không giảm lượng ghi liên tục. Không chọn microSD thường làm evidence media production; endurance SKU/TBW, write amplification, nhiệt và tuổi thọ phải theo BOM/workload đã đo.
+**Sự kiện kéo dài và policy anchor (Q34/Q36):** raw clip cố định pre10/post20 theo loại. Giữ baseline person-down onset/first qualifying observation trong contracts §3; nhóm mới dùng mốc đủ điều kiện tạo cảnh báo. Metadata mốc quan sát/duration/vùng/config không thay video. Complete clip không nghĩa full episode; onset ngoài clip/không quan sát được phải thể hiện rõ. Không tự thêm nhiều clip/NVR dài ngày. Nhóm mới cần policy version/fixtures/regression trước triển khai (requirement §4); không đổi code hoặc âm thầm dịch request đã có.
 **Phát lại:** H.265 không phát ổn định trên mọi trình duyệt. H.264 thuận lợi cho browser nhưng Pi 5 phải software decode; chọn codec theo decode budget và playback đã đo. Nếu dùng H.265, có thể tạo proxy H.264 như derived artifact có chủ đích (transcode ở server, hoặc ở edge nếu còn encode budget).  
 **Giao tiếp:** encoded stream→segments; event→pin/finalize; uploader→ACK; control→query.  
 **Chú ý:** pre-event segments phải tồn tại trước trigger; pin atomically để cleanup không xóa. Reconnect/PTS discontinuity có thể tạo clip gaps, ghi rõ. Nếu source raw phải encode budget; Orin Nano không NVENC. Overlay/redacted video là derived artifact, raw không overwrite. Retention ưu tiên/capacity failures có cảnh báo; giới hạn admission/budget cho pin mới khi WAN mất lâu; không tự TTL xóa pinned/unACK đã nhận giữ.

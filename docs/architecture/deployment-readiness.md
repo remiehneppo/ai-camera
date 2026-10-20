@@ -24,6 +24,16 @@ Quyết định vòng 1 ngày 2026-10-11: chưa chọn board; ONNX/software deco
 | Field acceptance | Ngày/đêm/mưa/che khuất, positives/hard negatives, negative-audit sampling/uncertainty, recall/FP và operator load | ML + product | Trước fleet |
 | Central SLA/restore | Ingestion/DB/object-store failure domain, durable receipts, backup/restore/HA theo SLA | Backend + operations | Trước fleet theo SLA |
 
+## Ứng viên công nghệ và gate mở rộng — 2026-10-20
+
+Theo [quyết định Q35](../logs/2026-10-20-requirements-expansion.md), RF-DETR + ViTPose là ứng viên đánh giá bổ sung; YOLOX/RTMPose/ONNX và software decode vẫn là baseline lab. NVIDIA Jetson Orin NX là dòng ứng viên, không phải Xavier NX; board deployment chưa chọn và chưa có accepted SKU. Exact RAM/SKU, OS/SDK/runtime, checkpoints/weights/hash, license/data clearance, model quality và camera/FPS/capacity đều `pending`. Xem [hồ sơ ứng viên](../requirements/technology-candidates.md).
+
+[Danh mục tình huống](../requirements/urban-safety-scenarios.md) không phải cam kết detector + pose đáp ứng toàn bộ 13 nhóm hoặc nhánh phá hoại. Mỗi capability cần dữ liệu/quan sát domain, temporal/state/rule/config phù hợp và gate quality riêng: positives/hard negatives, bỏ sót, báo nhầm theo camera/giờ, latency từ diễn biến đủ điều kiện đến cảnh báo, tải review và ODD ngày/đêm/mưa đã kiểm thử; ngưỡng số theo site/workload còn pending. Thiếu hình ảnh hoặc ngoài điều kiện đã kiểm thử là unknown/degraded, không phải negative. Person-down đạt gate trước, tai nạn xe sau; giữ ADR-0001.
+
+Trước chấp nhận engine cần conformance semantic/native-oracle và event regression. Trước ký capacity cần benchmark **actual target SKU toàn hệ thống**: decode, perception, tracking, các module bật/temporal state, ghi ring/clip và upload đồng thời; đo P95/P99, memory/I/O/storage, headroom và thermal soak 24–72h. Không suy từ inference-only FPS, TOPS, workstation x86 hoặc việc register thêm module. Privacy/site approval, exact artifact rights và provenance vẫn là gate, không được bỏ qua vì là ứng viên.
+
+Theo hiệu chỉnh Q36, raw clip giữ **10 giây trước/20 giây sau anchor**: person-down giữ baseline [contracts §3](contracts.md), person fall có onset quan sát dùng onset estimate có provenance, persistent lying/on-vehicle thiếu onset dùng first qualifying observation của chuỗi persistence đang dùng (không gọi là onset); các nhóm mới dùng mốc đủ điều kiện cảnh báo. Không đổi anchor/runtime person-down sang alert-condition. Clip không bảo đảm bao phủ toàn bộ sự kiện kéo dài hay onset. Giữ mốc bắt đầu quan sát/thời gian duy trì, vùng/config và nguồn gốc; onset ngoài clip phải thể hiện rõ, lịch sử quan sát không thay video. Complete/partial/missing theo hợp đồng hiện hành; không tự thêm nhiều clip hoặc NVR dài ngày.
+
 ## Site profile tối thiểu
 
 Target lab đã xác nhận ở Q6: pre-roll 10 giây, post-roll 20 giây, event ring 10 phút, server giữ clip 7 ngày và edge outage budget 24 giờ cho clip chưa ACK. Đây là đầu vào sizing; chưa xác nhận quota, bitrate/event rate, time-to-full hoặc bảo đảm autonomy. Q12 bảo vệ pinned/unACK evidence, dọn dữ liệu được phép trước; vẫn thiếu thì degraded và evidence mới partial/failed. Không tự xóa evidence chưa ACK khi vượt 24 giờ. State/outbox có reserve hữu hạn; khi journal không commit được phải báo fault và không ACK giả.

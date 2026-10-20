@@ -13,6 +13,11 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 - [ ] Allowlisted factories và immutable config hash/provenance; wrong artifact/backend/field làm startup nonzero.
 - [ ] Doctor báo capability thực; không silent fallback, recorder độc lập không bị stop vì analytics config sai.
 
+## Delta requirement được duyệt — 2026-10-20
+
+- [ ] Cấu hình độc lập module × camera gồm enabled/disabled, ROI, lịch, ngưỡng và ngoại lệ; cấu hình enabled thiếu/sai trường bắt buộc phải fail-fast với lỗi có ngữ cảnh, không lộ secrets hoặc silent skip.
+- [ ] Disabled có reason/capability rõ; module đăng ký độc lập giữ state/config theo camera/session, chia sẻ perception tương thích; đăng ký thêm module không mặc nhiên chứng minh capacity chạy đồng thời.
+
 ## Traceability
 
 Task nguồn: B01, B02, F05.
@@ -32,3 +37,5 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 
 - 2026-10-12: Người dùng chốt baseline analytics ONNX CPU/x86 và recorder file replay; yêu cầu giữ khả năng đổi backend sang RKNN và source sang RTSP. Giữ `PerceptionPipeline`/event semantics ổn định; ONNX/RKNN dùng artifact/manifest riêng và RTSP chỉ thay source adapter/config, không đổi event schema. RKNN/RTSP vẫn là capability chưa nghiệm thu. #03 phụ thuộc #06 (recorder runtime) và #11 (ONNX model artifact/provenance), nên phần runtime gates giữ blocked trong khi làm ticket độc lập kế tiếp.
 - 2026-10-13 edge config & doctor wave: Bổ sung `apps/edge/config.py` và `apps/edge/doctor.py` riêng cho edge runtime; cấu hình bất biến frozen dataclass kèm SHA-256 fingerprint; kiểm tra preflight artifact ONNX và ORT CPU provider thật qua `OracleDetector`/`load_manifest`; từ chối cấu hình sai/unsupported không lộ secrets; doctor CLI với `--start` tích hợp trực tiếp `EdgeRuntime`, phân biệt rõ preflight capability với runtime execution; analytics lỗi trong lúc chạy báo nonzero sau khi recorder hoàn tất. Giữ nguyên `apps/server/doctor.py`. Execution tiếp tục `blocked`: chưa có full PerceptionPipeline/factory, và RKNN/RTSP vẫn là capability chưa nghiệm thu. Chi tiết: [dispatch log](../../../docs/logs/2026-10-13-runtime-dispatch.md).
+
+- 2026-10-20: Đồng bộ breakdown T3 theo [requirement tình huống/Q36](../../../docs/requirements/urban-safety-scenarios.md) và [ứng viên công nghệ](../../../docs/requirements/technology-candidates.md). Chỉ bổ sung phạm vi/acceptance/gates và dependency được duyệt; giữ Status/Execution, checked criteria, evidence và lịch sử cũ. Không có evidence implementation/benchmark/nghiệm thu mới; mọi acceptance bổ sung còn unchecked.

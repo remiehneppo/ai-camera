@@ -27,6 +27,12 @@ Nguồn: read-only probes `uname -a`, `lscpu`, `free -h`, `lsblk -o NAME,SIZE,TY
 - Python3.12.3, ORT1.20.1 CPU, NumPy1.26.4, OpenCV-headless4.10.0.84. Raw-BGR preprocessor source pin riêng với released binary và per-class postprocessor; mismatch old-tag preprocessing đã được user duyệt hiệu chỉnh.
 - Pinned runtime full suite85/85 pass, no-record golden original13detections/10person, crop9/7, negative0. Đây là conformance fixtures, không đo recall/FP/capacity/field quality. [Evidence #11](../logs/2026-10-12-ticket-11.md).
 
+## Ứng viên bổ sung — cập nhật tài liệu 2026-10-20
+
+[Quyết định Q35](../logs/2026-10-20-requirements-expansion.md) bổ sung RF-DETR + ViTPose để đánh giá, không thay baseline YOLOX/RTMPose/ONNX/software decode hay các pins lab đã ghi. Jetson Orin NX là dòng hardware ứng viên (không phải Xavier NX), chưa chọn board deployment/accepted SKU. RAM/SKU, OS/SDK/runtime, exact model variants/checkpoints/hash, license/data/privacy clearance, model quality và camera/FPS/capacity đều `pending`; inventory workstation ở trên không phải kết quả Orin NX.
+
+[Hồ sơ ứng viên](../requirements/technology-candidates.md) ghi capability và gates; [danh mục tình huống](../requirements/urban-safety-scenarios.md) không phải chứng nhận độ phủ. Detector + pose không tự đáp ứng các hành vi theo thời gian hay toàn bộ 13 nhóm/nhánh phá hoại; từng capability cần temporal/domain logic và quality/ODD acceptance riêng. Person-down một camera/ROI lòng đường vẫn đi trước tai nạn xe và các nhóm mở rộng. Không có download/benchmark/runtime test mới trong cập nhật tài liệu này.
+
 ## Scope, workload và ODD
 
 | Loại | Giá trị hiện tại | Trạng thái |
@@ -46,8 +52,10 @@ Nguồn: read-only probes `uname -a`, `lscpu`, `free -h`, `lsblk -o NAME,SIZE,TY
 |---|---|---|
 | Q6 | Event ring 10 phút; pre-roll 10 giây; post-roll 20 giây; server clips 7 ngày; outage budget 24 giờ cho clip chưa ACK | Sizing inputs; bitrate, event rate, quota, time-to-full, endurance và autonomy chưa đo. Không xóa protected/unACK evidence theo outage budget |
 | Q16 | P95 từ durable edge event commit tới dashboard hiển thị ≤5 giây trên LAN | Chỉ ký với clock basis/correlation, uncertainty, sample count và browser timing; không gồm temporal verification hoặc post-roll upload và không chứng minh AI quality/capacity |
-| Hardware | ONNX/software decode là baseline lab; board chưa chọn | Không tuyên bố hardware decode, RKNN, target capacity hay thermal envelope đạt |
+| Hardware | ONNX/software decode là baseline lab; board deployment chưa chọn; Orin NX là dòng ứng viên | Exact RAM/SKU/SDK và workload camera/FPS pending; không tuyên bố hardware decode, RKNN, target capacity hay thermal envelope đạt |
 | Recovery | RPO/RTO, recorder gap budget và detection time | `pending`, phải gắn service/data scope, fault case, measurement và owner; không lấy outage budget làm RTO |
+
+Theo hiệu chỉnh Q36, raw clip giữ 10 giây trước/20 giây sau anchor: person-down giữ baseline contracts §3 (person fall có onset quan sát dùng onset estimate có provenance; persistent lying/on-vehicle thiếu onset dùng first qualifying observation của chuỗi persistence đang dùng, không gọi là onset); các nhóm mới dùng mốc đủ điều kiện cảnh báo. Không đổi runtime hoặc anchor baseline person-down. Clip có thể chỉ bao phủ một phần sự kiện kéo dài. Ghi mốc bắt đầu quan sát/thời gian duy trì, vùng/config và provenance; onset ngoài clip phải thể hiện rõ. Lịch sử quan sát không thay video; không tự thêm nhiều clip/NVR dài ngày. Complete/partial/missing theo [contracts §3](contracts.md).
 
 Sizing chỉ được tính sau khi thu bitrate/profile thực, event/day, pin overlap, queue/outbox, recording+upload contention và retention. Ghi missing input là `null`/`pending`; không suy capacity từ CPU/GPU model hoặc dung lượng đĩa tổng.
 
@@ -62,7 +70,9 @@ Trước mỗi run, pin commit/build, OS/SDK/runtime, model/config/dataset hashe
 | Slow/failed storage | Inject lỗi/quota trên fixture hoặc disk lab riêng | Không ACK giả; protected evidence giữ nguyên; reserve/fault bounded và recovery trace | G1/G4a |
 | WAN unavailable/resume | Cô lập endpoint trong thời gian được duyệt, sau đó phục hồi | Event/evidence/outbox còn durable, age/bytes đo được, reconcile idempotent; không xóa theo 24h target | G4a |
 | Clock/latency | Ghi capture/receive/commit/render clock basis cùng sai số và sample count | Q16 chỉ pass khi tương quan đủ; nếu thiếu clock evidence thì `blocked`, không kết luận từ timestamp đơn lẻ | G1 |
-| Quality/ODD | Held-out positive, hard-negative và unsupported conditions theo approved manifest | Report denominator, miss/FP, unavailable/out-of-ODD, uncertainty, coverage và review load; ngưỡng chưa duyệt thì không pass G2 | G2 |
+| Quality/ODD từng capability | Held-out positives/hard negatives và unsupported conditions theo approved manifest, gồm ngày/đêm/mưa trong bounds đã kiểm thử | Report denominator, bỏ sót, báo nhầm theo camera/giờ, latency từ diễn biến đủ điều kiện đến cảnh báo, unknown/degraded và review load; ngưỡng/sufficiency theo site/workload pending thì không pass G2 | G2 |
+| Thay detector/pose/runtime | Pin exact artifacts, mapping tensor/keypoints và pre/postprocess; chạy golden/native-oracle conformance và event regression | Giữ contract semantic và temporal outcomes trong tolerance được duyệt; không coi export/inference chạy được là đạt | G1/G2 trước chấp nhận engine |
+| Actual target full-system capacity | Trên actual SKU/RAM/SDK và camera profiles đã khóa, chạy decode + perception + tracking + các module bật/temporal state + recording/ring/clip + upload đồng thời | P95/P99, queue/drop/gap, memory/I/O/storage/power/headroom và thermal soak 24–72h; không suy từ x86 hoặc inference-only FPS; chưa có device/workload/sign-off thì blocked/not-run | G3 |
 | Power-cut/restore | Chỉ trên device cụ thể đã chọn, có snapshot/backup và recovery owner | Loss/gap theo approved RPO/RTO và recovery trace; chưa có device/signer thì `not-run/blocked` | G4a |
 
 Mỗi case lưu `pass/fail/blocked/not-run`, expected/actual, command thật, timestamp/correlation, IDs/hashes của dữ liệu được bảo vệ, report, residual risk và reviewer. Failure matrix đầy đủ nằm tại [integration-release](../implementation-checklists/integration-release.md); case không chạy không được đánh dấu pass.
