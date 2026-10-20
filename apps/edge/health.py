@@ -242,6 +242,25 @@ class EdgeHealthMonitor:
             logger.warning("Failed to query outbox pending count: %s", exc)
             return 0
 
+    def _measure_operational_faults(self) -> list[str]:
+        """Return distinct operational fault reasons from outbox evidence requests."""
+        if self.outbox is None:
+            return []
+        try:
+            reqs_fn = getattr(self.outbox, "evidence_requests", None)
+            if callable(reqs_fn):
+                faults: list[str] = []
+                for req in reqs_fn():
+                    receipt = req.get("receipt") or {}
+                    fault = receipt.get("operational_fault")
+                    if fault and str(fault) not in faults:
+                        faults.append(str(fault))
+                return faults
+            return []
+        except Exception as exc:
+            logger.warning("Failed to query operational faults: %s", exc)
+            return []
+
     def _check_backend_reachable(self) -> bool:
         """Check if backend is reachable."""
         if self.backend_checker is None:
@@ -259,6 +278,7 @@ class EdgeHealthMonitor:
         disk_percent, disk_free, disk_total = self._measure_disk()
         recorder_gap = self._measure_recorder_gap()
         outbox_pending = self._measure_outbox_pending()
+        operational_faults = self._measure_operational_faults()
         backend_ok = self._check_backend_reachable()
 
         with self._lock:
@@ -348,6 +368,14 @@ class EdgeHealthMonitor:
             else:
                 capabilities["backend"] = "reachable"
 
+            # Check operational faults
+            if operational_faults:
+                if status == HealthStatus.HEALTHY:
+                    status = HealthStatus.DEGRADED
+                for fault in operational_faults:
+                    if fault not in reasons:
+                        reasons.append(fault)
+
             if self._is_stopped:
                 status = HealthStatus.UNAVAILABLE
                 reasons.insert(0, "system_stopped")
@@ -359,7 +387,7 @@ class EdgeHealthMonitor:
             DEGRADED_REASONS = {
                 "queue_stall", "analytics_hung", "analytics_failed",
                 "recorder_gap_exceeded", "recorder_failed", "disk_near_capacity",
-                "backend_unreachable"
+                "backend_unreachable", "upload_413_payload_too_large"
             }
 
             if status == HealthStatus.UNAVAILABLE:
@@ -383,6 +411,8 @@ class EdgeHealthMonitor:
                 "disk_free_bytes": disk_free,
                 "disk_total_bytes": disk_total,
                 "outbox_pending_count": outbox_pending,
+                "operational_fault_count": len(operational_faults),
+                "operational_faults": operational_faults,
                 "backend_reachable": backend_ok,
             }
 

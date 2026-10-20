@@ -46,7 +46,9 @@ class Track:
         label: str,
         timestamp: float,
         state: str = "active",
+        max_gap: float = 1.0,
     ) -> None:
+        self.max_gap: float = float(max_gap)
         self.track_id: int = track_id
         self.bbox: list[float] = [float(x) for x in bbox]
         self.score: float = float(score)
@@ -100,6 +102,11 @@ class Track:
         self.history[:] = [obs for obs in self.history if obs.timestamp >= float(timestamp) - 5][-256:]
 
     def update(self, bbox: list[float], score: float, timestamp: float) -> None:
+        ts = float(timestamp)
+        if ts < self.last_time or ts - self.last_time > self.max_gap:
+            # Gap or clock jump: pre-gap motion/hit evidence must not bridge to this observation.
+            self.history.clear()
+            self.consecutive_hits = 0
         self.bbox = [float(x) for x in bbox]
         self.score = float(score)
         self.last_time = float(timestamp)
@@ -185,7 +192,9 @@ class ByteTracker:
         match_threshold_low: float = 0.1,
         max_lost_time: float = 2.0,
         activate_after: int = 2,
+        max_observation_gap: float = 1.0,
     ) -> None:
+        self.max_observation_gap: float = float(max_observation_gap)
         self.high_threshold: float = float(high_threshold)
         self.low_threshold: float = float(low_threshold)
         self.match_threshold: float = float(match_threshold)
@@ -298,6 +307,7 @@ class ByteTracker:
                 label=str(det.get("label", "unknown")),
                 timestamp=ts,
                 state=initial_state,
+                max_gap=self.max_observation_gap,
             )
             new_track.activate_after = self.activate_after
             self._next_track_id += 1

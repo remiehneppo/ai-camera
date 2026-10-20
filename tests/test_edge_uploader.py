@@ -51,6 +51,13 @@ class MockEvidenceServer(http.server.BaseHTTPRequestHandler):
             self.wfile.write(b'{"error": "service temporarily unavailable"}')
             return
 
+        if state.get("fail_413"):
+            self.send_response(413)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"error": "payload too large"}')
+            return
+
         if state.get("fail_400"):
             self.send_response(400)
             self.send_header("Content-Type", "application/json")
@@ -448,6 +455,49 @@ class EdgeUploaderTests(unittest.TestCase):
         outbox_requests = self.outbox.evidence_requests()
         self.assertEqual(outbox_requests[0]["state"], "fulfilled")
         self.assertIn("400", str(outbox_requests[0]["last_error"]))
+
+    def test_413_is_not_retried_keeps_pin_and_marks_operational_fault(self) -> None:
+        data = self._create_evidence("req-413")
+        self.server_state["fail_413"] = True
+        uploader = EdgeUploader(
+            outbox=self.outbox, recorder=self.recorder, server_url=self.server_url,
+            device_token="test-token", max_retries=3, backoff_base=0.01,
+        )
+        self.assertEqual(uploader.upload_pending(), 0)
+        self.assertEqual(len(self.server_requests), 1)  # no blind retry
+
+        row = self.outbox.evidence_requests()[0]
+        self.assertEqual(row["state"], "failed")
+        self.assertIn("upload_413_payload_too_large", row["last_error"])
+        self.assertEqual(row["receipt"]["operational_fault"], "upload_413_payload_too_large")
+        # clip and pin survive: nothing acknowledged or released
+        self.assertTrue(data["clip_path"].is_file())
+        status = self.recorder.pin_status("req-413")
+        self.assertEqual(status["state"], "held")
+        self.assertNotEqual(status.get("transfer_state"), "acknowledged")
+
+        # later passes (including reconcile) neither retry nor revive the request
+        uploader.upload_pending(reconcile=True)
+        uploader.upload_pending()
+        self.assertEqual(len(self.server_requests), 1)
+        self.assertEqual(self.outbox.evidence_requests()[0]["state"], "failed")
+        self.assertEqual(self.recorder.pin_status("req-413")["state"], "held")
+
+    def test_metadata_ack_does_not_release_clip_after_413(self) -> None:
+        data = self._create_evidence("req-413b")
+        self.server_state["fail_413"] = True
+        uploader = EdgeUploader(
+            outbox=self.outbox, recorder=self.recorder, server_url=self.server_url,
+            device_token="test-token", max_retries=0, backoff_base=0,
+        )
+        uploader.upload_pending()
+        with sqlite3.connect(self.outbox.path) as db:
+            message_id = db.execute("SELECT message_id FROM delivery_outbox").fetchone()[0]
+        self.outbox.mark_delivered(message_id, {"status": "committed"})
+        uploader.reconcile_and_cleanup()
+        self.assertTrue(data["clip_path"].is_file())
+        self.assertEqual(self.recorder.pin_status("req-413b")["state"], "held")
+        self.assertEqual(self.outbox.evidence_requests()[0]["state"], "failed")
 
     def test_file_size_mismatch_aborts(self) -> None:
         data = self._create_evidence("req-size-mismatch")

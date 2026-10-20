@@ -1,7 +1,7 @@
 # 16: Startup/shutdown giữ recorder và state đúng
 
 Status: ready-for-review
-Execution: done (software tests verified)
+Execution: done (software lab; chưa SIGKILL/hardware thực)
 Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
 
 **What to build:** Người vận hành restart analytics, delivery và recorder theo lifecycle; pre-roll chưa đủ/boot mới hiển thị đúng.
@@ -27,3 +27,4 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
 - 2026-10-14: Triển khai và kiểm thử hoàn tất cho startup outbox reconciliation, graceful drain trước forced kill, session/epoch reset và recorder independence khi analytics bị SIGKILL/fault. Unit test `test_edge_runtime` (12 tests) và mypy đạt. Ghi nhận tại `docs/logs/2026-10-14-tickets-16-26-implementation.md`.
+- 2026-10-17: Đồng bộ tracker (docs/logs/2026-10-17-tracker-sync.md). Code tồn tại (grep apps/), pytest nhóm liên quan 188 passed. Execution = done (software lab; chưa SIGKILL/hardware thực). Status triage và gate giữ nguyên; chưa review/ký.

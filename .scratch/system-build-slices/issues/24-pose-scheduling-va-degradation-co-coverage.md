@@ -1,7 +1,7 @@
 # 24: Pose scheduling và degradation có coverage
 
 Status: ready-for-review
-Execution: completed
+Execution: done (software lab; pose outcomes chưa vào IncidentEngine, chưa đo coverage thật)
 Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
 
 **What to build:** Fast-fall, slow-collapse và lying được sampling công bằng; overload giảm công việc có capability reason tới dashboard.
@@ -32,3 +32,4 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
   - Hỗ trợ overload shedding (shedding persistent_lying trước, rồi slow_collapse), báo `capability_status="degraded"` với lý do cụ thể.
   - Cơ chế hồi phục Hysteresis (3 calm cycles liên tiếp) chống flapping.
   - 24/24 tests trong `tests/test_pose.py` passed; mypy đạt 0 lỗi; code review OCR đạt chuẩn. Ghi log tại `docs/logs/2026-10-14-ticket-24-implementation.md`.
+- 2026-10-17: Đồng bộ tracker (docs/logs/2026-10-17-tracker-sync.md). Code tồn tại (grep apps/), pytest nhóm liên quan 188 passed. Execution = done (software lab; pose outcomes chưa vào IncidentEngine, chưa đo coverage thật). Status triage và gate giữ nguyên; chưa review/ký.

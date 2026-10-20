@@ -1,7 +1,7 @@
 # 13: Native tracks có time và session semantics
 
 Status: ready-for-agent
-Execution: done
+Execution: done (Python implementation; chưa native C++)
 Owner: Edge / AI Pipeline
 
 **What to build:** Detection qua ByteTrack oracle/native, consumer nhận track lifecycle/history bounded theo từng camera.
@@ -34,3 +34,4 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 - 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.
 
 - 2026-10-13: Hoàn thành implementation và kiểm chứng qua `ByteTracker` và `PerceptionPipeline` (`apps/edge/tracker.py`, `apps/edge/pipeline.py`). Tracks có time semantics, multi-object IoU association 2-stage (ByteTrack), kinematic tracking (cy velocity, aspect ratio change). Bounded per-camera / per-session lifecycle, không nhận raw pixels trong hot-path. Chạy qua suite `tests/test_tracking_incident.py` và `tests/test_rtsp_pipeline.py` (9 tests OK).
+- 2026-10-17: Ghi chú: implementation hiện là Python (`apps/edge/tracker.py`), chưa native C++ dù tiêu đề ticket; native parity/boundary vẫn chờ #10/#12. Không dùng #13 done để suy native đã đạt.

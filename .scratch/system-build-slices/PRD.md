@@ -14,7 +14,7 @@ Ticket trong tracker này là đơn vị claim/thực hiện và nguồn duy nh�
 
 ## Cách chọn việc
 
-Frontier lúc publish là #01/#02. Hiện #01/#02/#05 đã done; #11 done trong software lab, production clearance vẫn mở. #03 blocked, #04/#06/#07 partial; #08 chưa bắt đầu và vẫn bị chặn bởi #07. #11 không tự mở #10/#12: #03/#06 và #10 vẫn còn blocker. Những ticket khác chỉ mở khi Blocked by/Conditional blockers đã đạt và external/activation gates được đáp ứng.
+Frontier lúc publish là #01/#02. Hiện #01/#02/#05 đã done (đoạn này là snapshot 2026-10-12; tiến độ hiện tại ở bảng, cập nhật 2026-10-17); #11 done trong software lab, production clearance vẫn mở. #03 blocked, #04/#06/#07 partial; #08 done trong software lab (upload/playback, xem bảng; hardening còn theo #43/#36); #07 vẫn partial nhưng không còn chặn #08 trong lab. #11 không tự mở #10/#12: #03/#06 và #10 vẫn còn blocker. Những ticket khác chỉ mở khi Blocked by/Conditional blockers đã đạt và external/activation gates được đáp ứng.
 
 Status là triage role; Execution theo not-started/in-progress/partial/blocked/done. ready-for-agent không có nghĩa dependencies đã xong. needs-info chỉ dùng facts/provider/target còn thiếu (#15/#29/#42); ready-for-human cho power-cut/survey/field/sign-off (#37/#46/#48/#49/#50). Ghi rõ lý do trong ticket; sau khi có dữ liệu cập nhật triage, không bỏ gate.
 
@@ -34,24 +34,24 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [06: Recorder file replay giữ raw ring độc lập](issues/06-recorder-file-replay-giu-raw-ring-doc-lap.md) | ready-for-agent | #02 | — | partial |
 | [07: Event pin được clip pre/post từ ring](issues/07-event-pin-duoc-clip-pre-post-tu-ring.md) | ready-for-agent | #01, #06 | — | partial |
 | [08: Upload evidence và phát lại trên detail](issues/08-upload-evidence-va-phat-lai-tren-detail.md) | ready-for-agent | #07 | — | done |
-| [09: Khôi phục event/evidence sau process crash](issues/09-khoi-phuc-event-evidence-sau-process-crash.md) | ready-for-agent | #05, #08 | — | done |
+| [09: Khôi phục event/evidence sau process crash](issues/09-khoi-phuc-event-evidence-sau-process-crash.md) | ready-for-agent | #05, #08 | — | done (software lab; power-cut #37 và kill process thực chưa kiểm) |
 | [10: File replay đi qua native boundary an toàn](issues/10-file-replay-di-qua-native-boundary-an-toan.md) | ready-for-agent | #03, #06 | — | not-started |
 | [11: ONNX oracle xuất detection có provenance](issues/11-onnx-oracle-xuat-detection-co-provenance.md) | ready-for-agent | #02 | — | done (software lab; production clearance open) |
 | [12: Native detector đạt parity với oracle](issues/12-native-detector-dat-parity-voi-oracle.md) | ready-for-agent | #10, #11 | — | not-started |
-| [13: Native tracks có time và session semantics](issues/13-native-tracks-co-time-va-session-semantics.md) | ready-for-agent | #12 | — | done |
+| [13: Native tracks có time và session semantics](issues/13-native-tracks-co-time-va-session-semantics.md) | ready-for-agent | #12 | — | done (Python `ByteTracker`; chưa native C++, native parity còn mở ở #10/#12) |
 | [14: Pipeline baseline biến observations thành event](issues/14-pipeline-baseline-bien-observations-thanh-event.md) | ready-for-agent | #05, #07, #13 | — | done |
-| [15: Camera RTSP live giữ correlation với recorder](issues/15-camera-rtsp-live-giu-correlation-voi-recorder.md) | needs-info | #02, #14, #51 | — | not-started |
-| [16: Startup/shutdown giữ recorder và state đúng](issues/16-startup-shutdown-giu-recorder-va-state-dung.md) | ready-for-agent | #09, #14 | — | not-started |
-| [17: Health phản ánh khả năng quan sát thực](issues/17-health-phan-anh-kha-nang-quan-sat-thuc.md) | ready-for-agent | #14 | — | not-started |
-| [18: Quota bảo vệ pinned evidence và journal](issues/18-quota-bao-ve-pinned-evidence-va-journal.md) | ready-for-agent | #09, #17 | — | not-started |
+| [15: Camera RTSP live giữ correlation với recorder](issues/15-camera-rtsp-live-giu-correlation-voi-recorder.md) | needs-info | #02, #14, #51 | — | partial (software + runner live đã code; acceptance chưa tích: stream ADR, actual ranges, reconnect/codec-change trên camera thật chưa có artifact; run camera LAN chỉ có trong comment) |
+| [16: Startup/shutdown giữ recorder và state đúng](issues/16-startup-shutdown-giu-recorder-va-state-dung.md) | ready-for-agent | #09, #14 | — | done (software lab; chưa SIGKILL/hardware thực) |
+| [17: Health phản ánh khả năng quan sát thực](issues/17-health-phan-anh-kha-nang-quan-sat-thuc.md) | ready-for-agent | #14 | — | done (software lab; chưa chứng minh supported-ODD/blur/freeze, xem #21) |
+| [18: Quota bảo vệ pinned evidence và journal](issues/18-quota-bao-ve-pinned-evidence-va-journal.md) | ready-for-agent | #09, #17 | — | done (software lab; chưa disk-pressure/outage 24h thật) |
 | [19: Nghiệm thu vertical slice G1 trên lab](issues/19-nghiem-thu-vertical-slice-g1-tren-lab.md) | ready-for-agent | #04, #08, #15, #16, #17, #18 | — | not-started |
 | [20: Feedback review thành nhãn dataset có lineage](issues/20-feedback-review-thanh-nhan-dataset-co-lineage.md) | ready-for-agent | #02, #04, #08 | — | done |
 | [21: Quality và ODD đi xuyên tới event/detail](issues/21-quality-va-odd-di-xuyen-toi-event-detail.md) | ready-for-agent | #17 | — | not-started |
-| [22: Pose request trả keypoints đúng frame và track](issues/22-pose-request-tra-keypoints-dung-frame-va-track.md) | ready-for-agent | #11, #13 | — | not-started |
+| [22: Pose request trả keypoints đúng frame và track](issues/22-pose-request-tra-keypoints-dung-frame-va-track.md) | ready-for-agent | #11, #13 | — | done (software lab; chưa có accuracy/capacity target) |
 | [23: Track gap không tạo certainty hoặc motion giả](issues/23-track-gap-khong-tao-certainty-hoac-motion-gia.md) | ready-for-agent | #13, #02 | — | not-started |
-| [24: Pose scheduling và degradation có coverage](issues/24-pose-scheduling-va-degradation-co-coverage.md) | ready-for-agent | #21, #22, #23 | — | not-started |
+| [24: Pose scheduling và degradation có coverage](issues/24-pose-scheduling-va-degradation-co-coverage.md) | ready-for-agent | #21, #22, #23 | — | done (software lab; pose outcomes chưa vào IncidentEngine, chưa đo coverage thật) |
 | [25: Person fall có onset quan sát](issues/25-person-fall-co-onset-quan-sat.md) | ready-for-agent | #14, #24 | — | done |
-| [26: Persistent lying khi thiếu onset](issues/26-persistent-lying-khi-thieu-onset.md) | ready-for-agent | #25 | — | not-started |
+| [26: Persistent lying khi thiếu onset](issues/26-persistent-lying-khi-thieu-onset.md) | ready-for-agent | #25 | — | done (software lab; anchor sửa sau review 15-10; chưa đo chất lượng theo ODD) |
 | [27: On-vehicle vẫn review với ưu tiên riêng](issues/27-on-vehicle-van-review-voi-uu-tien-rieng.md) | ready-for-agent | #26 | — | not-started |
 | [28: Negative audit và quality regression G2](issues/28-negative-audit-va-quality-regression-g2.md) | ready-for-agent | #20, #27 | — | not-started |
 | [29: Build artifact target reproducible](issues/29-build-artifact-target-reproducible.md) | needs-info | #02, #11 | — | not-started |

@@ -19,6 +19,30 @@ FFMPEG_AVAILABLE = bool(shutil.which('ffmpeg') and shutil.which('ffprobe'))
 
 
 class EdgeDoctorTests(unittest.TestCase):
+    def test_sqlite_wal_reset_check_warns_only_on_unpatched_versions(self):
+        from apps.edge.doctor import sqlite_wal_reset_check
+        for fixed in ('3.44.6', '3.44.9', '3.50.7', '3.50.9', '3.51.3', '3.52.0'):
+            self.assertEqual(sqlite_wal_reset_check(fixed)['status'], 'ok', fixed)
+        for bad in ('3.45.1', '3.44.5', '3.50.6', '3.51.2', '3.40.0'):
+            result = sqlite_wal_reset_check(bad)
+            self.assertEqual(result['status'], 'warning', bad)
+            self.assertIn('reason', result)
+
+    def test_preflight_reports_sqlite_without_blocking(self):
+        from apps.edge.config import load_edge_config
+        from apps.edge.doctor import preflight
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'source.mkv'
+            source.touch()
+            config = load_edge_config(dict(source=str(source), output_dir=directory,
+                                           analytics_enabled=False, disabled_reason='x'))
+            with patch('apps.edge.doctor.sqlite_wal_reset_check', return_value={'status': 'warning', 'version': '3.45.1', 'reason': 'r'}), \
+                    patch('apps.edge.doctor.shutil.which', return_value='/bin/x'), contextlib.redirect_stderr(io.StringIO()) as err:
+                report = preflight(config)
+            self.assertEqual(report['status'], 'ok')
+            self.assertEqual(report['capabilities']['sqlite']['status'], 'warning')
+            self.assertIn('warning', err.getvalue())
+
     def test_realtime_cli_configuration_rejected_before_execution_without_secret_leaks(self):
         from apps.edge.doctor import main
         with tempfile.TemporaryDirectory() as directory:

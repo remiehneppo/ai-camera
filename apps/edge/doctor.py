@@ -13,6 +13,24 @@ from typing import Any
 from apps.edge.config import EdgeConfig
 
 
+_SQLITE_FIXED = {(3, 44): (3, 44, 6), (3, 50): (3, 50, 7)}
+
+
+def sqlite_wal_reset_check(version: str | None = None) -> dict[str, Any]:
+    """Warn-only check for the SQLite WAL-reset race (fixed in 3.51.3; backports 3.44.6, 3.50.7).
+
+    A distro may backport the fix without changing the version string, so 'unpatched' means unverified.
+    """
+    import sqlite3
+    version = version or sqlite3.sqlite_version
+    parts = tuple(int(p) for p in version.split('.')[:3])
+    fixed = parts >= (3, 51, 3) or parts >= _SQLITE_FIXED.get(parts[:2], (99,))
+    result: dict[str, Any] = {'status': 'ok' if fixed else 'warning', 'version': version}
+    if not fixed:
+        result['reason'] = 'sqlite version predates WAL-reset race fix (3.51.3, backports 3.44.6/3.50.7); verify distro backport or upgrade'
+    return result
+
+
 def preflight(config: EdgeConfig) -> dict[str, Any]:
     recorder_available = bool(shutil.which('ffmpeg') and shutil.which('ffprobe'))
     analytics: dict[str, Any] = {'status': 'disabled', 'reason': config.disabled_reason}
@@ -23,8 +41,12 @@ def preflight(config: EdgeConfig) -> dict[str, Any]:
             analytics = {'status': 'available', 'provider': detector.session.get_providers()[0]}
         except Exception:
             analytics = {'status': 'unavailable', 'reason': 'enabled analytics artifact or runtime validation failed'}
+    sqlite = sqlite_wal_reset_check()
+    if sqlite['status'] != 'ok':
+        print(f"warning: {sqlite['reason']} (running {sqlite['version']})", file=sys.stderr, flush=True)
     return dict(scope='preflight', status='ok' if recorder_available and analytics['status'] != 'unavailable' else 'error',
                 config_hash=config.config_hash, capabilities={
+                    'sqlite': sqlite,
                     'recorder': {'status': 'available' if recorder_available else 'unavailable'},
                     'analytics': analytics})
 

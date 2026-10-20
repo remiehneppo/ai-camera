@@ -58,7 +58,9 @@ class IncidentEngine:
         persistent_lying_duration: float | None = None,
         persistent_lying_severity: str = "high",
         roi_polygon: list[list[float]] | list[tuple[float, float]] | None = None,
+        max_observation_gap: float = 1.0,
     ) -> None:
+        self.max_observation_gap: float = float(max_observation_gap)
         self.standing_aspect_ratio: float = float(standing_aspect_ratio)
         self.lying_aspect_ratio: float = float(lying_aspect_ratio)
         self.min_drop_velocity: float = float(min_drop_velocity)
@@ -149,6 +151,12 @@ class IncidentEngine:
             if tid not in self._states:
                 self._states[tid] = _TrackIncidentState()
             state = self._states[tid]
+            if state.last_timestamp is not None and (
+                ts < state.last_timestamp or ts - state.last_timestamp > self.max_observation_gap
+            ):
+                # Gap or clock jump: drop standing/onset/dwell/motion evidence, keep cooldown.
+                state = self._states[tid] = _TrackIncidentState(
+                    last_alert_time=state.last_alert_time, triggered=state.triggered)
 
             # Pose assessment
             is_standing = (

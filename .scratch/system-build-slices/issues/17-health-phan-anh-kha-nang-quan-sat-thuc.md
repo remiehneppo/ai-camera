@@ -1,7 +1,7 @@
 # 17: Health phản ánh khả năng quan sát thực
 
 Status: ready-for-review
-Execution: completed
+Execution: done (software lab; chưa chứng minh supported-ODD/blur/freeze, xem #21)
 Owner: Edge
 
 **What to build:** Dashboard/health API cho biết starting/degraded/unavailable và lý do, frame age/outbox/disk/recorder thay vì chỉ process running.
@@ -31,3 +31,4 @@ Task IDs là mapping phạm vi baseline/integration/hardening; Blocked by là de
 
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
 - 2026-10-14: Implemented EdgeHealthMonitor and unit test suite tests/test_health.py fulfilling H01. State transitions, fault injection, truthful clock mapping metrics, secrets masking, and bounded spool/labels verified.
+- 2026-10-17: Đồng bộ tracker (docs/logs/2026-10-17-tracker-sync.md). Code tồn tại (grep apps/), pytest nhóm liên quan 188 passed. Execution = done (software lab; chưa chứng minh supported-ODD/blur/freeze, xem #21). Status triage và gate giữ nguyên; chưa review/ký.

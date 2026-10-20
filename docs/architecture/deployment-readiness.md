@@ -146,3 +146,8 @@ Priority là thứ tự xử lý thiết kế, chưa phải xác suất định 
 | Review overload | P1 | Alerts cần review × phút/alert | TCO gồm true/false/uncertain alerts; ký review capacity |
 
 Không chọn sẵn ba process, shared-memory IPC, WORM compliance mode, Kubernetes hoặc HA đa site. Những lựa chọn đó cần fault test, threat model, retention và SLA; rollback phải giữ trust high-water mark và data compatibility.
+
+## Độ bền SQLite và upload evidence (cập nhật 2026-10-17)
+
+- SQLite WAL-reset race sửa ở 3.51.3 (backport 3.44.6/3.50.7). Python hệ thống và `.venv-oracle` đều dùng 3.45.1 (libsqlite3-0 3.45.1-1ubuntu2.8; chưa xác minh backport của distro). `apps/edge/doctor.py` cảnh báo không chặn; pin bản đã sửa trước pilot.
+- HTTP 413 khi upload là operational fault: không retry, giữ nguyên pin cục bộ, request ở trạng thái `failed` với `operational_fault`; ACK metadata không giải phóng clip. Cần sizing artifact tối đa theo bitrate/GOP thực. Chi tiết: [log](../logs/2026-10-17-sqlite-upload.md).

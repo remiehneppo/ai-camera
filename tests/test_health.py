@@ -234,3 +234,29 @@ class TestEdgeHealthMonitor(unittest.TestCase):
         self.assertTrue(hasattr(runner, "health"))
         self.assertIsInstance(runner.health, EdgeHealthMonitor)
         self.assertIn("health", runner.status())
+
+    def test_operational_fault_surfaced_as_degraded_in_health_snapshot(self):
+        db_path = self.root / "events_fault.sqlite3"
+        outbox = EventOutbox(db_path)
+        with outbox._connect() as db:
+            db.execute(
+                "INSERT INTO evidence_requests (request_id, device_id, event_id, revision, state, request_json, receipt_json, last_error) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "req-fault-1",
+                    "dev-1",
+                    "ev-1",
+                    1,
+                    "failed",
+                    json.dumps({"request_id": "req-fault-1"}),
+                    json.dumps({"operational_fault": "upload_413_payload_too_large"}),
+                    "HTTP 413: payload too large",
+                ),
+            )
+        monitor = EdgeHealthMonitor(outbox=outbox)
+        monitor.mark_started()
+        monitor.record_frame_received()
+        snapshot = monitor.get_health_snapshot()
+        self.assertEqual(snapshot["status"], "degraded")
+        self.assertIn("upload_413_payload_too_large", snapshot["all_reasons"])
+        self.assertEqual(snapshot["metrics"]["operational_fault_count"], 1)

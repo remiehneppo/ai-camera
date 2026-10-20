@@ -1,7 +1,7 @@
 # 22: Pose request trả keypoints đúng frame và track
 
 Status: ready-for-review
-Execution: completed
+Execution: done (software lab; chưa có accuracy/capacity target)
 Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
 
 **What to build:** Gửi ROI request có deadline tới native ORT pose và nhận pose/status trong observation metadata.
@@ -36,3 +36,4 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
   - `apps/edge/pose.py`: `RtmposeEstimator` (crop affine 192x256, SimCC split_ratio=2.0, 17 COCO keypoints original coordinate mapping), `PoseManager` (deadline timeout -> skipped, epoch reset -> cancelled, bounded request queue -> skipped, bounded frame buffer cache -> skipped, single terminal outcome per request).
   - `apps/edge/pipeline.py`: Tích hợp `pose_manager`, `request_pose()`, `set_core_epoch()`, và per-frame caching.
   - `tests/test_pose.py`: 12 tests bao phủ dummy/real Shibuya fixtures, deadline timeout, epoch mismatch cancellation, bounded queue/cache, status separation (detection ok vs pose skipped/failed). Tất cả unit tests và regression tests (`test_tracking_incident`, `test_live_pipeline`) đều passed; mypy type check đạt 0 lỗi.
+- 2026-10-17: Đồng bộ tracker (docs/logs/2026-10-17-tracker-sync.md). Code tồn tại (grep apps/), pytest nhóm liên quan 188 passed. Execution = done (software lab; chưa có accuracy/capacity target). Status triage và gate giữ nguyên; chưa review/ký.

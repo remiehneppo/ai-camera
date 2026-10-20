@@ -37,3 +37,4 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
   - Server: Cấu hình `EVIDENCE_DIR`, bổ sung endpoint `PUT /v1/evidence/{device_id}/{event_id}/{request_id}` xác thực token, kiểm tra SHA-256 và lưu file nguyên tử qua fsync + replace. Bổ sung `GET /v1/evidence/.../media` hỗ trợ HTTP 206 Partial Content (Range requests) cho playback video trên web.
   - UI: Cập nhật `apps/server/static/index.html` hiển thị trạng thái pending, nhúng thẻ `<video controls>` phát trực tiếp, link Download và thông tin actual_range/completeness.
   - TDD: 22 unit & integration tests (`tests/test_server_evidence.py`, `tests/test_edge_uploader.py`) và toàn bộ 178 tests repository đều pass. Execution: `done`. Chi tiết: [evidence dispatch log](../../../docs/logs/2026-10-13-evidence-dispatch.md).
+- 2026-10-17: Đồng bộ: Execution done (software lab) khớp bảng PRD; đoạn 'Cách chọn việc' đã sửa theo.

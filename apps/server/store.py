@@ -185,6 +185,7 @@ class EventStore:
                     review = self.reviews.find_one({"device_id": event["device_id"], "event_id": event["event_id"]}, session=session)
                     if review and review["decision"] != "unreviewed":
                         review["needs_re_review"] = True
+                        review["re_review_reasons"] = sorted({*review.get("re_review_reasons", []), "event_content_changed"})
                         self.reviews.replace_one(
                             {"device_id": event["device_id"], "event_id": event["event_id"]}, review, session=session
                         )
@@ -339,6 +340,7 @@ class EventStore:
                 "review_version": version,
                 "decision": decision,
                 "needs_re_review": False,
+                "re_review_reasons": [],
                 "actor": actor,
                 "reason": request["reason"],
                 "reviewed_event_revision": request["viewed_event_revision"],
@@ -434,6 +436,7 @@ class EventStore:
             changed = existing is None or any(existing["manifest"].get(k) != manifest_data.get(k) for k in meaningful)
             if review and review.get("decision") != "unreviewed" and changed:
                 review["needs_re_review"] = True
+                review["re_review_reasons"] = sorted({*review.get("re_review_reasons", []), "evidence_changed"})
                 self.reviews.replace_one(
                     {"device_id": device_id, "event_id": event_id}, review, session=session
                 )

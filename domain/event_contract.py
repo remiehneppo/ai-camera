@@ -87,6 +87,21 @@ def _timestamp(value: Any, name: str) -> str:
     return parsed.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
+def _validate_quality(quality: Any) -> None:
+    """Optional payload.quality: odd_supported is tri-state and must agree with state."""
+    if quality is None:
+        return
+    if not isinstance(quality, dict):
+        raise EventValidationError("payload.quality must be an object")
+    state, supported = quality.get("state"), quality.get("odd_supported")
+    if not isinstance(state, str) or not state or len(state) > 64:
+        raise EventValidationError("payload.quality.state must be a non-empty string")
+    if supported is not None and type(supported) is not bool:
+        raise EventValidationError("payload.quality.odd_supported must be true, false or null")
+    if (supported is True and state != "normal") or (supported is False and state == "normal"):
+        raise EventValidationError("payload.quality.odd_supported contradicts state")
+
+
 def validate_event(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise EventValidationError("event must be a JSON object")
@@ -115,6 +130,7 @@ def validate_event(value: Any) -> dict[str, Any]:
     if not isinstance(value["payload"], dict):
         raise EventValidationError("payload must be a JSON object")
 
+    _validate_quality(value["payload"].get("quality"))
     requests = value["payload"].get("evidence_requests", [])
     if not isinstance(requests, list) or len(requests) > 16:
         raise EventValidationError("evidence_requests must be an array of at most 16 requests")

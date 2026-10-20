@@ -33,5 +33,39 @@
       "White/neutral tables with amber header and ink text"
     ],
     "retained": "Full research text, preliminary results, two replay charts and recommendations; Google Sans Flex per OneChain specification"
+  },
+  "verification": {
+    "pages": 48,
+    "page_setup": "A4",
+    "all_research_paragraphs_preserved": true,
+    "content_markdown_unchanged": true,
+    "font_family": "Google Sans Flex, weights400/500/600/700",
+    "pdf_font_fallback": false,
+    "text_overflow": false,
+    "unit_test_counts_omitted": true,
+    "layout_reference_unchanged": true,
+    "limits": "No new benchmark/board/field validation; historical prices; DOCX pagination depends on editor/fonts"
+  },
+  "outputs": {
+    "AI-Camera-Research-Report-OneChain-2026-10-16.pdf": {
+      "bytes": 748377,
+      "sha256": "e8d34fb98f4291aa5561c56bc3016ecc7c268e2a83e36f767a0e0266620efc9c"
+    },
+    "AI-Camera-Research-Report-OneChain-2026-10-16.docx": {
+      "bytes": 3814261,
+      "sha256": "62397c6386c18a35b406c8d0af1c4dd0e3db192faeded2130762c1fbd7901472"
+    },
+    "report-content.md": {
+      "bytes": 84553,
+      "sha256": "0904c36d66ca6ae7873b893b0df057d78b85d63164061202d3039f8d6179cdb2"
+    },
+    "replay-latency.png": {
+      "bytes": 117376,
+      "sha256": "1cb34fbee82db7c1e753a9406806c3d8fe4e41432c507f1fd508c01b18fdec0f"
+    },
+    "replay-memory.png": {
+      "bytes": 96540,
+      "sha256": "91b49d617a0b17404b78035a63f46e75fb304b2a6c25be5227fbb8633bf4c433"
+    }
   }
 }

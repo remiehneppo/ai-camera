@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import logging
 import threading
 import time
@@ -29,20 +30,43 @@ from domain.evidence_contract import make_evidence_request
 logger = logging.getLogger(__name__)
 
 
-def evaluate_odd(rgb: np.ndarray) -> str:
-    """Minimal Operational Design Domain (ODD) assessment."""
-    if rgb is None or not isinstance(rgb, np.ndarray) or rgb.size == 0:
-        return "invalid_frame"
-    mean_val = float(np.mean(rgb))
-    if mean_val < 15.0:
-        return "low_light"
-    if mean_val > 240.0:
-        return "glare"
-    std_val = float(np.std(rgb))
-    if std_val < 5.0:
-        return "low_contrast"
-    return "normal"
+DEFAULT_ODD_POLICY: dict[str, Any] = {
+    "version": "default-v1", "low_light_mean": 15.0, "glare_mean": 240.0,
+    "low_contrast_std": 5.0, "blur_laplacian_var": None, "freeze_frames": None,
+}
 
+
+def _signature(rgb: np.ndarray) -> bytes:
+    return hashlib.sha256(np.ascontiguousarray(rgb)).digest()
+
+
+def assess_quality(rgb: Any, policy: dict[str, Any] | None = None, *, reason: str | None = None) -> dict[str, Any]:
+    """Versioned image-quality assessment. odd_supported is True only for a measured normal frame,
+    False for measured degradation, None when quality could not be measured (never inferred as OK)."""
+    pol = {**DEFAULT_ODD_POLICY, **(policy or {})}
+    base = {"policy_version": pol["version"], "reason": reason}
+    if rgb is None or not isinstance(rgb, np.ndarray) or rgb.size == 0 or rgb.ndim < 2:
+        return {**base, "state": "unknown", "odd_supported": None, "reason": reason or "invalid_frame"}
+    mean_val, std_val = float(np.mean(rgb)), float(np.std(rgb))
+    state = "normal"
+    if mean_val < pol["low_light_mean"]:
+        state = "low_light"
+    elif mean_val > pol["glare_mean"]:
+        state = "glare"
+    elif std_val < pol["low_contrast_std"]:
+        state = "low_contrast"
+    elif pol["blur_laplacian_var"] is not None and rgb.shape[0] > 2 and rgb.shape[1] > 2:
+        g = rgb.reshape(rgb.shape[0], rgb.shape[1], -1).mean(axis=2)
+        lap = g[:-2, 1:-1] + g[2:, 1:-1] + g[1:-1, :-2] + g[1:-1, 2:] - 4 * g[1:-1, 1:-1]
+        if float(lap.var()) < pol["blur_laplacian_var"]:
+            state = "blur"
+    return {**base, "state": state, "odd_supported": state == "normal"}
+
+
+def evaluate_odd(rgb: np.ndarray) -> str:
+    """Backward-compatible state string; invalid frames keep the legacy label."""
+    q = assess_quality(rgb)
+    return "invalid_frame" if q["state"] == "unknown" else q["state"]
 
 
 class PerceptionPipeline:
@@ -67,6 +91,7 @@ class PerceptionPipeline:
         config_version: str = "pipeline-v1",
         calibration_version: str = "uncalibrated",
         quality_state: str = "unknown",
+        odd_policy: dict[str, Any] | None = None,
         roi_polygon: list[list[float]] | list[tuple[float, float]] | None = None,
         origin: str = "live",
         execution: PerceptionExecution | None = None,
@@ -91,6 +116,11 @@ class PerceptionPipeline:
         self.calibration_version = calibration_version
         self._configured_quality_state = quality_state
         self.quality_state = quality_state
+        self.odd_policy = {**DEFAULT_ODD_POLICY, **(odd_policy or {})}
+        self.quality: dict[str, Any] = {"state": quality_state, "odd_supported": None,
+                                        "policy_version": self.odd_policy["version"], "reason": None}
+        self._prev_signature: bytes | None = None
+        self._same_frames = 0
         self.roi_polygon = roi_polygon
         self.origin = origin
 
@@ -173,10 +203,18 @@ class PerceptionPipeline:
             self._last_frame_id = -1
             self._last_timestamp = None
             self._lineage = lineage
+            self._set_unknown_quality("session_reset")
         if fid <= self._last_frame_id:
             frame = self.execution.frame(self.camera_id, self.stream_session_id, self.core_epoch,
                                          self.origin, fid, ts)
-            self.last_observation = {**frame, "detection_status": "stale", "detections": []}
+            self._set_unknown_quality("detection_stale")
+            self.last_observation = {
+                **frame,
+                "detection_status": "stale",
+                "detections": [],
+                "quality": dict(self.quality),
+                "quality_state": self.quality_state,
+            }
             self._observation_gap()
             return []
         if self._last_timestamp is not None and ts <= self._last_timestamp:
@@ -197,13 +235,16 @@ class PerceptionPipeline:
             raise
         self.last_observation = observation
         if observation["detection_status"] not in {"ok", "ok_empty"}:
+            self._set_unknown_quality(f"detection_{observation['detection_status']}")
+            observation["quality"] = dict(self.quality)
+            observation["quality_state"] = self.quality_state
             self.health.set_component_capability("analytics", "failed")
             self._observation_gap()
             return []
         formatted_dets = observation["detections"]
-        if self._configured_quality_state == "unknown" and rgb is not None and rgb.size > 0:
-            self.quality_state = evaluate_odd(rgb)
+        self._update_quality(rgb)
         observation["quality_state"] = self.quality_state
+        observation["quality"] = dict(self.quality)
 
         if self.roi_polygon is not None:
             formatted_dets = [
@@ -263,6 +304,32 @@ class PerceptionPipeline:
 
         return emitted_events
 
+    def _set_unknown_quality(self, reason: str) -> None:
+        self._prev_signature = None
+        self._same_frames = 0
+        if self._configured_quality_state != "unknown":
+            return
+        self.quality = assess_quality(None, self.odd_policy, reason=reason)
+        self.quality_state = "unknown"
+
+    def _update_quality(self, rgb: Any) -> None:
+        if self._configured_quality_state != "unknown":
+            return  # externally configured state: supported-ODD is not claimed
+        prev = self.quality["state"]
+        q = assess_quality(rgb, self.odd_policy)
+        n = self.odd_policy["freeze_frames"]
+        if q["state"] != "unknown" and n:
+            sig = _signature(rgb)
+            same = self._prev_signature is not None and sig == self._prev_signature
+            self._same_frames = self._same_frames + 1 if same else 0
+            self._prev_signature = sig
+            if self._same_frames >= n:
+                q.update(state="frozen", odd_supported=False, reason="identical_frames")
+        if q["state"] == "normal" and prev != "normal" and (prev != "unknown" or self.quality.get("reason")):
+            q["recovery_reason"] = f"recovered_from_{self.quality['reason'] if prev == 'unknown' else prev}"
+        self.quality = q
+        self.quality_state = q["state"]
+
     def observation_gap(self) -> None:
         """Mark observation gap on frame drop, network hiccup, or stream loss."""
         with self._processing_lock:
@@ -273,6 +340,7 @@ class PerceptionPipeline:
         # Retain track IDs/cooldown, discard pre-gap motion and standing evidence.
         for track in self.tracker.get_all_tracks():
             track.history.clear()
+        self._set_unknown_quality("observation_gap")
 
     def _handle_incident(self, incident: dict[str, Any], timestamp: float) -> dict[str, Any]:
         """Construct validated Event snapshot, pin ring buffer, and atomically enqueue to outbox."""
@@ -313,6 +381,7 @@ class PerceptionPipeline:
             "calibration_version": self.calibration_version,
             "quality_state": self.quality_state,
             "payload": {
+                "quality": dict(self.quality),
                 "taxonomy": taxonomy,
                 "lifecycle": "candidate",
                 "severity": severity,

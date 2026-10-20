@@ -10,6 +10,7 @@ import subprocess
 
 from apps.edge.outbox import EventOutbox
 from apps.edge.recorder import FileRecorder
+from apps.edge.uploader import UploadPayloadTooLarge
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +126,8 @@ class EvidenceLifecycle:
                     continue
                 if request["state"] == "acknowledged":
                     continue
+                if request["state"] == "failed" and (request.get("receipt") or {}).get("operational_fault"):
+                    continue  # terminal operational fault (e.g. 413): do not revive into upload retries
                 if status and status.get("manifest"):
                     if status.get("availability") in {"missing", "quarantined"}:
                         raise ValueError("finalized clip missing or corrupt")
@@ -267,6 +270,13 @@ class EvidenceLifecycle:
             self.outbox.update_evidence(request_id, state="acknowledged", receipt={
                 **receipt, "transfer_state": "acknowledged", "transfer_receipt": server_receipt})
             return server_receipt
+        except UploadPayloadTooLarge as exc:
+            # Operational fault, not a transient error: keep the pin (local clip is the only copy),
+            # never retry blindly, and never acknowledge/release.
+            logger.error("evidence %s rejected with 413; local pin kept", request_id)
+            self.outbox.update_evidence(request_id, state="failed", receipt={
+                **receipt, "operational_fault": "upload_413_payload_too_large"}, error=f"operational_fault: {exc}")
+            return None
         except (OSError, ValueError) as exc:
             self.outbox.update_evidence(request_id, error=exc)
             return None

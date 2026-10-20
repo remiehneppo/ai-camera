@@ -1,7 +1,7 @@
 # 26: Persistent lying khi thiếu onset
 
 Status: ready-for-review
-Execution: done (software tests verified)
+Execution: done (software lab; anchor sửa sau review 15-10; chưa đo chất lượng theo ODD)
 Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
 
 **What to build:** Người nằm bền vững trong ROI vẫn vào review khi onset bị mất hoặc không quan sát được.
@@ -33,3 +33,4 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 
 - 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.
 - 2026-10-14: Triển khai phát hiện persistent lying khi thiếu onset / ID switch, taxonomy `person_lying_persistent`, anchor_kind `first_qualifying_observation` (anchor - 10s đến + 20s, không gọi là onset), severity và duration riêng. Unit test `test_tracking_incident` (24 tests) và mypy đạt. Ghi nhận tại `docs/logs/2026-10-14-tickets-16-26-implementation.md`.
+- 2026-10-17: Đồng bộ tracker (docs/logs/2026-10-17-tracker-sync.md). Code tồn tại (grep apps/), pytest nhóm liên quan 188 passed. Execution = done (software lab; anchor sửa sau review 15-10; chưa đo chất lượng theo ODD). Status triage và gate giữ nguyên; chưa review/ký.

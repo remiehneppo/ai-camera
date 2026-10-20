@@ -151,7 +151,7 @@
             add(header, "span", event.origin, "muted");
             add(card, "h2", `${event.camera_id} · revision ${event.revision}`);
             card.prepend(header);
-            add(card, "p", `${event.payload.lifecycle || "unknown"} · ${event.payload.severity || "unknown"} · quality ${event.quality_state}`);
+            add(card, "p", `${event.payload.lifecycle || "unknown"} · ${event.payload.severity || "unknown"} · quality ${event.quality_state}${event.payload.quality ? ` · ODD ${event.payload.quality.odd_supported === true ? "supported" : event.payload.quality.odd_supported === false ? "not supported" : "unverified"}` : ""}`);
             const time = add(card, "time", event.event_time);
             time.dateTime = event.event_time;
             add(card, "p", `Event ${event.event_id}`, "muted");

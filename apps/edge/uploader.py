@@ -58,6 +58,10 @@ def reconcile_and_cleanup(outbox, recorder):
     return EvidenceLifecycle(outbox, recorder).reconcile()
 
 
+class UploadPayloadTooLarge(ValueError):
+    """Server/proxy answered HTTP 413; retrying the same artifact cannot succeed."""
+
+
 class EdgeUploader:
     """Client for uploading finalized edge evidence clips to the server."""
 
@@ -108,6 +112,8 @@ class EdgeUploader:
             except HTTPError as exc:
                 last_error_str = f"HTTP {exc.code}: {exc.reason}"
                 logger.warning("evidence upload HTTPError %s on attempt %d: %s", request_id, attempt, last_error_str)
+                if exc.code == 413:
+                    raise UploadPayloadTooLarge(f"upload_413_payload_too_large: {last_error_str}")
                 # Retry on 503 Service Unavailable or 429 Too Many Requests or 5xx
                 if exc.code in {503, 429, 502, 504} and attempt < self.max_retries:
                     continue

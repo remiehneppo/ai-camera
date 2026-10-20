@@ -191,10 +191,10 @@ class EdgeReviewFixTests(unittest.TestCase):
         self.assertEqual(len(track.history), 1)
 
     def test_recovery_and_second_fall_during_cooldown_are_observed(self):
-        engine = IncidentEngine(max_motion_speed=1000)
+        engine = IncidentEngine(max_motion_speed=1000, max_observation_gap=100.0)
         standing = [100, 100, 160, 260]
         lying = [100, 220, 260, 280]
-        track = Track(1, standing, .9, "person", 0)
+        track = Track(1, standing, .9, "person", 0, max_gap=100.0)
         def observe(time, bbox):
             track.update(bbox, .9, time)
             return engine.process_tracks([track], time)

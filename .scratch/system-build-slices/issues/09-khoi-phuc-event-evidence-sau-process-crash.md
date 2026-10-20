@@ -1,7 +1,7 @@
 # 09: Khôi phục event/evidence sau process crash
 
 Status: ready-for-review
-Execution: completed
+Execution: done (software lab; power-cut #37 và kill process thực chưa kiểm)
 Owner: edge-backend-crash-recovery
 
 **What to build:** Restart edge/server giữa các bước commit và upload; detail phản ánh đúng clip còn, thiếu, partial hoặc corrupt.
@@ -50,3 +50,4 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
      - Unit tests: `.venv-oracle/bin/python -m unittest tests/test_crash_recovery.py -v` -> 8/8 tests pass.
      - Regression tests: `.venv-oracle/bin/python -m unittest tests/test_edge_uploader.py tests/test_server_evidence.py` -> 22/22 tests pass.
      - Typecheck: `.venv-oracle/bin/mypy --follow-imports=silent apps/edge/outbox.py apps/edge/uploader.py apps/edge/recorder.py tests/test_crash_recovery.py` -> Success: no issues found.
+- 2026-10-17: Đồng bộ tracker (docs/logs/2026-10-17-tracker-sync.md). Code tồn tại (grep apps/), pytest nhóm liên quan 188 passed. Execution = done (software lab; power-cut #37 và kill process thực chưa kiểm). Status triage và gate giữ nguyên; chưa review/ký.
