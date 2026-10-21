@@ -102,6 +102,29 @@ def _validate_quality(quality: Any) -> None:
         raise EventValidationError("payload.quality.odd_supported contradicts state")
 
 
+_POSE_STATUSES = {"none", "ok", "skipped", "failed", "cancelled"}
+
+
+def _validate_pose_evidence(pose_evidence: Any) -> None:
+    """Optional payload.pose_evidence: validates status, reason, branch, and keypoints."""
+    if pose_evidence is None:
+        return
+    if not isinstance(pose_evidence, dict):
+        raise EventValidationError("payload.pose_evidence must be an object")
+    status = pose_evidence.get("status")
+    if not isinstance(status, str) or status not in _POSE_STATUSES:
+        raise EventValidationError(f"payload.pose_evidence.status must be one of: {', '.join(sorted(_POSE_STATUSES))}")
+    keypoints = pose_evidence.get("keypoints")
+    if not isinstance(keypoints, list):
+        raise EventValidationError("payload.pose_evidence.keypoints must be an array")
+    if status == "ok" and not keypoints:
+        raise EventValidationError("payload.pose_evidence with status 'ok' must have non-empty keypoints")
+    if status != "ok" and keypoints:
+        raise EventValidationError("payload.pose_evidence with non-ok status must have empty keypoints")
+    if len(keypoints) > 32:
+        raise EventValidationError("payload.pose_evidence.keypoints exceeds 32 items")
+
+
 def validate_event(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise EventValidationError("event must be a JSON object")
@@ -131,6 +154,7 @@ def validate_event(value: Any) -> dict[str, Any]:
         raise EventValidationError("payload must be a JSON object")
 
     _validate_quality(value["payload"].get("quality"))
+    _validate_pose_evidence(value["payload"].get("pose_evidence"))
     requests = value["payload"].get("evidence_requests", [])
     if not isinstance(requests, list) or len(requests) > 16:
         raise EventValidationError("evidence_requests must be an array of at most 16 requests")

@@ -14,7 +14,7 @@ Ticket trong tracker này là đơn vị claim/thực hiện và nguồn duy nh�
 
 ## Cách chọn việc
 
-Frontier lúc publish là #01/#02. Tiến độ cập nhật 2026-10-21: #01/#02/#05/#08/#09/#11/#13/#14/#16/#17/#18/#20/#22/#24/#25/#26 đã hoàn thành trong software lab; #04 hoàn thành đầy đủ flow review API và audit trail; #15, #21, #23 đạt partial trong software lab (xem bảng). #06/#07/#51/#52 partial. 445 unit & integration tests toàn dự án xanh. Các ticket mở rộng #53–#68 theo requirement an toàn đô thị được quản lý tại [Index mở rộng](requirements-expansion-index.md). Các gate target deployment, hardware decode và field pilot (G3–G5) vẫn mở.
+Frontier lúc publish là #01/#02. Tiến độ cập nhật 2026-10-21: #01/#02/#05/#08/#09/#11/#13/#14/#16/#17/#18/#20/#22/#24/#25/#26 và #53 (pose outcomes vào person-down flow) đã hoàn thành trong software lab; #04 hoàn thành đầy đủ flow review API và audit trail; #15, #21, #23 đạt partial trong software lab (xem bảng). #06/#07/#51/#52 partial. 450 unit & integration tests toàn dự án xanh. Các ticket mở rộng #53–#68 theo requirement an toàn đô thị được quản lý tại [Index mở rộng](requirements-expansion-index.md). Các gate target deployment, hardware decode và field pilot (G3–G5) vẫn mở.
 
 Status là triage role; Execution theo not-started/in-progress/partial/blocked/done. ready-for-agent không có nghĩa dependencies đã xong. needs-info chỉ dùng facts/provider/target còn thiếu (#15/#29/#42); ready-for-human cho power-cut/survey/field/sign-off (#37/#46/#48/#49/#50). Ghi rõ lý do trong ticket; sau khi có dữ liệu cập nhật triage, không bỏ gate.
 

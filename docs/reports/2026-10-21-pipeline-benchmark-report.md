@@ -1,6 +1,6 @@
 # Báo cáo Benchmark Hiệu năng Edge AI Camera Pipeline
 
-**Ngày thực hiện:** 2026-10-21 01:34:03
+**Ngày thực hiện:** 2026-10-21 12:15:58
 **Môi trường:** Ubuntu Linux x86_64, Intel Core i5-12400F, ONNX Runtime (CPUExecutionProvider)
 **Mô hình:**
 - Detector: `YOLOX-Tiny` (ONNX, 416x416, COCO 80 classes)
@@ -15,10 +15,10 @@
 
 | Video kịch bản | Cấu hình | Độ phân giải | Số frame | Thời gian (s) | Throughput (FPS) | Detections/frame | Peak RAM (MB) |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| `shibuya_crossing_1080p.mp4` | **Baseline (YOLOX + ByteTrack)** | 1920x1080 | 120 | 5.97s | **20.1** | 4.7 | 266.7 MB |
-| `shibuya_crossing_1080p.mp4` | **Full Pipeline + RTMPose** | 1920x1080 | 120 | 13.579s | **8.84** | 4.7 | 519.8 MB |
-| `intersection_traffic_1080p.mp4` | **Baseline (YOLOX + ByteTrack)** | 1920x1080 | 120 | 7.341s | **16.35** | 10.1 | 334.9 MB |
-| `intersection_traffic_1080p.mp4` | **Full Pipeline + RTMPose** | 1920x1080 | 120 | 11.362s | **10.56** | 10.1 | 530.4 MB |
+| `shibuya_crossing_1080p.mp4` | **Baseline (YOLOX + ByteTrack)** | 1920x1080 | 120 | 6.71s | **17.88** | 4.7 | 273.5 MB |
+| `shibuya_crossing_1080p.mp4` | **Full Pipeline + RTMPose** | 1920x1080 | 120 | 8.852s | **13.56** | 4.7 | 520.1 MB |
+| `intersection_traffic_1080p.mp4` | **Baseline (YOLOX + ByteTrack)** | 1920x1080 | 120 | 6.196s | **19.37** | 10.1 | 336.1 MB |
+| `intersection_traffic_1080p.mp4` | **Full Pipeline + RTMPose** | 1920x1080 | 120 | 7.558s | **15.88** | 10.1 | 530.7 MB |
 
 ---
 
@@ -26,28 +26,28 @@
 
 | Kịch bản & Cấu hình | Công đoạn | P50 (Median) | P90 | P95 | Max | Mean |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
-| **shibuya_crossing_1080p.mp4 (Base)** | **Tổng Pipeline** | **44.79** | **53.52** | **56.97** | 64.25 | 46.4 |
-| shibuya_crossing_1080p.mp4 (Base) | Decode & RGB | 1.47 | 1.87 | 1.96 | 6.03 | 1.65 |
-| shibuya_crossing_1080p.mp4 (Base) | YOLOX Preprocess | 10.44 | 13.09 | 15.12 | 16.43 | 10.97 |
-| shibuya_crossing_1080p.mp4 (Base) | YOLOX Inference | 14.44 | 18.17 | 22.38 | 31.56 | 15.48 |
-| shibuya_crossing_1080p.mp4 (Base) | YOLOX Postprocess | 2.17 | 2.43 | 2.65 | 3.36 | 2.21 |
-| **shibuya_crossing_1080p.mp4 (Pose)** | **Tổng Pipeline** | **89.5** | **124.1** | **145.92** | 166.77 | 96.91 |
-| shibuya_crossing_1080p.mp4 (Pose) | Decode & RGB | 1.71 | 1.93 | 2.86 | 5.04 | 1.77 |
-| shibuya_crossing_1080p.mp4 (Pose) | YOLOX Preprocess | 11.35 | 14.34 | 16.4 | 44.12 | 12.19 |
-| shibuya_crossing_1080p.mp4 (Pose) | YOLOX Inference | 15.46 | 32.11 | 42.47 | 53.86 | 19.96 |
-| shibuya_crossing_1080p.mp4 (Pose) | YOLOX Postprocess | 2.21 | 3.1 | 3.44 | 3.74 | 2.35 |
-| shibuya_crossing_1080p.mp4 (Pose) | **RTMPose / người** | **3.73** | **4.41** | **4.59** | 7.61 | 3.78 |
-| **intersection_traffic_1080p.mp4 (Base)** | **Tổng Pipeline** | **56.25** | **57.27** | **58.71** | 64.53 | 56.63 |
-| intersection_traffic_1080p.mp4 (Base) | Decode & RGB | 1.42 | 1.58 | 1.96 | 5.4 | 1.54 |
-| intersection_traffic_1080p.mp4 (Base) | YOLOX Preprocess | 10.96 | 11.52 | 11.66 | 11.85 | 10.96 |
-| intersection_traffic_1080p.mp4 (Base) | YOLOX Inference | 22.14 | 23.1 | 23.18 | 29.0 | 22.52 |
-| intersection_traffic_1080p.mp4 (Base) | YOLOX Postprocess | 2.71 | 2.84 | 2.87 | 3.0 | 2.71 |
-| **intersection_traffic_1080p.mp4 (Pose)** | **Tổng Pipeline** | **83.77** | **115.34** | **135.36** | 166.66 | 88.31 |
-| intersection_traffic_1080p.mp4 (Pose) | Decode & RGB | 1.57 | 1.72 | 1.77 | 7.28 | 1.54 |
-| intersection_traffic_1080p.mp4 (Pose) | YOLOX Preprocess | 10.44 | 13.75 | 14.23 | 35.61 | 10.97 |
-| intersection_traffic_1080p.mp4 (Pose) | YOLOX Inference | 15.05 | 20.33 | 23.0 | 50.85 | 16.64 |
-| intersection_traffic_1080p.mp4 (Pose) | YOLOX Postprocess | 2.23 | 2.99 | 3.34 | 4.76 | 2.36 |
-| intersection_traffic_1080p.mp4 (Pose) | **RTMPose / người** | **3.84** | **4.48** | **4.74** | 8.44 | 4.06 |
+| **shibuya_crossing_1080p.mp4 (Base)** | **Tổng Pipeline** | **44.73** | **52.96** | **108.86** | 175.75 | 52.45 |
+| shibuya_crossing_1080p.mp4 (Base) | Decode & RGB | 1.46 | 1.79 | 1.82 | 40.66 | 1.88 |
+| shibuya_crossing_1080p.mp4 (Base) | YOLOX Preprocess | 10.63 | 12.85 | 13.63 | 16.51 | 10.73 |
+| shibuya_crossing_1080p.mp4 (Base) | YOLOX Inference | 14.37 | 15.94 | 16.52 | 25.97 | 14.77 |
+| shibuya_crossing_1080p.mp4 (Base) | YOLOX Postprocess | 2.15 | 2.35 | 2.41 | 3.29 | 2.18 |
+| **shibuya_crossing_1080p.mp4 (Pose)** | **Tổng Pipeline** | **53.25** | **73.9** | **88.82** | 124.83 | 57.63 |
+| shibuya_crossing_1080p.mp4 (Pose) | Decode & RGB | 2.17 | 5.16 | 5.29 | 7.79 | 2.99 |
+| shibuya_crossing_1080p.mp4 (Pose) | YOLOX Preprocess | 13.96 | 18.71 | 19.98 | 26.96 | 14.5 |
+| shibuya_crossing_1080p.mp4 (Pose) | YOLOX Inference | 15.74 | 29.56 | 39.06 | 53.93 | 19.31 |
+| shibuya_crossing_1080p.mp4 (Pose) | YOLOX Postprocess | 2.26 | 3.42 | 3.59 | 5.47 | 2.48 |
+| shibuya_crossing_1080p.mp4 (Pose) | **RTMPose / người** | **3.87** | **5.76** | **7.83** | 23.17 | 4.4 |
+| **intersection_traffic_1080p.mp4 (Base)** | **Tổng Pipeline** | **44.77** | **55.44** | **56.28** | 61.75 | 47.12 |
+| intersection_traffic_1080p.mp4 (Base) | Decode & RGB | 1.61 | 1.79 | 1.93 | 3.3 | 1.6 |
+| intersection_traffic_1080p.mp4 (Base) | YOLOX Preprocess | 10.36 | 12.15 | 13.36 | 17.55 | 10.82 |
+| intersection_traffic_1080p.mp4 (Base) | YOLOX Inference | 14.62 | 23.02 | 23.05 | 26.09 | 16.13 |
+| intersection_traffic_1080p.mp4 (Base) | YOLOX Postprocess | 2.27 | 2.85 | 3.52 | 3.75 | 2.42 |
+| **intersection_traffic_1080p.mp4 (Pose)** | **Tổng Pipeline** | **54.27** | **56.72** | **61.67** | 72.83 | 54.16 |
+| intersection_traffic_1080p.mp4 (Pose) | Decode & RGB | 1.74 | 5.66 | 7.25 | 9.24 | 2.74 |
+| intersection_traffic_1080p.mp4 (Pose) | YOLOX Preprocess | 11.82 | 16.49 | 18.63 | 24.37 | 12.86 |
+| intersection_traffic_1080p.mp4 (Pose) | YOLOX Inference | 22.02 | 23.16 | 23.66 | 32.62 | 19.59 |
+| intersection_traffic_1080p.mp4 (Pose) | YOLOX Postprocess | 2.59 | 2.84 | 3.52 | 4.27 | 2.59 |
+| intersection_traffic_1080p.mp4 (Pose) | **RTMPose / người** | **3.93** | **4.68** | **4.99** | 11.17 | 4.23 |
 
 ---
 

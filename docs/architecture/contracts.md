@@ -21,7 +21,7 @@ Implementation note (2026-10-14): `PerceptionExecution` tập trung execution, d
 
 ## 2. Event snapshot và identity
 
-Mỗi AI revision là **full snapshot**, không phải delta. Identity revision là `(authenticated device_id, event_id, revision)`, revision là số nguyên dương tăng dần do edge cấp bền vững. Payload chứa schema version, camera/session, pipeline ID/version, taxonomy, origin, timestamps/uncertainty, lifecycle/severity/score, tracks/ROI, model/config/calibration provenance và evidence request references.
+Mỗi AI revision là **full snapshot**, không phải delta. Identity revision là `(authenticated device_id, event_id, revision)`, revision là số nguyên dương tăng dần do edge cấp bền vững. Payload chứa schema version, camera/session, pipeline ID/version, taxonomy, origin, timestamps/uncertainty, lifecycle/severity/score, tracks/ROI, model/config/calibration provenance, optional `quality` assessment, optional `pose_evidence` (gồm `status`: ok/skipped/failed/cancelled/none, `reason`, `branch`, `keypoints`, `executed_at`, `frame_id`, `request_id`), và evidence request references.
 
 - `origin = live | replay | synthetic` độc lập taxonomy nghiệp vụ, bất biến suốt event. Replay vẫn có taxonomy `person_fall` để đánh giá, nhưng không thể biến thành live ở revision sau. Origin do composition/source mode xác định; server kiểm identity/mode được cấp quyền, không tin flag của UI để cho gửi notification.
 - Device/event/camera/session/producer pipeline identity và origin bất biến. Session mất continuity đóng/reset event theo policy và sự kiện mới dùng UUID mới; liên kết sự kiện cũ là reference, không sửa identity cũ. Model/config lineage có thể được ghi bổ sung theo revision nhưng không rewrite history.

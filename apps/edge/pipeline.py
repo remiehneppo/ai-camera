@@ -293,7 +293,13 @@ class PerceptionPipeline:
             observation["pose_reason"] = None if any(o.status == "ok" for o in pose_outcomes) else pose_outcomes[0].reason
 
         # 3. Assess incident engine
-        incidents = self.incident_engine.process_tracks(tracks, timestamp=ts)
+        try:
+            incidents = self.incident_engine.process_tracks(
+                tracks, timestamp=ts, pose_outcomes=pose_outcomes
+            )
+        except TypeError:
+            # Fallback for custom/mock engines that accept (tracks, timestamp) only
+            incidents = self.incident_engine.process_tracks(tracks, timestamp=ts)
 
         # 4. Handle emitted incidents
         emitted_events: list[dict[str, Any]] = []
@@ -342,6 +348,19 @@ class PerceptionPipeline:
             track.history.clear()
         self._set_unknown_quality("observation_gap")
 
+    def _event_model_lineage(self) -> list[dict[str, Any]]:
+        """Model lineage for one event, extended with the pose estimator when one is loaded."""
+        lineage = list(self.model_lineage)
+        estimator = getattr(self.pose_manager, "estimator", None) if self.pose_manager is not None else None
+        manifest = getattr(estimator, "manifest", None)
+        model_id = manifest.get("model_id") if isinstance(manifest, dict) else None
+        if model_id and not any(entry.get("role") == "pose_estimator" for entry in lineage):
+            lineage.append({
+                "role": "pose_estimator",
+                "version": str(model_id),
+            })
+        return lineage
+
     def _handle_incident(self, incident: dict[str, Any], timestamp: float) -> dict[str, Any]:
         """Construct validated Event snapshot, pin ring buffer, and atomically enqueue to outbox."""
         event_id = str(uuid4())
@@ -362,6 +381,22 @@ class PerceptionPipeline:
             anchor_time=anchor_time,
         )
 
+        payload: dict[str, Any] = {
+            "quality": dict(self.quality),
+            "taxonomy": taxonomy,
+            "lifecycle": "candidate",
+            "severity": severity,
+            "confidence": float(incident.get("confidence", 0.9)),
+            "track_id": incident.get("track_id"),
+            "anchor_time": anchor_time,
+            "detection_time": float(incident.get("detection_time", timestamp)),
+            "detections": incident.get("detections", []),
+            "evidence_requests": [evidence_request],
+        }
+        pose_evidence = incident.get("pose_evidence")
+        if pose_evidence is not None:
+            payload["pose_evidence"] = pose_evidence
+
         event_snapshot: dict[str, Any] = {
             "schema_version": 1,
             "message_id": message_id,
@@ -376,22 +411,11 @@ class PerceptionPipeline:
             "event_time": now_iso,
             "produced_at": now_iso,
             "config_version": self.config_version,
-            "model_lineage": self.model_lineage,
+            "model_lineage": self._event_model_lineage(),
             "model_artifact_hash": self.model_artifact_hash,
             "calibration_version": self.calibration_version,
             "quality_state": self.quality_state,
-            "payload": {
-                "quality": dict(self.quality),
-                "taxonomy": taxonomy,
-                "lifecycle": "candidate",
-                "severity": severity,
-                "confidence": float(incident.get("confidence", 0.9)),
-                "track_id": incident.get("track_id"),
-                "anchor_time": anchor_time,
-                "detection_time": float(incident.get("detection_time", timestamp)),
-                "detections": incident.get("detections", []),
-                "evidence_requests": [evidence_request],
-            },
+            "payload": payload,
         }
 
         # Validate event contract
