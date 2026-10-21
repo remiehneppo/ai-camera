@@ -38,6 +38,26 @@ class ReviewNotFound(Exception):
     pass
 
 
+LOW_PRIORITY_TAXONOMIES = frozenset({"person_on_stationary_vehicle"})
+SEVERITY_VALUES = ("low", "medium", "high", "critical")
+
+
+def review_priority_for(payload: dict[str, Any]) -> str:
+    """Return the review-queue priority class for an event payload.
+
+    On-vehicle events lower priority rather than suppress the event, and a low
+    severity never becomes an urgent review or notification candidate. An
+    explicit high/critical severity still wins: that is the danger override
+    (fallen or suddenly stopped vehicle), so an emergency is never hidden.
+    """
+    severity = payload.get("severity")
+    if severity in {"high", "critical"}:
+        return "urgent"
+    if payload.get("taxonomy") in LOW_PRIORITY_TAXONOMIES or severity == "low":
+        return "low"
+    return "standard"
+
+
 def cleanup_temp_evidence(evidence_dir: str | Path) -> list[str]:
     cleaned: list[str] = []
     base = Path(evidence_dir)
@@ -190,12 +210,16 @@ class EventStore:
                             {"device_id": event["device_id"], "event_id": event["event_id"]}, review, session=session
                         )
             reason = "synthetic_or_replay_origin" if event["origin"] in {"synthetic", "replay"} else "lab_notifications_disabled"
+            payload = event["payload"]
             self.outbox.insert_one(
                 {
                     **key,
                     "message_id": event["message_id"],
                     "event_hash": event_hash,
                     "origin": event["origin"],
+                    "taxonomy": payload.get("taxonomy"),
+                    "severity": payload.get("severity"),
+                    "review_priority": review_priority_for(payload),
                     "policy_version": "lab-disabled-v1",
                     "eligibility": "ineligible",
                     "reason": reason,
@@ -221,16 +245,24 @@ class EventStore:
                     raise EventHashConflict("event revision already exists with different content")
                 raise
 
-    def list_current(self, limit: int, cursor: str | None = None) -> PaginatedEvents:
+    def list_current(
+        self,
+        limit: int,
+        cursor: str | None = None,
+        severity: str | None = None,
+        taxonomy: str | None = None,
+    ) -> PaginatedEvents:
         query: dict[str, Any] = {}
+        if severity is not None:
+            query["event.payload.severity"] = severity
+        if taxonomy is not None:
+            query["event.payload.taxonomy"] = taxonomy
         if cursor:
             cursor_updated_at, cursor_id = decode_cursor(cursor)
-            query = {
-                "$or": [
-                    {"updated_at": {"$lt": cursor_updated_at}},
-                    {"updated_at": cursor_updated_at, "_id": {"$lt": cursor_id}},
-                ]
-            }
+            query["$or"] = [
+                {"updated_at": {"$lt": cursor_updated_at}},
+                {"updated_at": cursor_updated_at, "_id": {"$lt": cursor_id}},
+            ]
 
         mongo_cursor = (
             self.current.find(query, {"_id": 1, "event": 1, "event_hash": 1, "updated_at": 1})
@@ -279,6 +311,9 @@ class EventStore:
         for row in rows:
             event = row["event"]
             key = (event["device_id"], event["event_id"])
+            row["taxonomy"] = event["payload"].get("taxonomy")
+            row["severity"] = event["payload"].get("severity")
+            row["review_priority"] = review_priority_for(event["payload"])
             row["review"] = states.get(key, {
                 "device_id": key[0],
                 "event_id": key[1],
@@ -347,6 +382,9 @@ class EventStore:
                 "reviewed_event_hash": request["viewed_event_hash"],
                 "viewed_evidence_versions": request["viewed_evidence_versions"],
                 "reviewed_evidence_manifests": deepcopy(manifests),
+                "reviewed_taxonomy": viewed_event["payload"].get("taxonomy"),
+                "reviewed_severity": viewed_event["payload"].get("severity"),
+                "reviewed_review_priority": review_priority_for(viewed_event["payload"]),
                 "updated_at": now,
             }
             updated.pop("audit", None)
@@ -361,6 +399,9 @@ class EventStore:
                 "viewed_event_hash": request["viewed_event_hash"],
                 "viewed_evidence_versions": request["viewed_evidence_versions"],
                 "reviewed_evidence_manifests": deepcopy(manifests),
+                "reviewed_taxonomy": viewed_event["payload"].get("taxonomy"),
+                "reviewed_severity": viewed_event["payload"].get("severity"),
+                "reviewed_review_priority": review_priority_for(viewed_event["payload"]),
                 "created_at": now,
             }
             self.reviews.replace_one(key, updated, upsert=True, session=session)

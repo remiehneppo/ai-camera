@@ -705,6 +705,127 @@ class TestIncidentEngine(unittest.TestCase):
                 break
         self.assertTrue(triggered, "Expected persistent lying incident after 3.0s stationary")
 
+    def test_person_lying_on_stationary_upright_vehicle_is_low_priority(self) -> None:
+        """#27: lying on a stationary upright motorcycle keeps review but at low priority."""
+        engine = IncidentEngine(
+            min_lying_duration=3.0,
+            persistent_lying_duration=1.0,
+            cooldown_seconds=30.0,
+        )
+        bike_bbox = [300.0, 180.0, 360.0, 280.0]  # AR 0.6: upright
+        bike = Track(track_id=900, bbox=bike_bbox, score=0.9, label="motorcycle", timestamp=0.0)
+        engine.process_tracks([bike], timestamp=0.0)
+
+        person_bbox = [245.0, 200.0, 405.0, 260.0]  # lying AR 2.67, center inside bike bbox
+        person = Track(track_id=901, bbox=person_bbox, score=0.88, label="person", timestamp=1.0)
+        emitted: list[dict[str, Any]] = []
+        for i in range(20):
+            t = round(1.0 + i * 0.1, 2)
+            bike.update(bike_bbox, score=0.9, timestamp=t)
+            person.update(person_bbox, score=0.88, timestamp=t)
+            emitted.extend(engine.process_tracks([bike, person], timestamp=t))
+
+        self.assertEqual(len(emitted), 1, "on-vehicle must still emit a review event")
+        incident = emitted[0]
+        self.assertEqual(incident["taxonomy"], "person_on_stationary_vehicle")
+        self.assertEqual(incident["severity"], "low")
+        self.assertEqual(incident["anchor_kind"], "first_qualifying_observation")
+        self.assertAlmostEqual(incident["anchor_time"], 1.0, delta=0.05)
+        self.assertEqual(incident["track_id"], 901)
+        self.assertEqual(incident["vehicle_track_id"], 900)
+
+    def test_rapid_fall_over_stationary_vehicle_stays_critical(self) -> None:
+        """#27 danger override: an observed falling onset is never demoted for bbox overlap."""
+        engine = IncidentEngine(min_lying_duration=3.0, cooldown_seconds=30.0)
+        bike_bbox = [300.0, 180.0, 360.0, 280.0]
+        bike = Track(track_id=910, bbox=bike_bbox, score=0.9, label="motorcycle", timestamp=0.0)
+        engine.process_tracks([bike], timestamp=0.0)
+
+        standing_bbox = [300.0, 120.0, 360.0, 280.0]  # AR 0.375, overlapping the bike
+        person = Track(track_id=911, bbox=standing_bbox, score=0.9, label="person", timestamp=1.0)
+        bike.update(bike_bbox, score=0.9, timestamp=1.0)
+        engine.process_tracks([bike, person], timestamp=1.0)
+
+        lying_bbox = [245.0, 200.0, 405.0, 260.0]
+        emitted: list[dict[str, Any]] = []
+        for i in range(1, 50):
+            t = round(1.0 + i * 0.1, 2)
+            bike.update(bike_bbox, score=0.9, timestamp=t)
+            person.update(lying_bbox, score=0.9, timestamp=t)
+            emitted.extend(engine.process_tracks([bike, person], timestamp=t))
+            if emitted:
+                break
+
+        self.assertEqual(len(emitted), 1)
+        self.assertEqual(emitted[0]["taxonomy"], "person_fall")
+        self.assertEqual(emitted[0]["severity"], "critical")
+        self.assertEqual(emitted[0]["anchor_kind"], "onset")
+
+    def test_fallen_vehicle_beside_lying_person_is_not_low_priority(self) -> None:
+        """#27 danger override: a fallen/overturned 2-wheeler keeps the high review priority."""
+        engine = IncidentEngine(persistent_lying_duration=1.0, cooldown_seconds=30.0)
+        fallen_bike_bbox = [300.0, 240.0, 440.0, 280.0]  # AR 3.5: lying on its side
+        bike = Track(track_id=920, bbox=fallen_bike_bbox, score=0.9, label="motorcycle", timestamp=0.0)
+        engine.process_tracks([bike], timestamp=0.0)
+
+        person_bbox = [280.0, 210.0, 440.0, 270.0]
+        person = Track(track_id=921, bbox=person_bbox, score=0.88, label="person", timestamp=1.0)
+        emitted: list[dict[str, Any]] = []
+        for i in range(20):
+            t = round(1.0 + i * 0.1, 2)
+            bike.update(fallen_bike_bbox, score=0.9, timestamp=t)
+            person.update(person_bbox, score=0.88, timestamp=t)
+            emitted.extend(engine.process_tracks([bike, person], timestamp=t))
+
+        self.assertEqual(len(emitted), 1)
+        self.assertEqual(emitted[0]["taxonomy"], "person_lying_persistent")
+        self.assertEqual(emitted[0]["severity"], "high")
+        self.assertNotIn("vehicle_track_id", emitted[0])
+
+    def test_moving_vehicle_arriving_after_lying_is_not_on_vehicle(self) -> None:
+        """#27: a vehicle that was moving/arrived after the lying state started cannot demote."""
+        engine = IncidentEngine(persistent_lying_duration=1.0, cooldown_seconds=30.0)
+        bike = Track(track_id=930, bbox=[100.0, 180.0, 160.0, 280.0], score=0.9,
+                     label="motorcycle", timestamp=0.0)
+        engine.process_tracks([bike], timestamp=0.0)
+
+        person_bbox = [245.0, 200.0, 405.0, 260.0]
+        person = Track(track_id=931, bbox=person_bbox, score=0.88, label="person", timestamp=1.0)
+        emitted: list[dict[str, Any]] = []
+        for i in range(1, 30):
+            t = round(1.0 + i * 0.1, 2)
+            offset = min(i * 20.0, 200.0)  # drives toward the person, stops overlapping
+            bike.update([100.0 + offset, 180.0, 160.0 + offset, 280.0], score=0.9, timestamp=t)
+            person.update(person_bbox, score=0.88, timestamp=t)
+            emitted.extend(engine.process_tracks([bike, person], timestamp=t))
+
+        self.assertEqual(len(emitted), 1)
+        self.assertEqual(emitted[0]["taxonomy"], "person_lying_persistent")
+        self.assertEqual(emitted[0]["severity"], "high")
+        self.assertNotIn("vehicle_track_id", emitted[0])
+
+    def test_vehicle_tilting_after_lying_onset_activates_danger_override(self) -> None:
+        """#27 danger override: the qualifying vehicle must stay upright for low priority."""
+        engine = IncidentEngine(persistent_lying_duration=1.0, cooldown_seconds=30.0)
+        bike_bbox = [300.0, 180.0, 360.0, 280.0]
+        bike = Track(track_id=940, bbox=bike_bbox, score=0.9, label="motorcycle", timestamp=0.0)
+        engine.process_tracks([bike], timestamp=0.0)
+
+        person_bbox = [245.0, 200.0, 405.0, 260.0]
+        person = Track(track_id=941, bbox=person_bbox, score=0.88, label="person", timestamp=1.0)
+        emitted: list[dict[str, Any]] = []
+        for i in range(20):
+            t = round(1.0 + i * 0.1, 2)
+            current_bike_bbox = [300.0, 240.0, 440.0, 280.0] if t >= 2.0 else bike_bbox
+            bike.update(current_bike_bbox, score=0.9, timestamp=t)
+            person.update(person_bbox, score=0.88, timestamp=t)
+            emitted.extend(engine.process_tracks([bike, person], timestamp=t))
+
+        self.assertEqual(len(emitted), 1)
+        self.assertEqual(emitted[0]["taxonomy"], "person_lying_persistent")
+        self.assertEqual(emitted[0]["severity"], "high")
+        self.assertNotIn("vehicle_track_id", emitted[0])
+
     def test_fall_candidate_motion_does_not_overwrite_onset_time(self) -> None:
         """P1-10: Motion while in fall candidate updates lying_start_time but preserves onset_time."""
         track = Track(
@@ -845,6 +966,30 @@ class TestEdgePipelineIncidents(unittest.TestCase):
         pending = self.outbox.pending()
         self.assertEqual(len(pending), 1)
         self.assertEqual(pending[0]["event"]["event_id"], event["event_id"])
+
+    def test_pipeline_emits_low_priority_event_for_person_on_stationary_vehicle(self) -> None:
+        """#27: pipeline keeps the low-severity on-vehicle review event and its anchor."""
+        bike_det = [{"bbox": [300.0, 180.0, 360.0, 280.0], "score": 0.9, "label": "motorcycle"}]
+        for i in range(6):  # the motorcycle is already parked before the person lies on it
+            self.pipeline.process_frame(self.rgb, timestamp=round(i * 0.1, 2), frame_id=i, detections=bike_det)
+
+        person_det = {"bbox": [245.0, 200.0, 405.0, 260.0], "score": 0.88, "label": "person"}
+        emitted: list[dict[str, Any]] = []
+        for i in range(6, 50):
+            t = round(i * 0.1, 2)
+            events = self.pipeline.process_frame(
+                self.rgb, timestamp=t, frame_id=i, detections=[*bike_det, person_det])
+            emitted.extend(events)
+
+        self.assertEqual(len(emitted), 1, "Expected exactly 1 on-vehicle review event")
+        payload = emitted[0]["payload"]
+        self.assertEqual(payload["taxonomy"], "person_on_stationary_vehicle")
+        self.assertEqual(payload["severity"], "low")
+        self.assertIn("vehicle_track_id", payload)
+        self.assertEqual(payload["evidence_requests"][0]["evidence_anchor_kind"],
+                         "first_qualifying_observation")
+        self.assertAlmostEqual(payload["anchor_time"], 0.7, delta=0.05)
+        self.assertEqual(len(self.outbox.pending()), 1)
 
     def test_pipeline_emits_valid_event_and_evidence_for_person_fall(self) -> None:
         """Pipeline handles person_fall with anchor_kind onset."""

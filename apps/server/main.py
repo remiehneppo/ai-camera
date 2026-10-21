@@ -22,6 +22,7 @@ from apps.server.config import ServerConfig, load_server_config
 from apps.server.dataset import export_dataset_records, records_to_jsonl
 from apps.server.live_stream import LiveStreamService
 from apps.server.store import (
+    SEVERITY_VALUES,
     EventHashConflict,
     EventIdentityConflict,
     EventStore,
@@ -32,6 +33,14 @@ from apps.server.store import (
 
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_EVIDENCE_BYTES = 100 * 1024 * 1024  # 100 MiB limit per evidence clip
+MAX_TAXONOMY_LENGTH = 128
+
+
+def _validate_queue_filters(severity: str | None, taxonomy: str | None) -> None:
+    if severity is not None and severity not in SEVERITY_VALUES:
+        raise HTTPException(status_code=422, detail="severity must be low, medium, high, or critical")
+    if taxonomy is not None and (not taxonomy.strip() or len(taxonomy) > MAX_TAXONOMY_LENGTH):
+        raise HTTPException(status_code=422, detail="taxonomy must be 1 to 128 characters")
 
 
 def _infer_evidence_extension(metadata: dict[str, Any], content_type_header: str = "") -> str:
@@ -303,14 +312,21 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
         return JSONResponse(receipt, status_code=200)
 
     @app.get("/v1/events")
-    def list_events(request: Request, limit: int = 50, cursor: str | None = None) -> dict[str, Any]:
+    def list_events(
+        request: Request,
+        limit: int = 50,
+        cursor: str | None = None,
+        severity: str | None = None,
+        taxonomy: str | None = None,
+    ) -> dict[str, Any]:
         token = _bearer(request)
         if not hmac.compare_digest(token.encode("utf-8"), dashboard_token.encode("utf-8")):
             raise HTTPException(status_code=401, detail="invalid dashboard credentials", headers={"WWW-Authenticate": "Bearer"})
         if not 1 <= limit <= 100:
             raise HTTPException(status_code=422, detail="limit must be between 1 and 100")
+        _validate_queue_filters(severity, taxonomy)
         try:
-            paginated = store.list_current(limit, cursor=cursor)
+            paginated = store.list_current(limit, cursor=cursor, severity=severity, taxonomy=taxonomy)
             return {
                 "events": paginated,
                 "next_cursor": getattr(paginated, "next_cursor", None),
@@ -361,11 +377,14 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
         include_ambiguous: bool = False,
         format: str = "jsonl",
         split_by: str = "camera",
+        severity: str | None = None,
+        taxonomy: str | None = None,
     ) -> Response:
         token = _viewer_token(request)
         if not _is_authorized_viewer(token, dashboard_token, reviewer_tokens):
             raise HTTPException(status_code=401, detail="unauthorized viewer credentials", headers={"WWW-Authenticate": "Bearer"})
 
+        _validate_queue_filters(severity, taxonomy)
         if split not in {"train", "val", "test", "all"}:
             raise HTTPException(status_code=422, detail="invalid split parameter")
         if decision not in {"confirmed", "false_positive", "resolved", "reopened", "all"}:
@@ -382,6 +401,8 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
                 decision=decision,
                 include_ambiguous=include_ambiguous,
                 split_by=split_by,
+                severity=severity,
+                taxonomy=taxonomy,
             )
         except PyMongoError:
             raise HTTPException(status_code=503, detail="dataset export unavailable")

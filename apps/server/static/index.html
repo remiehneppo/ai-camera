@@ -22,6 +22,9 @@
     .badge-available { background: #10b98133; color: #059669; }
     .badge-rtsp { background: #10b98133; color: #059669; }
     .badge-fallback { background: #e0990033; color: #d97706; }
+    .badge-priority-low { background: #6b728033; color: #4b5563; }
+    .badge-priority-standard { background: #3b82f633; color: #2563eb; }
+    .badge-priority-urgent { background: #dc262633; color: #dc2626; }
     video { width: 100%; max-width: 640px; height: auto; border-radius: .35rem; display: block; margin: .5rem 0; background: #000; }
     .evidence-item { margin: .5rem 0; }
     .evidence-actions { display: flex; gap: .75rem; align-items: baseline; }
@@ -147,11 +150,19 @@
             card.className = "event";
             card.dataset.eventKey = JSON.stringify([event.device_id, event.event_id]);
             const header = document.createElement("header");
-            add(header, "strong", event.payload.taxonomy || "Event");
+            const taxonomy = event.payload.taxonomy || "Event";
+            add(header, "strong", taxonomy);
+            if (taxonomy === "person_on_stationary_vehicle") {
+              add(header, "span", "On-vehicle (Low priority)", "badge badge-priority-low");
+            }
+            const priority = row.review_priority || "standard";
+            if (priority !== "low") {
+              add(header, "span", `${priority === "urgent" ? "Emergency" : "Standard"} priority`, `badge badge-priority-${priority}`);
+            }
             add(header, "span", event.origin, "muted");
             add(card, "h2", `${event.camera_id} · revision ${event.revision}`);
             card.prepend(header);
-            add(card, "p", `${event.payload.lifecycle || "unknown"} · ${event.payload.severity || "unknown"} · quality ${event.quality_state}${event.payload.quality ? ` · ODD ${event.payload.quality.odd_supported === true ? "supported" : event.payload.quality.odd_supported === false ? "not supported" : "unverified"}` : ""}`);
+            add(card, "p", `${event.payload.lifecycle || "unknown"} · ${event.payload.severity || "unknown"} · review priority ${priority} · quality ${event.quality_state}${event.payload.quality ? ` · ODD ${event.payload.quality.odd_supported === true ? "supported" : event.payload.quality.odd_supported === false ? "not supported" : "unverified"}` : ""}`);
             const time = add(card, "time", event.event_time);
             time.dateTime = event.event_time;
             add(card, "p", `Event ${event.event_id}`, "muted");

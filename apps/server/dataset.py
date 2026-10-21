@@ -8,7 +8,7 @@ import json
 import os
 from typing import Any
 
-from apps.server.store import EventStore
+from apps.server.store import EventStore, review_priority_for
 
 SENSITIVE_KEY_SUBSTRINGS = (
     "token",
@@ -94,6 +94,8 @@ def export_dataset_records(
     train_ratio: float = 0.7,
     val_ratio: float = 0.15,
     test_ratio: float = 0.15,
+    severity: str | None = None,
+    taxonomy: str | None = None,
 ) -> list[dict[str, Any]]:
     """Extract reviewed event records with exact lineage, evidence manifest, and dataset split."""
     query_decision = decision if decision != "all" else None
@@ -143,6 +145,9 @@ def export_dataset_records(
             "device_id": event["device_id"],
             "camera_id": event.get("camera_id"),
             "occurred_at": event.get("event_time"),
+            "taxonomy": event["payload"].get("taxonomy"),
+            "severity": event["payload"].get("severity"),
+            "review_priority": review_priority_for(event["payload"]),
             "reviewed_decision": effective_decision,
             "review_version": review.get("review_version"),
             "actor": review.get("actor"),
@@ -177,6 +182,12 @@ def export_dataset_records(
 
     if decision != "all":
         assigned_records = [r for r in assigned_records if r.get("reviewed_decision") == decision]
+
+    if taxonomy is not None:
+        assigned_records = [r for r in assigned_records if r.get("taxonomy") == taxonomy]
+
+    if severity is not None:
+        assigned_records = [r for r in assigned_records if r.get("severity") == severity]
 
     return assigned_records
 

@@ -304,7 +304,11 @@ class PerceptionPipeline:
         # 4. Handle emitted incidents
         emitted_events: list[dict[str, Any]] = []
         for incident in incidents:
-            if incident.get("taxonomy") in {"person_fall", "person_lying_persistent"}:
+            if incident.get("taxonomy") in {
+                "person_fall",
+                "person_lying_persistent",
+                "person_on_stationary_vehicle",
+            }:
                 event = self._handle_incident(incident, ts)
                 emitted_events.append(event)
 
@@ -396,6 +400,9 @@ class PerceptionPipeline:
         pose_evidence = incident.get("pose_evidence")
         if pose_evidence is not None:
             payload["pose_evidence"] = pose_evidence
+        vehicle_track_id = incident.get("vehicle_track_id")
+        if vehicle_track_id is not None:
+            payload["vehicle_track_id"] = vehicle_track_id
 
         event_snapshot: dict[str, Any] = {
             "schema_version": 1,

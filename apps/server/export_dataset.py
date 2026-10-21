@@ -60,6 +60,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output export format (jsonl or json)",
     )
     parser.add_argument(
+        "--taxonomy",
+        default=None,
+        help="Optional taxonomy filter (for example person_on_stationary_vehicle)",
+    )
+    parser.add_argument(
+        "--severity",
+        default=None,
+        help="Optional severity filter (low, medium, high, critical)",
+    )
+    parser.add_argument(
         "--token",
         default=None,
         help="Optional authorization token for scoped export",
@@ -84,6 +94,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             decision=args.decision,
             include_ambiguous=args.include_ambiguous,
             split_by=args.split_by,
+            taxonomy=args.taxonomy,
+            severity=args.severity,
         )
 
         if args.format == "jsonl":
