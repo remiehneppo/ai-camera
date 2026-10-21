@@ -86,6 +86,8 @@ F03/J05 ghi backlog B, tốc độ upload hữu dụng U và tốc độ sinh ev
 
 G3 áp dụng target thực: ONNX vẫn phải native/oracle/event conformance và soak; chỉ thêm conversion/RKNN parity khi chọn RKNN. Chưa chọn target thì chưa ký capacity, nhưng không chặn lab ONNX.
 
+*Lưu ý benchmark lab (cập nhật 2026-10-21):* Đã thực hiện đo đạc benchmark pipeline sơ bộ trên workstation x86 (Intel Core i5-12400F, ONNX Runtime CPU) với 2 clip video 1080p chuẩn mở tại [Báo cáo Benchmark Pipeline](../reports/2026-10-21-pipeline-benchmark-report.md). Kết quả xác nhận thông lượng đạt 16.35–20.10 FPS (Baseline) và 8.84–10.56 FPS (kèm RTMPose-Tiny, ~3.8ms/người), RAM 266–530 MB. Đây là căn cứ tham chiếu năng lực phần mềm; benchmark trên actual hardware SKU đích (Jetson Orin NX) và thermal soak 24–72h vẫn là điều kiện bắt buộc trước khi ký nghiệm thu capacity.
+
 ## Manifest benchmark tối thiểu
 
 Số chưa đo là `null`; điền lý do trong `missing_measurements`. Clock basis phải cho biết capture age hay receive age. Không ký capacity từ manifest mẫu này.

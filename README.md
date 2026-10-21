@@ -1,6 +1,6 @@
 # AI Camera lab slice
 
-Implemented software-lab slices: synthetic event/dashboard (#01), lab facts/protocol (#02), retry/revision delivery (#05), and pinned ONNX detector oracle (#11). Config/doctor (#03), event review (#04), file recorder/replay (#06), and durable pinned evidence (#07) remain partial or blocked as recorded in the [tracker](.scratch/system-build-slices/PRD.md). File-based recorder and detector-stage oracle commands exist; a composed live analytics/recorder runtime, native tracking/pose, server evidence upload/playback (#08), and production/target acceptance are not implemented or not yet accepted.
+Implemented software-lab slices: synthetic event/dashboard (#01), lab facts/protocol (#02), versioned review with audit trail and re-review triggers (#04), retry/revision delivery (#05), file recorder/replay (#06), durable pinned evidence (#07), server evidence upload/playback (#08), process crash recovery (#09), pinned ONNX detector oracle (#11), Python ByteTracker with time/session semantics (#13), end-to-end perception pipeline baseline (#14), live runner (#15 partial), startup/shutdown (#16), truthful health monitor with operational fault surfacing (#17), storage quota protection (#18), dataset feedback lineage (#20), ODD image quality assessment and freeze detection (#21 partial), RTMPose-Tiny pose estimation (#22), track gap and clock jump handling (#23 partial), pose scheduling and degradation (#24), person fall detection (#25), and persistent lying (#26). Full Python test suite (445 tests) passes across edge, health, quota, pose, review API, and contracts. Native C++ acceleration (#10/#12), camera hardware RTSP field validation, and production target deployment acceptance (G3–G5) remain open as tracked in the [tracker](.scratch/system-build-slices/PRD.md).
 
 ## Run the lab stack
 
@@ -139,6 +139,31 @@ This scenario persists an intent, prunes before first pin, restarts the recorder
 
 Both diagnostics remove temporary artifacts after reporting; use small fixtures. Neither establishes live RTSP, bounded queue/drop stress, target/storage sizing, power-cut, production clearance or evidence upload/playback acceptance. #06/#07 remain partial; #08 remains blocked.
 
+## Benchmark dataset and pipeline performance suite
+
+An automated benchmark suite profiles the complete edge perception pipeline against real 1080p surveillance video footage (`shibuya_crossing_1080p.mp4` for pedestrian flow and `intersection_traffic_1080p.mp4` for vehicle traffic, under CC BY-SA 4.0).
+
+1. Download and verify the benchmark dataset (assets pinned by SHA-256 in `data/benchmark/manifest.json`):
+```sh
+python3 tools/fetch_benchmark_dataset.py
+```
+
+2. Run the automated pipeline benchmark (measures Baseline vs Full Pipeline with RTMPose-Tiny):
+```sh
+.venv-oracle/bin/python tools/run_benchmark.py --max-frames 120 --sample-fps 10.0
+```
+
+### Measured performance summary (Intel Core i5-12400F, ONNX Runtime CPU):
+
+| Scenario (1080p) | Configuration | Throughput (FPS) | Median Latency (P50) | Peak RAM (RSS) |
+| :--- | :--- | :---: | :---: | :---: |
+| **Shibuya Crossing** | **Baseline (YOLOX + ByteTrack)** | **20.10 FPS** | **44.79 ms** | **266.7 MB** |
+| **Shibuya Crossing** | **Full Pipeline + RTMPose** | **8.84 FPS** | **89.50 ms** | **519.8 MB** (Pose: 3.73 ms/person) |
+| **Intersection Traffic** | **Baseline (YOLOX + ByteTrack)** | **16.35 FPS** | **56.25 ms** | **334.9 MB** |
+| **Intersection Traffic** | **Full Pipeline + RTMPose** | **10.56 FPS** | **83.77 ms** | **530.4 MB** (Pose: 3.84 ms/person) |
+
+Detailed breakdown of per-stage latencies (decode, preprocess, inference, NMS, tracking, pose) is recorded in [Pipeline Benchmark Report](docs/reports/2026-10-21-pipeline-benchmark-report.md).
+
 ## Server and edge behavior notes
 
 - `GET /api/events` is cursor-paginated: `limit` is 1-100 and the response carries `events`, `next_cursor` and `review_enabled`. Pass `next_cursor` back as `cursor` for the next page; a malformed cursor is rejected with 422.
@@ -152,6 +177,10 @@ Full change record: `docs/logs/2026-10-15-implement-dispatch-summary.md` and `do
 
 ## Checks
 
-For the complete oracle/numerical test suite and static checks, install `.venv-oracle/bin/pip install -r requirements-oracle-test.txt`, then run `.venv-oracle/bin/python -m unittest discover -s tests`. Optional-runtime and real-asset tests explicitly skip when their prerequisites are absent; a skipped suite is not golden acceptance.
+Run the entire test suite with pytest using the oracle lab environment:
+```sh
+.venv-oracle/bin/python -m pytest -q
+```
+All **445 tests** across edge perception, tracking, fall incident engine, RTMPose estimation, ODD quality assessment, health monitoring, storage quota, server review API, and event contracts pass.
 
 Run the local contract and SQLite tests with `python -m unittest discover -s tests`. MongoDB transaction, HTTP auth, and browser checks require the Compose lab to be running; they are separate from this unit suite.

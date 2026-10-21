@@ -31,7 +31,19 @@ Nguồn: read-only probes `uname -a`, `lscpu`, `free -h`, `lsblk -o NAME,SIZE,TY
 
 [Quyết định Q35](../logs/2026-10-20-requirements-expansion.md) bổ sung RF-DETR + ViTPose để đánh giá, không thay baseline YOLOX/RTMPose/ONNX/software decode hay các pins lab đã ghi. Jetson Orin NX là dòng hardware ứng viên (không phải Xavier NX), chưa chọn board deployment/accepted SKU. RAM/SKU, OS/SDK/runtime, exact model variants/checkpoints/hash, license/data/privacy clearance, model quality và camera/FPS/capacity đều `pending`; inventory workstation ở trên không phải kết quả Orin NX.
 
-[Hồ sơ ứng viên](../requirements/technology-candidates.md) ghi capability và gates; [danh mục tình huống](../requirements/urban-safety-scenarios.md) không phải chứng nhận độ phủ. Detector + pose không tự đáp ứng các hành vi theo thời gian hay toàn bộ 13 nhóm/nhánh phá hoại; từng capability cần temporal/domain logic và quality/ODD acceptance riêng. Person-down một camera/ROI lòng đường vẫn đi trước tai nạn xe và các nhóm mở rộng. Không có download/benchmark/runtime test mới trong cập nhật tài liệu này.
+[Hồ sơ ứng viên](../requirements/technology-candidates.md) ghi capability và gates; [danh mục tình huống](../requirements/urban-safety-scenarios.md) không phải chứng nhận độ phủ. Detector + pose không tự đáp ứng các hành vi theo thời gian hay toàn bộ 13 nhóm/nhánh phá hoại; từng capability cần temporal/domain logic và quality/ODD acceptance riêng. Person-down một camera/ROI lòng đường vẫn đi trước tai nạn xe và các nhóm mở rộng.
+
+## Thử nghiệm và Benchmark Dataset Thực tế — 2026-10-21
+
+- Tải và ghim SHA-256 bộ video giám sát đô thị 1080p chuẩn mở (CC BY-SA 4.0) vào `data/benchmark/` bằng công cụ `tools/fetch_benchmark_dataset.py`, metadata tại `data/benchmark/manifest.json`:
+  - `shibuya_crossing_1080p.mp4` (87.9 MB, SHA-256 `6689609b91920ae7276a74332763084e80a13754c87ce43332982bf95099fa2e`): Kịch bản luồng người đi bộ, phục vụ đo tracking người và trích xuất pose keypoints.
+  - `intersection_traffic_1080p.mp4` (42.2 MB, SHA-256 `e2ac922ab543c444852e0116967cc28274692f07da87cca266edaf82ac3ff806`): Kịch bản phương tiện giao thông qua nút giao, phục vụ đo nhận diện và bám vết đa lớp đối tượng.
+- Kết quả đo đạc tự động qua `tools/run_benchmark.py` trên workstation lab x86 (Intel Core i5-12400F, ONNX Runtime CPUExecutionProvider):
+  - **Baseline Pipeline (YOLOX-Tiny + ByteTrack + IncidentEngine + FileRecorder):** Thông lượng đạt **16.35 – 20.10 FPS**, độ trễ trung vị P50 từ **44.79 – 56.25 ms**, bộ nhớ RAM đỉnh **266.7 – 334.9 MB**.
+  - **Full Pipeline + RTMPose-Tiny (17 keypoints SimCC):** Thông lượng đạt **8.84 – 10.56 FPS**, trích xuất pose trung vị P50 từ **3.73 – 3.84 ms / người**, bộ nhớ RAM đỉnh **519.8 – 530.4 MB**.
+  - Báo cáo chi tiết và bảng latency breakdown: [Báo cáo Benchmark Pipeline](../reports/2026-10-21-pipeline-benchmark-report.md).
+- Toàn bộ test suite phần mềm đạt **445 passed** (100% test xanh trên toàn bộ các gói: perception, health, quota, tracker, incident engine, ODD quality/freeze, review server, event contracts).
+- **Giới hạn:** Đây là số đo thực tế trên workstation CPU x86 làm căn cứ tham chiếu kỹ thuật; chưa phải nghiệm thu target capacity hay thermal soak trên phần cứng nhúng đích (Jetson Orin NX) hoặc thử nghiệm thực địa (G3/G5).
 
 ## Scope, workload và ODD
 

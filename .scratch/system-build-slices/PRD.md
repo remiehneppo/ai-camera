@@ -14,7 +14,7 @@ Ticket trong tracker này là đơn vị claim/thực hiện và nguồn duy nh�
 
 ## Cách chọn việc
 
-Frontier lúc publish là #01/#02. Hiện #01/#02/#05 đã done (đoạn này là snapshot 2026-10-12; tiến độ hiện tại ở bảng, cập nhật 2026-10-17); #11 done trong software lab, production clearance vẫn mở. #03 blocked, #04/#06/#07 partial; #08 done trong software lab (upload/playback, xem bảng; hardening còn theo #43/#36); #07 vẫn partial nhưng không còn chặn #08 trong lab. #11 không tự mở #10/#12: #03/#06 và #10 vẫn còn blocker. Những ticket khác chỉ mở khi Blocked by/Conditional blockers đã đạt và external/activation gates được đáp ứng.
+Frontier lúc publish là #01/#02. Tiến độ cập nhật 2026-10-21: #01/#02/#05/#08/#09/#11/#13/#14/#16/#17/#18/#20/#22/#24/#25/#26 đã hoàn thành trong software lab; #04 hoàn thành đầy đủ flow review API và audit trail; #15, #21, #23 đạt partial trong software lab (xem bảng). #06/#07/#51/#52 partial. 445 unit & integration tests toàn dự án xanh. Các ticket mở rộng #53–#68 theo requirement an toàn đô thị được quản lý tại [Index mở rộng](requirements-expansion-index.md). Các gate target deployment, hardware decode và field pilot (G3–G5) vẫn mở.
 
 Status là triage role; Execution theo not-started/in-progress/partial/blocked/done. ready-for-agent không có nghĩa dependencies đã xong. needs-info chỉ dùng facts/provider/target còn thiếu (#15/#29/#42); ready-for-human cho power-cut/survey/field/sign-off (#37/#46/#48/#49/#50). Ghi rõ lý do trong ticket; sau khi có dữ liệu cập nhật triage, không bỏ gate.
 
@@ -29,7 +29,7 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [01: Event synthetic xuất hiện trên dashboard](issues/01-event-synthetic-xuat-hien-tren-dashboard.md) | ready-for-agent | None | — | done |
 | [02: Hồ sơ lab, ODD và protocol nghiệm thu](issues/02-ho-so-lab-odd-va-protocol-nghiem-thu.md) | ready-for-agent | None | — | done |
 | [03: Doctor và config fail-fast qua đường chạy lab](issues/03-doctor-va-config-fail-fast-qua-duong-chay-lab.md) | ready-for-agent | #01, #06, #11 | — | blocked |
-| [04: Review event có kiểm soát phiên bản](issues/04-review-event-co-kiem-soat-phien-ban.md) | ready-for-agent | #01, #08 evidence manifest lifecycle | — | partial |
+| [04: Review event có kiểm soát phiên bản](issues/04-review-event-co-kiem-soat-phien-ban.md) | ready-for-agent | #01, #08 | — | done (software lab; review API, audit trail, re-review reasons, 38/38 tests pass) |
 | [05: Retry và revision không làm mất hoặc lùi event](issues/05-retry-va-revision-khong-lam-mat-hoac-lui-event.md) | ready-for-agent | #01 | — | done |
 | [06: Recorder file replay giữ raw ring độc lập](issues/06-recorder-file-replay-giu-raw-ring-doc-lap.md) | ready-for-agent | #02 | — | partial |
 | [07: Event pin được clip pre/post từ ring](issues/07-event-pin-duoc-clip-pre-post-tu-ring.md) | ready-for-agent | #01, #06 | — | partial |
@@ -46,9 +46,9 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [18: Quota bảo vệ pinned evidence và journal](issues/18-quota-bao-ve-pinned-evidence-va-journal.md) | ready-for-agent | #09, #17 | — | done (software lab; chưa disk-pressure/outage 24h thật) |
 | [19: Nghiệm thu vertical slice G1 trên lab](issues/19-nghiem-thu-vertical-slice-g1-tren-lab.md) | ready-for-agent | #04, #08, #15, #16, #17, #18 | — | not-started |
 | [20: Feedback review thành nhãn dataset có lineage](issues/20-feedback-review-thanh-nhan-dataset-co-lineage.md) | ready-for-agent | #02, #04, #08 | — | done |
-| [21: Quality và ODD đi xuyên tới event/detail](issues/21-quality-va-odd-di-xuyen-toi-event-detail.md) | ready-for-agent | #17 | — | not-started |
+| [21: Quality và ODD đi xuyên tới event/detail](issues/21-quality-va-odd-di-xuyen-toi-event-detail.md) | ready-for-agent | #17 | — | partial (software lab; ODD assess_quality, low-light/glare/blur/freeze SHA-256, contract validation, 14/14 tests pass) |
 | [22: Pose request trả keypoints đúng frame và track](issues/22-pose-request-tra-keypoints-dung-frame-va-track.md) | ready-for-agent | #11, #13 | — | done (software lab; chưa có accuracy/capacity target) |
-| [23: Track gap không tạo certainty hoặc motion giả](issues/23-track-gap-khong-tao-certainty-hoac-motion-gia.md) | ready-for-agent | #13, #02 | — | not-started |
+| [23: Track gap không tạo certainty hoặc motion giả](issues/23-track-gap-khong-tao-certainty-hoac-motion-gia.md) | ready-for-agent | #13, #02 | — | partial (software lab; ByteTracker max_gap, IncidentEngine gap & clock jump reset, 9/9 tests pass) |
 | [24: Pose scheduling và degradation có coverage](issues/24-pose-scheduling-va-degradation-co-coverage.md) | ready-for-agent | #21, #22, #23 | — | done (software lab; pose outcomes chưa vào IncidentEngine, chưa đo coverage thật) |
 | [25: Person fall có onset quan sát](issues/25-person-fall-co-onset-quan-sat.md) | ready-for-agent | #14, #24 | — | done |
 | [26: Persistent lying khi thiếu onset](issues/26-persistent-lying-khi-thieu-onset.md) | ready-for-agent | #25 | — | done (software lab; anchor sửa sau review 15-10; chưa đo chất lượng theo ODD) |
@@ -77,6 +77,9 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [49: Nghiệm thu person-down pilot readiness G4a](issues/49-nghiem-thu-person-down-pilot-readiness-g4a.md) | ready-for-human | #19, #28, #31, #36, #37, #39, #40, #41, #43, #44, #45 | — | not-started |
 | [50: Field pilot và final acceptance G5](issues/50-field-pilot-va-final-acceptance-g5.md) | ready-for-human | #49 | — | not-started |
 | [51: Live ring publish segments during ingest](issues/51-live-ring-publish-segments-during-ingest.md) | ready-for-agent | #06 | — | partial |
+| [52: Paced file runtime publishes raw before EOF](issues/52-paced-file-runtime-publishes-raw-before-eof.md) | ready-for-agent | #06, #10 | — | partial |
+
+*Các ticket mở rộng #53–#68 theo requirement an toàn đô thị được theo dõi tại [Index mở rộng](requirements-expansion-index.md).*
 
 ## Mapping 89 task nguồn → tickets
 

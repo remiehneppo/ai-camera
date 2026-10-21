@@ -12,10 +12,11 @@ Cập nhật requirement 2026-10-20. Có mã/lệnh thử nghiệm software lab 
 | API semantic, identity, pin/receipt, review, replay | [Hợp đồng tích hợp](architecture/contracts.md) |
 | Quyết định kiến trúc và lý do | [ADR-0001 pipeline](adr/0001-feature-pipeline-boundaries.md), [ADR-0002 downstream](adr/0002-server-downstream-event-publishing.md), [ADR-0003 backend](adr/0003-fastapi-mongodb-backend.md), [ADR-0004 contracts](adr/0004-integration-contracts.md) |
 | Phase, ownership, 89 task phạm vi | [Plan triển khai](architecture/implementation-plan.md) |
-| Chọn và theo dõi công việc | [51 ticket thực thi](../.scratch/system-build-slices/PRD.md) — nguồn duy nhất của Execution/blockers |
+| Chọn và theo dõi công việc | [Tracker thực thi](../.scratch/system-build-slices/PRD.md) và [Index mở rộng](../.scratch/system-build-slices/requirements-expansion-index.md) — nguồn duy nhất của Execution/blockers |
 | Chi tiết nghiệm thu theo module | [18 checklist module](implementation-checklists/README.md) |
 | Cross-module failure tests và release | [Integration/G0–G5](implementation-checklists/integration-release.md) |
 | Facts/ODD/sizing/benchmark còn cần | [Deployment readiness](architecture/deployment-readiness.md) |
+| Số đo benchmark thực tế pipeline trên video 1080p | [Báo cáo Benchmark Pipeline](reports/2026-10-21-pipeline-benchmark-report.md) |
 | Nghiên cứu model/camera/data/chi phí và phản biện bước tiếp theo | [Research](../traffic-ai-camera-research/README.md) — cập nhật implementation15-10; giá giữ ngày quan sát, không là quote hiện tại |
 
 ## Nguồn chuẩn và cập nhật

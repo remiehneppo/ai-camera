@@ -1,8 +1,8 @@
 # 23: Track gap không tạo certainty hoặc motion giả
 
 Status: ready-for-agent
-Execution: not-started
-Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
+Execution: partial
+Owner: Edge / Tracking
 
 **What to build:** Replay occlusion/ID switch/variable FPS từ dataset và xuất history/association uncertainty đáng tin cho consumers.
 
@@ -10,7 +10,8 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 ## Acceptance criteria
 
-- [ ] Report fragmentation/ID switch theo ODD; nối history thận trọng, không dùng track ID làm danh tính.
+- [x] Track gap và clock jump: `Track.max_gap` (mặc định 1.0s) xóa history và `consecutive_hits=0` khi `ts < last_time` hoặc `gap > max_gap`. `IncidentEngine` reset dwell, onset, standing evidence, speed baseline khi gặp gap hoặc clock jump, chỉ giữ cooldown. Đã có 9 regression tests trong `tests/test_track_gap.py`.
+- [ ] Report fragmentation/ID switch theo ODD trên dataset hoàn chỉnh; nối history thận trọng, không dùng track ID làm danh tính.
 - [ ] Expected sequences qua epoch/gaps và pose association có regression, không hard-code nối bằng bbox proximity.
 
 ## Traceability
@@ -26,3 +27,5 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 ## Comments
 
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
+
+- 2026-10-21: Cập nhật tiến độ software lab: Đã triển khai cơ chế xử lý observation gap và clock jump trong `ByteTracker` (`Track.max_gap`) và `IncidentEngine` (`IncidentEngine.max_observation_gap`) để tránh sinh vận tốc giả và dwell giả. Toàn bộ 9/9 tests pass trong `tests/test_track_gap.py`. Execution: `partial` (báo cáo ID switch/fragmentation trên tập dataset ODD lớn vẫn mở).
