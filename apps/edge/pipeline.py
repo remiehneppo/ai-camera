@@ -403,6 +403,9 @@ class PerceptionPipeline:
         vehicle_track_id = incident.get("vehicle_track_id")
         if vehicle_track_id is not None:
             payload["vehicle_track_id"] = vehicle_track_id
+        association_uncertainty = incident.get("association_uncertainty")
+        if association_uncertainty is not None:
+            payload["association_uncertainty"] = association_uncertainty
 
         event_snapshot: dict[str, Any] = {
             "schema_version": 1,

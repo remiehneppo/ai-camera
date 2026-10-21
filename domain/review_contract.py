@@ -87,3 +87,23 @@ def next_decision(current: str, action: str, needs_re_review: bool = False) -> s
     if action == "reopen" and current != "unreviewed":
         return "unreviewed"
     raise ReviewTransitionError(f"cannot {action} a {current} event")
+
+
+LOW_PRIORITY_TAXONOMIES = frozenset({"person_on_stationary_vehicle"})
+SEVERITY_VALUES = ("low", "medium", "high", "critical")
+
+
+def review_priority_for(payload: dict[str, Any]) -> str:
+    """Return the review-queue priority class for an event payload.
+
+    On-vehicle events lower priority rather than suppress the event, and a low
+    severity never becomes an urgent review or notification candidate. An
+    explicit high/critical severity still wins: that is the danger override
+    (fallen or suddenly stopped vehicle), so an emergency is never hidden.
+    """
+    severity = payload.get("severity")
+    if severity in {"high", "critical"}:
+        return "urgent"
+    if payload.get("taxonomy") in LOW_PRIORITY_TAXONOMIES or severity == "low":
+        return "low"
+    return "standard"

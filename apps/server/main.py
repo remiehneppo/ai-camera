@@ -17,12 +17,11 @@ from starlette.concurrency import run_in_threadpool
 
 from domain.event_contract import EventValidationError, MAX_EVENT_BYTES, validate_event
 from domain.evidence_contract import validate_storage_id
-from domain.review_contract import ReviewValidationError, validate_review_request
+from domain.review_contract import ReviewValidationError, SEVERITY_VALUES, validate_review_request
 from apps.server.config import ServerConfig, load_server_config
 from apps.server.dataset import export_dataset_records, records_to_jsonl
 from apps.server.live_stream import LiveStreamService
 from apps.server.store import (
-    SEVERITY_VALUES,
     EventHashConflict,
     EventIdentityConflict,
     EventStore,

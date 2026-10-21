@@ -19,7 +19,15 @@ from pymongo.read_concern import ReadConcern
 from pymongo.write_concern import WriteConcern
 
 from domain.event_contract import canonical_event_hash, validate_revision_identity
-from domain.review_contract import ReviewTransitionError, meaningful_content_hash, next_decision
+from domain.review_contract import (
+    LOW_PRIORITY_TAXONOMIES,
+    SEVERITY_VALUES,
+    ReviewTransitionError,
+    meaningful_content_hash,
+    next_decision,
+    review_priority_for,
+    validate_review_request,
+)
 
 
 class EventHashConflict(Exception):
@@ -37,25 +45,6 @@ class ReviewConflict(Exception):
 class ReviewNotFound(Exception):
     pass
 
-
-LOW_PRIORITY_TAXONOMIES = frozenset({"person_on_stationary_vehicle"})
-SEVERITY_VALUES = ("low", "medium", "high", "critical")
-
-
-def review_priority_for(payload: dict[str, Any]) -> str:
-    """Return the review-queue priority class for an event payload.
-
-    On-vehicle events lower priority rather than suppress the event, and a low
-    severity never becomes an urgent review or notification candidate. An
-    explicit high/critical severity still wins: that is the danger override
-    (fallen or suddenly stopped vehicle), so an emergency is never hidden.
-    """
-    severity = payload.get("severity")
-    if severity in {"high", "critical"}:
-        return "urgent"
-    if payload.get("taxonomy") in LOW_PRIORITY_TAXONOMIES or severity == "low":
-        return "low"
-    return "standard"
 
 
 def cleanup_temp_evidence(evidence_dir: str | Path) -> list[str]:

@@ -8,7 +8,7 @@ from typing import Any
 
 from apps.edge.tracker import Track, bbox_iou
 
-_VEHICLE_LABELS = {"motorcycle", "bicycle", "car"}
+_VEHICLE_LABELS = {"motorcycle", "bicycle"}
 _TWO_WHEELER_LABELS = {"motorcycle", "bicycle"}
 
 
@@ -52,9 +52,10 @@ class _TrackIncidentState:
     in_fall_candidate: bool = False
     onset_time: float | None = None
     lying_start_time: float | None = None
-    lie_start_time: float | None = None
-    on_vehicle_track_id: int | None = None
+    lying_onset_time: float | None = None
+    on_vehicle_track_id: int | str | None = None
     vehicle_danger: bool = False
+    association_iou: float | None = None
     first_qualifying_time: float | None = None
     moving_frames: int = 0
     last_cx: float | None = None
@@ -64,6 +65,14 @@ class _TrackIncidentState:
     triggered: bool = False
     last_valid_pose: dict[str, Any] | None = None
     last_pose_outcome: dict[str, Any] | None = None
+
+
+def _reset_vehicle_association(state: _TrackIncidentState) -> None:
+    state.lying_onset_time = None
+    state.on_vehicle_track_id = None
+    state.vehicle_danger = False
+    state.association_iou = None
+
 
 
 @dataclass
@@ -79,6 +88,8 @@ class _VehicleState:
     is_fallen: bool = False
     stationary_since: float | None = None
     stable_frames: int = 0
+    last_high_speed_time: float | None = None
+
 
 
 class IncidentEngine:
@@ -194,7 +205,8 @@ class IncidentEngine:
         detection_time: float,
         track: Track,
         pose_evidence: dict[str, Any] | None = None,
-        vehicle_track_id: int | None = None,
+        vehicle_track_id: int | str | None = None,
+        association_uncertainty: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         incident = {
             "taxonomy": taxonomy,
@@ -217,6 +229,8 @@ class IncidentEngine:
         }
         if vehicle_track_id is not None:
             incident["vehicle_track_id"] = vehicle_track_id
+        if association_uncertainty is not None:
+            incident["association_uncertainty"] = association_uncertainty
         return incident
 
     def reset(self) -> None:
@@ -235,18 +249,11 @@ class IncidentEngine:
         return bbox[0] <= x <= bbox[2] and bbox[1] <= y <= bbox[3]
 
     def _vehicle_is_upright(self, track: Track) -> bool:
-        """A 2-wheeler is upright while its bbox is not wide/flat.
-
-        A car bbox is wide by design, so its aspect ratio cannot signal an overturn.
-        """
-        if getattr(track, "label", None) not in _TWO_WHEELER_LABELS:
-            return True
+        """A two-wheeler is upright while its aspect ratio is below the upright threshold."""
         return float(track.aspect_ratio) < self.vehicle_upright_aspect_ratio
 
     def _vehicle_is_fallen(self, track: Track) -> bool:
-        """Fallen/overturned 2-wheeler: already flat or suddenly tilting flat."""
-        if getattr(track, "label", None) not in _TWO_WHEELER_LABELS:
-            return False
+        """Fallen/overturned two-wheeler: flat aspect ratio or rapid tilt."""
         aspect_ratio = float(track.aspect_ratio)
         if aspect_ratio >= self.vehicle_fallen_aspect_ratio:
             return True
@@ -281,6 +288,8 @@ class IncidentEngine:
             state.last_timestamp = ts
             state.last_bbox = list(track.bbox)
             state.is_stationary = speed <= self.max_motion_speed
+            if not state.is_stationary:
+                state.last_high_speed_time = ts
             state.is_upright = self._vehicle_is_upright(track)
             state.is_fallen = self._vehicle_is_fallen(track)
             if gap_or_clock_jump:
@@ -300,7 +309,7 @@ class IncidentEngine:
             # could otherwise turn a road fall into a low-priority on-vehicle review.
             del self._vehicle_states[stale_id]
 
-    def _associated_vehicles(self, track: Track) -> list[_VehicleState]:
+    def _associated_vehicles(self, track: Track) -> list[tuple[float, _VehicleState]]:
         """Vehicles whose bbox overlaps the person or contains their center/bottom center."""
         associated: list[tuple[float, _VehicleState]] = []
         for state in self._vehicle_states.values():
@@ -312,21 +321,27 @@ class IncidentEngine:
             if iou > self.vehicle_overlap_iou or inside:
                 associated.append((iou, state))
         associated.sort(key=lambda item: item[0], reverse=True)
-        return [state for _, state in associated]
+        return associated
 
     def _vehicle_context(
         self, track: Track, before_time: float | None
-    ) -> tuple[_VehicleState | None, bool]:
-        """At lying onset: return the qualifying stationary-upright vehicle and danger flag.
+    ) -> tuple[_VehicleState | None, bool, float | None]:
+        """At lying onset: return the qualifying stationary-upright vehicle, danger flag, and overlap IoU.
 
         The vehicle must have been stationary and upright before this lying bout started,
-        with at least a minimal stable history. A fallen/tilted associated vehicle is a
-        danger override: the event must never be demoted to the low-priority queue.
+        with at least a minimal stable duration or minimal stable frames, and without
+        a sudden stop from recent high speed.
         """
         qualifying: _VehicleState | None = None
         danger = False
-        for vehicle in self._associated_vehicles(track):
+        qualifying_iou: float | None = None
+        for iou, vehicle in self._associated_vehicles(track):
             if vehicle.is_fallen:
+                danger = True
+                continue
+            if before_time is not None and vehicle.last_high_speed_time is not None and (
+                    before_time - vehicle.last_high_speed_time < 2.0):
+                # Vehicle was running fast and stopped suddenly before the incident: danger override
                 danger = True
                 continue
             if not vehicle.is_upright or not vehicle.is_stationary or vehicle.stationary_since is None:
@@ -339,12 +354,13 @@ class IncidentEngine:
                 continue
             if qualifying is None:
                 qualifying = vehicle
-        return qualifying, danger
+                qualifying_iou = iou
+        return qualifying, danger, qualifying_iou
 
-    def _vehicle_danger_now(self, track: Track, qualifying_id: int | None) -> bool:
+    def _vehicle_danger_now(self, track: Track, qualifying_id: int | str | None) -> bool:
         """Danger after onset: the associated vehicle is fallen, unstable, or no longer under the person."""
         associated = self._associated_vehicles(track)
-        for vehicle in associated:
+        for _, vehicle in associated:
             if vehicle.is_fallen:
                 return True
             if vehicle.track_id == qualifying_id and (
@@ -352,7 +368,7 @@ class IncidentEngine:
                 return True
         if qualifying_id is not None and qualifying_id in self._vehicle_states:
             # The person is no longer over the vehicle: the on-vehicle association ended.
-            return all(vehicle.track_id != qualifying_id for vehicle in associated)
+            return all(vehicle.track_id != qualifying_id for _, vehicle in associated)
         return False
 
     def _in_roi(self, track: Track) -> bool:
@@ -422,11 +438,12 @@ class IncidentEngine:
             # On-vehicle association is snapshotted when this lying bout starts, so a vehicle
             # that arrives later (or is still moving) can never demote the event to low priority.
             if is_lying:
-                if state.lie_start_time is None:
-                    state.lie_start_time = ts
-                    qualifying, danger = self._vehicle_context(track, ts)
+                if state.lying_onset_time is None:
+                    state.lying_onset_time = ts
+                    qualifying, danger, iou = self._vehicle_context(track, ts)
                     state.on_vehicle_track_id = qualifying.track_id if qualifying is not None else None
                     state.vehicle_danger = danger
+                    state.association_iou = iou
                 elif state.on_vehicle_track_id is not None and not state.vehicle_danger:
                     state.vehicle_danger = self._vehicle_danger_now(track, state.on_vehicle_track_id)
 
@@ -436,9 +453,7 @@ class IncidentEngine:
                 state.in_fall_candidate = False
                 state.onset_time = None
                 state.lying_start_time = None
-                state.lie_start_time = None
-                state.on_vehicle_track_id = None
-                state.vehicle_danger = False
+                _reset_vehicle_association(state)
                 state.first_qualifying_time = None
                 state.moving_frames = 0
                 state.triggered = False
@@ -462,15 +477,11 @@ class IncidentEngine:
                 state.in_fall_candidate = False
                 state.onset_time = None
                 state.lying_start_time = None
-                state.lie_start_time = None
-                state.on_vehicle_track_id = None
-                state.vehicle_danger = False
+                _reset_vehicle_association(state)
                 state.first_qualifying_time = None
                 state.moving_frames = 0
             elif not is_lying:
-                state.lie_start_time = None
-                state.on_vehicle_track_id = None
-                state.vehicle_danger = False
+                _reset_vehicle_association(state)
                 state.first_qualifying_time = None
                 state.moving_frames = 0
 
@@ -539,12 +550,17 @@ class IncidentEngine:
                                 taxonomy = "person_on_stationary_vehicle"
                                 severity = self.on_vehicle_severity
                                 vehicle_track_id = state.on_vehicle_track_id
+                                association_uncertainty = {
+                                    "method": "2d_bbox_overlap",
+                                    "overlap_iou": round(float(state.association_iou), 3) if state.association_iou is not None else None,
+                                }
                             else:
                                 # Missing association, moving/tilted vehicle, or fallen vehicle:
                                 # danger override keeps the normal review priority.
                                 taxonomy = "person_lying_persistent"
                                 severity = self.persistent_lying_severity
                                 vehicle_track_id = None
+                                association_uncertainty = None
                             incident = self._create_incident(
                                 taxonomy=taxonomy,
                                 severity=severity,
@@ -554,6 +570,7 @@ class IncidentEngine:
                                 track=track,
                                 pose_evidence=self._pose_evidence(state),
                                 vehicle_track_id=vehicle_track_id,
+                                association_uncertainty=association_uncertainty,
                             )
                             incidents.append(incident)
                             state.last_alert_time = ts

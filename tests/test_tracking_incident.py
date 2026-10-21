@@ -826,6 +826,35 @@ class TestIncidentEngine(unittest.TestCase):
         self.assertEqual(emitted[0]["severity"], "high")
         self.assertNotIn("vehicle_track_id", emitted[0])
 
+    def test_sudden_stopping_vehicle_triggers_danger_override(self) -> None:
+        """#27: vehicle running at high speed and suddenly stopping before lying triggers danger override."""
+        engine = IncidentEngine(persistent_lying_duration=1.0, cooldown_seconds=30.0)
+        # Vehicle speeding at 100 px/s until t=0.8, then stops
+        bike = Track(track_id=945, bbox=[100.0, 180.0, 160.0, 280.0], score=0.9, label="motorcycle", timestamp=0.0)
+        engine.process_tracks([bike], timestamp=0.0)
+        bike.update([180.0, 180.0, 240.0, 280.0], score=0.9, timestamp=0.8)
+        engine.process_tracks([bike], timestamp=0.8)
+
+        # Bike stops at [300.0, 180.0, 360.0, 280.0] at t=0.9
+        bike.update([300.0, 180.0, 360.0, 280.0], score=0.9, timestamp=0.9)
+        engine.process_tracks([bike], timestamp=0.9)
+
+        # Person lies down at t=1.0 (only 0.1s after the sudden stop)
+        person_bbox = [245.0, 200.0, 405.0, 260.0]
+        person = Track(track_id=946, bbox=person_bbox, score=0.88, label="person", timestamp=1.0)
+        emitted: list[dict[str, Any]] = []
+        for i in range(20):
+            t = round(1.0 + i * 0.1, 2)
+            bike.update([300.0, 180.0, 360.0, 280.0], score=0.9, timestamp=t)
+            person.update(person_bbox, score=0.88, timestamp=t)
+            emitted.extend(engine.process_tracks([bike, person], timestamp=t))
+
+        self.assertEqual(len(emitted), 1)
+        # Sudden stop acts as accident indicator: danger override keeps severity high
+        self.assertEqual(emitted[0]["taxonomy"], "person_lying_persistent")
+        self.assertEqual(emitted[0]["severity"], "high")
+        self.assertNotIn("vehicle_track_id", emitted[0])
+
     def test_fall_candidate_motion_does_not_overwrite_onset_time(self) -> None:
         """P1-10: Motion while in fall candidate updates lying_start_time but preserves onset_time."""
         track = Track(

@@ -152,12 +152,11 @@
             const header = document.createElement("header");
             const taxonomy = event.payload.taxonomy || "Event";
             add(header, "strong", taxonomy);
-            if (taxonomy === "person_on_stationary_vehicle") {
-              add(header, "span", "On-vehicle (Low priority)", "badge badge-priority-low");
-            }
             const priority = row.review_priority || "standard";
-            if (priority !== "low") {
-              add(header, "span", `${priority === "urgent" ? "Emergency" : "Standard"} priority`, `badge badge-priority-${priority}`);
+            if (priority === "low") {
+              add(header, "span", "On-vehicle (Low priority)", "badge badge-priority-low");
+            } else if (priority === "urgent") {
+              add(header, "span", "Emergency priority", "badge badge-priority-urgent");
             }
             add(header, "span", event.origin, "muted");
             add(card, "h2", `${event.camera_id} · revision ${event.revision}`);

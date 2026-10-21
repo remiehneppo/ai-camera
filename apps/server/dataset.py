@@ -8,7 +8,8 @@ import json
 import os
 from typing import Any
 
-from apps.server.store import EventStore, review_priority_for
+from apps.server.store import EventStore
+from domain.review_contract import review_priority_for
 
 SENSITIVE_KEY_SUBSTRINGS = (
     "token",
