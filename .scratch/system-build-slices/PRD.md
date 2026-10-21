@@ -14,7 +14,7 @@ Ticket trong tracker này là đơn vị claim/thực hiện và nguồn duy nh�
 
 ## Cách chọn việc
 
-Frontier lúc publish là #01/#02. Tiến độ cập nhật 2026-10-21: #01/#02/#05/#08/#09/#11/#13/#14/#16/#17/#18/#20/#22/#24/#25/#26, #27 (on-vehicle review ưu tiên riêng và danger override) và #53 (pose outcomes vào person-down flow) đã hoàn thành trong software lab; #04 hoàn thành đầy đủ flow review API và audit trail; #15, #21, #23 đạt partial trong software lab (xem bảng). #06/#07/#51/#52 partial. 471 unit & integration tests toàn dự án xanh. Các ticket mở rộng #53–#68 theo requirement an toàn đô thị được quản lý tại [Index mở rộng](requirements-expansion-index.md). Các gate target deployment, hardware decode và field pilot (G3–G5) vẫn mở.
+Frontier lúc publish là #01/#02. Tiến độ cập nhật 2026-10-21: #01/#02/#05/#08/#09/#11/#13/#14/#16/#17/#18/#20/#22/#24/#25/#26, #27 (on-vehicle review ưu tiên riêng và danger override), #28 (negative audit và quality regression G2) và #53 (pose outcomes vào person-down flow) đã hoàn thành trong software lab; #04 hoàn thành đầy đủ flow review API và audit trail; #15, #21, #23 đạt partial trong software lab (xem bảng). #06/#07/#51/#52 partial. 519 unit & integration tests toàn dự án xanh. Các ticket mở rộng #53–#68 theo requirement an toàn đô thị được quản lý tại [Index mở rộng](requirements-expansion-index.md). Các gate target deployment, hardware decode và field pilot (G3–G5) vẫn mở.
 
 Status là triage role; Execution theo not-started/in-progress/partial/blocked/done. ready-for-agent không có nghĩa dependencies đã xong. needs-info chỉ dùng facts/provider/target còn thiếu (#15/#29/#42); ready-for-human cho power-cut/survey/field/sign-off (#37/#46/#48/#49/#50). Ghi rõ lý do trong ticket; sau khi có dữ liệu cập nhật triage, không bỏ gate.
 
@@ -53,7 +53,7 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [25: Person fall có onset quan sát](issues/25-person-fall-co-onset-quan-sat.md) | ready-for-agent | #14, #24 | — | done |
 | [26: Persistent lying khi thiếu onset](issues/26-persistent-lying-khi-thieu-onset.md) | ready-for-agent | #25 | — | done (software lab; anchor sửa sau review 15-10; chưa đo chất lượng theo ODD) |
 | [27: On-vehicle vẫn review với ưu tiên riêng](issues/27-on-vehicle-van-review-voi-uu-tien-rieng.md) | ready-for-agent | #26 | — | done (software lab; on-vehicle low severity, danger override critical/high, review priority, 471 tests pass) |
-| [28: Negative audit và quality regression G2](issues/28-negative-audit-va-quality-regression-g2.md) | ready-for-agent | #20, #27 | — | not-started |
+| [28: Negative audit và quality regression G2](issues/28-negative-audit-va-quality-regression-g2.md) | ready-for-agent | #20, #27 | — | done (software lab; stratified sampling, Horvitz-Thompson recall, CI, G2 report CLI, 47/47 tests pass) |
 | [29: Build artifact target reproducible](issues/29-build-artifact-target-reproducible.md) | needs-info | #02, #11 | — | not-started |
 | [30: RKNN thay engine giữ event semantics](issues/30-rknn-thay-engine-giu-event-semantics.md) | ready-for-agent | #28, #29 | — | not-started |
 | [31: Capacity target dưới record/upload/pose load](issues/31-capacity-target-duoi-record-upload-pose-load.md) | ready-for-agent | #28, #18 | #30 nếu RKNN | not-started |
