@@ -20,10 +20,12 @@ from datetime import datetime, timezone
 from statistics import NormalDist
 from typing import Any, Iterable
 
+from domain.event_contract import PERSON_DOWN_TAXONOMIES
+
 EVAL_VERSION = "g2-quality-eval-v1"
 CONFIDENCE_LEVEL = 0.95
 DEFAULT_MIN_SAMPLES = 30
-BRANCHES = ("person_fall", "person_lying_persistent", "person_on_stationary_vehicle")
+BRANCHES = PERSON_DOWN_TAXONOMIES
 
 _CONFIRMED = {"confirmed", "confirm", "resolved", "resolve", "true_positive", "tp", "positive"}
 _FALSE_POSITIVE = {"false_positive", "false-positive", "fp", "negative", "no_event"}
@@ -50,6 +52,7 @@ class Stratum:
     time_band: str | None = None
     weather: str | None = None
     rights_cleared: bool = True
+    budget_clips: int | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.stratum_id, str) or not self.stratum_id.strip():
@@ -61,9 +64,11 @@ class Stratum:
             raise QualityEvalError("camera_id must be a non-empty string when set")
         if self.rights_cleared is not True and self.rights_cleared is not False:
             raise QualityEvalError("rights_cleared must be a boolean")
+        if self.budget_clips is not None and (type(self.budget_clips) is not int or self.budget_clips < 0):
+            raise QualityEvalError("budget_clips must be a non-negative integer when set")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "stratum_id": self.stratum_id,
             "inclusion_probability": float(self.inclusion_probability),
             "camera_id": self.camera_id,
@@ -71,6 +76,9 @@ class Stratum:
             "weather": self.weather,
             "rights_cleared": self.rights_cleared,
         }
+        if self.budget_clips is not None:
+            result["budget_clips"] = self.budget_clips
+        return result
 
     @classmethod
     def from_dict(cls, value: Any) -> "Stratum":
@@ -82,6 +90,7 @@ class Stratum:
         prob = value.get("inclusion_probability", value.get("p_h"))
         if type(prob) not in (int, float):
             raise QualityEvalError("inclusion_probability must be a number")
+        budget = value.get("budget_clips", value.get("budget"))
         return cls(
             stratum_id=stratum_id,
             inclusion_probability=float(prob),
@@ -89,6 +98,7 @@ class Stratum:
             time_band=value.get("time_band"),
             weather=value.get("weather"),
             rights_cleared=bool(value.get("rights_cleared", True)),
+            budget_clips=int(budget) if budget is not None else None,
         )
 
 
@@ -123,18 +133,35 @@ class SamplingPlan:
                 return item
         raise QualityEvalError(f"unknown stratum_id: {stratum_id!r}")
 
-    def stratum_for(self, camera_id: str | None, *, stratum_id: str | None = None) -> Stratum:
+    def stratum_for(
+        self,
+        camera_id: str | None,
+        *,
+        stratum_id: str | None = None,
+        time_band: str | None = None,
+        weather: str | None = None,
+    ) -> Stratum:
         if stratum_id is not None:
             return self.stratum(stratum_id)
+        candidates = list(self.strata)
         if camera_id:
-            matches = [item for item in self.strata if item.camera_id == camera_id]
-            if len(matches) == 1:
-                return matches[0]
-            if len(matches) > 1:
-                raise QualityEvalError(f"multiple strata match camera {camera_id!r}; pass stratum_id")
-        wildcards = [item for item in self.strata if item.camera_id is None]
-        if len(wildcards) == 1:
-            return wildcards[0]
+            camera_matches = [item for item in candidates if item.camera_id == camera_id]
+            if camera_matches:
+                candidates = camera_matches
+            else:
+                candidates = [item for item in candidates if item.camera_id is None]
+        if time_band is not None:
+            time_matches = [item for item in candidates if item.time_band == time_band]
+            if time_matches:
+                candidates = time_matches
+        if weather is not None:
+            weather_matches = [item for item in candidates if item.weather == weather]
+            if weather_matches:
+                candidates = weather_matches
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            raise QualityEvalError(f"multiple strata match camera {camera_id!r}; pass stratum_id")
         if len(self.strata) == 1:
             return self.strata[0]
         raise QualityEvalError(f"no unambiguous stratum for camera {camera_id!r}")
@@ -326,6 +353,16 @@ def normalize_alert(record: dict[str, Any], plan: SamplingPlan | None, capabilit
         plan, camera_id, record, use_plan_probability=False
     )
     occurred_at = parse_timestamp(_first(record, ("occurred_at", "event_time", "started_at", "start_time", "timestamp")))
+    anchor_time = _number(_first(record, ("anchor_time", "payload.anchor_time")))
+    detection_time = _number(_first(record, ("detection_time", "payload.detection_time")))
+    latency_seconds: float | None = None
+    if detection_time is not None and anchor_time is not None and detection_time >= anchor_time:
+        latency_seconds = float(detection_time - anchor_time)
+    else:
+        explicit_lat = _number(_first(record, ("latency_seconds", "alert_latency_seconds", "latency")))
+        if explicit_lat is not None and explicit_lat >= 0:
+            latency_seconds = float(explicit_lat)
+
     normalized = {
         "camera_id": camera_id,
         "branch": branch,
@@ -335,6 +372,7 @@ def normalize_alert(record: dict[str, Any], plan: SamplingPlan | None, capabilit
         "planned": planned,
         "probability_mismatch": mismatch,
         "review_minutes": _review_minutes(record),
+        "latency_seconds": latency_seconds,
         "excluded": None,
         "false_positive": False,
         "detected": 0,
@@ -470,6 +508,7 @@ def evaluate_quality_metrics(
     plan: SamplingPlan | None = None,
     capability: str = "person_down",
     min_recall: float = 0.90,
+    min_recall_lower_bound: float | None = None,
     max_fp_per_day: float = 2.0,
     min_samples: int | None = None,
     site: str | None = None,
@@ -481,6 +520,12 @@ def evaluate_quality_metrics(
         raise QualityEvalError("capability must be a non-empty string")
     if type(min_recall) not in (int, float) or not math.isfinite(min_recall) or not 0 < min_recall <= 1:
         raise QualityEvalError("min_recall must be in (0, 1]")
+    if min_recall_lower_bound is not None and (
+        type(min_recall_lower_bound) not in (int, float)
+        or not math.isfinite(min_recall_lower_bound)
+        or not 0 < min_recall_lower_bound <= 1
+    ):
+        raise QualityEvalError("min_recall_lower_bound must be in (0, 1]")
     if type(max_fp_per_day) not in (int, float) or not math.isfinite(max_fp_per_day) or max_fp_per_day < 0:
         raise QualityEvalError("max_fp_per_day must be finite and non-negative")
     if type(confidence) not in (int, float) or not math.isfinite(confidence) or not 0 < confidence < 1:
@@ -497,9 +542,9 @@ def evaluate_quality_metrics(
     warnings: list[str] = []
     blocking: list[str] = []
     if plan is None:
-        warnings.append("sampling_plan_not_provided")
+        blocking.append("sampling_plan_not_provided")
     if matching_window_seconds is None:
-        warnings.append("matching_window_not_pinned")
+        blocking.append("matching_window_not_pinned")
     elif (
         type(matching_window_seconds) not in (int, float)
         or not math.isfinite(matching_window_seconds)
@@ -535,6 +580,7 @@ def evaluate_quality_metrics(
     estimated_hours = 0.0
     raw_hours = 0.0
     reviewed_raw_hours = 0.0
+    alert_latencies: list[float] = []
 
     for alert in alert_records:
         if alert["excluded"] == "other_capability":
@@ -563,6 +609,8 @@ def evaluate_quality_metrics(
         unit = {"weight": weight, "detected": True, "branch": alert["branch"]}
         units.append(unit)
         branch_units.setdefault(alert["branch"], []).append(unit)
+        if alert["latency_seconds"] is not None:
+            alert_latencies.append(alert["latency_seconds"])
         if alert["stratum_id"]:
             _stratum_entry(observed_strata, alert["stratum_id"], alert["probability"], plan)["alerts"] += 1
 
@@ -689,6 +737,13 @@ def evaluate_quality_metrics(
         "reviewed_units": reviewed_units,
     }
 
+    alert_latency = {
+        "count": len(alert_latencies),
+        "mean_seconds": sum(alert_latencies) / len(alert_latencies) if alert_latencies else None,
+        "min_seconds": min(alert_latencies) if alert_latencies else None,
+        "max_seconds": max(alert_latencies) if alert_latencies else None,
+    }
+
     sufficiency_reasons: list[str] = []
     if counts["negative_samples_reviewed"] < 1:
         sufficiency_reasons.append("no_reviewed_negative_samples")
@@ -736,9 +791,13 @@ def evaluate_quality_metrics(
         verdict, reasons = "BLOCKED", ["missing_coverage_hours"]
     elif false_positives["per_camera_day"] is not None and false_positives["per_camera_day"] > max_fp_per_day:
         verdict, reasons = "FAIL", [f"fp_per_day_above_target:{false_positives['per_camera_day']:.4f} > {max_fp_per_day}"]
-    elif recall["ci_low"] is not None and recall["ci_low"] < min_recall:
+    elif (
+        recall["ci_low"] is not None
+        and min_recall_lower_bound is not None
+        and recall["ci_low"] < min_recall_lower_bound
+    ):
         verdict, reasons = "BLOCKED", [
-            f"uncertainty_below_target:ci_low={recall['ci_low']:.4f} < {min_recall}"
+            f"uncertainty_below_target:ci_low={recall['ci_low']:.4f} < {min_recall_lower_bound}"
         ]
 
     reasons = list(dict.fromkeys(reasons))
@@ -773,6 +832,7 @@ def evaluate_quality_metrics(
         "branches": branches,
         "false_positives": false_positives,
         "review_load": review_load,
+        "alert_latency": alert_latency,
         "coverage": coverage,
         "sample_sufficiency": {
             "sufficient": sufficient,

@@ -249,6 +249,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     counts = report["counts"]
     fp = report["false_positives"]
     load = report["review_load"]
+    latency = report.get("alert_latency", {})
     coverage = report["coverage"]
     sufficiency = report["sample_sufficiency"]
     reasons = ", ".join(report["verdict_reasons"]) or "none"
@@ -331,6 +332,13 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Minutes / alert: {_decimal(load['review_minutes_per_alert'])}",
         f"- Minutes / negative: {_decimal(load['review_minutes_per_negative'])}",
         f"- Minutes / camera-day: {_decimal(load['review_minutes_per_camera_day'])}",
+        "",
+        "## Alert latency",
+        "",
+        f"- Measured alerts: {latency.get('count', 0)}",
+        f"- Mean latency: {_decimal(latency.get('mean_seconds'))} s",
+        f"- Min latency: {_decimal(latency.get('min_seconds'))} s",
+        f"- Max latency: {_decimal(latency.get('max_seconds'))} s",
         "",
         "## Sample sufficiency",
         "",

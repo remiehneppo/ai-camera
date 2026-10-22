@@ -15,6 +15,12 @@ CANONICALIZATION = "canonical-json-python-v1"
 MAX_EVENT_BYTES = 256 * 1024
 MAX_PAYLOAD_BYTES = 64 * 1024
 
+PERSON_DOWN_TAXONOMIES = (
+    "person_fall",
+    "person_lying_persistent",
+    "person_on_stationary_vehicle",
+)
+
 _FIELDS = {
     "schema_version",
     "message_id",
