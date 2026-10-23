@@ -97,6 +97,7 @@ def export_dataset_records(
     test_ratio: float = 0.15,
     severity: str | None = None,
     taxonomy: str | None = None,
+    site_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Extract reviewed event records with exact lineage, evidence manifest, and dataset split."""
     query_decision = decision if decision != "all" else None
@@ -141,9 +142,13 @@ def export_dataset_records(
             or effective_decision in {"unreviewed", "reopened"}
         )
 
+        device_doc = store.get_device(event["device_id"])
+        record_site_id = device_doc.site_id if device_doc else event.get("site_id", "default_site")
+
         record: dict[str, Any] = {
             "event_id": event["event_id"],
             "device_id": event["device_id"],
+            "site_id": record_site_id,
             "camera_id": event.get("camera_id"),
             "occurred_at": event.get("event_time"),
             "taxonomy": event["payload"].get("taxonomy"),
@@ -189,6 +194,9 @@ def export_dataset_records(
 
     if severity is not None:
         assigned_records = [r for r in assigned_records if r.get("severity") == severity]
+
+    if site_id is not None:
+        assigned_records = [r for r in assigned_records if r.get("site_id") == site_id]
 
     return assigned_records
 

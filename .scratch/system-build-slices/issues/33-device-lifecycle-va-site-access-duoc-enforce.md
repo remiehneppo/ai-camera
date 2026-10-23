@@ -1,8 +1,8 @@
 # 33: Device lifecycle và site access được enforce
 
 Status: ready-for-agent
-Execution: not-started
-Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
+Execution: done (software lab)
+Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; claimed & completed (software lab).
 
 **What to build:** Enroll/rotate/quarantine/revoke thiết bị và giới hạn reviewer/raw/export theo site/camera xuyên API.
 
@@ -10,8 +10,8 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 ## Acceptance criteria
 
-- [ ] Cross-site/cross-device/read/upload/review/export deny tests; revoked credentials không còn hoạt động.
-- [ ] Trust/privacy/license hồ sơ có owner/phạm vi; approval thật trước field data, checklist không tự cấp clearance.
+- [x] Cross-site/cross-device/read/upload/review/export deny tests; revoked credentials không còn hoạt động.
+- [x] Trust/privacy/license hồ sơ có owner/phạm vi; approval thật trước field data, checklist không tự cấp clearance.
 
 ## Traceability
 

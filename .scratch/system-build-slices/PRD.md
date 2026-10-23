@@ -14,7 +14,7 @@ Ticket trong tracker này là đơn vị claim/thực hiện và nguồn duy nh�
 
 ## Cách chọn việc
 
-Frontier lúc publish là #01/#02. Tiến độ cập nhật 2026-10-21: #01/#02/#05/#08/#09/#11/#13/#14/#16/#17/#18/#20/#22/#24/#25/#26, #27 (on-vehicle review ưu tiên riêng và danger override), #28 (negative audit và quality regression G2) và #53 (pose outcomes vào person-down flow) đã hoàn thành trong software lab; #04 hoàn thành đầy đủ flow review API và audit trail; #15, #21, #23 đạt partial trong software lab (xem bảng). #06/#07/#51/#52 partial. 519 unit & integration tests toàn dự án xanh. Các ticket mở rộng #53–#68 theo requirement an toàn đô thị được quản lý tại [Index mở rộng](requirements-expansion-index.md). Các gate target deployment, hardware decode và field pilot (G3–G5) vẫn mở.
+Frontier lúc publish là #01/#02. Tiến độ cập nhật 2026-10-22: #01/#02/#05/#08/#09/#11/#13/#14/#16/#17/#18/#20/#22/#24/#25/#26, #27 (on-vehicle review ưu tiên riêng và danger override), #28 (negative audit và quality regression G2), #33 (device lifecycle và site access enforcement), và #53 (pose outcomes vào person-down flow) đã hoàn thành trong software lab; #04 hoàn thành đầy đủ flow review API và audit trail; #15, #21, #23 đạt partial trong software lab (xem bảng). #06/#07/#51/#52 partial. 524 unit & integration tests toàn dự án xanh. Các ticket mở rộng #53–#68 theo requirement an toàn đô thị được quản lý tại [Index mở rộng](requirements-expansion-index.md). Các gate target deployment, hardware decode và field pilot (G3–G5) vẫn mở.
 
 Status là triage role; Execution theo not-started/in-progress/partial/blocked/done. ready-for-agent không có nghĩa dependencies đã xong. needs-info chỉ dùng facts/provider/target còn thiếu (#15/#29/#42); ready-for-human cho power-cut/survey/field/sign-off (#37/#46/#48/#49/#50). Ghi rõ lý do trong ticket; sau khi có dữ liệu cập nhật triage, không bỏ gate.
 
@@ -58,7 +58,7 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [30: RKNN thay engine giữ event semantics](issues/30-rknn-thay-engine-giu-event-semantics.md) | ready-for-agent | #28, #29 | — | not-started |
 | [31: Capacity target dưới record/upload/pose load](issues/31-capacity-target-duoi-record-upload-pose-load.md) | ready-for-agent | #28, #18 | #30 nếu RKNN | not-started |
 | [32: Retained evidence truy hồi có authorization](issues/32-retained-evidence-truy-hoi-co-authorization.md) | ready-for-agent | #08, #18 | — | not-started |
-| [33: Device lifecycle và site access được enforce](issues/33-device-lifecycle-va-site-access-duoc-enforce.md) | ready-for-agent | #05, #08, #17 | — | not-started |
+| [33: Device lifecycle và site access được enforce](issues/33-device-lifecycle-va-site-access-duoc-enforce.md) | ready-for-agent | #05, #08, #17 | — | done (software lab; device lifecycle, quarantine/revoke, site scoping, cross-site deny) |
 | [34: Config local và signed activation giữ LKG](issues/34-config-local-va-signed-activation-giu-lkg.md) | ready-for-agent | #03, #16, #33 | — | not-started |
 | [35: Canary và rollback có authorization mới](issues/35-canary-va-rollback-co-authorization-moi.md) | ready-for-agent | #34, #28 | #30 nếu RKNN | not-started |
 | [36: WAN outage giữ event/evidence rồi resume](issues/36-wan-outage-giu-event-evidence-roi-resume.md) | ready-for-agent | #18, #32 | — | not-started |

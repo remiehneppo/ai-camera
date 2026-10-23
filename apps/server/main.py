@@ -17,6 +17,13 @@ from starlette.concurrency import run_in_threadpool
 
 from domain.event_contract import EventValidationError, MAX_EVENT_BYTES, validate_event
 from domain.evidence_contract import validate_storage_id
+from domain.device_contract import (
+    DeviceLifecycleError,
+    DeviceRecord,
+    ReviewerAccessRecord,
+    check_device_access,
+    check_reviewer_site_access,
+)
 from domain.review_contract import ReviewValidationError, SEVERITY_VALUES, validate_review_request
 from apps.server.config import ServerConfig, load_server_config
 from apps.server.dataset import export_dataset_records, records_to_jsonl
@@ -297,6 +304,13 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
             raise HTTPException(status_code=400, detail=str(exc))
         if event["device_id"] != authenticated_device:
             raise HTTPException(status_code=403, detail="event device_id does not match authenticated device")
+
+        # Ticket #33: Enforce device lifecycle and allowed cameras
+        device_rec = store.get_device(authenticated_device)
+        if device_rec is not None:
+            allowed, reason = check_device_access(device_rec, camera_id=event.get("camera_id"))
+            if not allowed:
+                raise HTTPException(status_code=403, detail=f"device access denied: {reason}")
         if request.headers.get("idempotency-key") != event["message_id"]:
             raise HTTPException(status_code=422, detail="Idempotency-Key must match message_id")
         try:
@@ -343,6 +357,16 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
         actor = _reviewer_for_token(_bearer(request), reviewer_tokens)
         if actor is None:
             raise HTTPException(status_code=401, detail="invalid reviewer credentials", headers={"WWW-Authenticate": "Bearer"})
+
+        # Ticket #33: Enforce reviewer site scoping
+        allowed_sites = config.reviewer_sites.get(actor, ())
+        if allowed_sites:
+            device_rec = store.get_device(device_id)
+            event_site = device_rec.site_id if device_rec else config.device_sites.get(device_id)
+            reviewer_access = ReviewerAccessRecord(reviewer_id=actor, allowed_sites=allowed_sites)
+            if not check_reviewer_site_access(reviewer_access, event_site):
+                raise HTTPException(status_code=403, detail="cross-site review access denied")
+
         if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
             raise HTTPException(status_code=415, detail="Content-Type must be application/json")
         try:
@@ -378,10 +402,22 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
         split_by: str = "camera",
         severity: str | None = None,
         taxonomy: str | None = None,
+        site_id: str | None = None,
     ) -> Response:
         token = _viewer_token(request)
         if not _is_authorized_viewer(token, dashboard_token, reviewer_tokens):
             raise HTTPException(status_code=401, detail="unauthorized viewer credentials", headers={"WWW-Authenticate": "Bearer"})
+
+        # Ticket #33: Enforce reviewer site scoping for export
+        actor = _reviewer_for_token(token, reviewer_tokens)
+        if actor is not None and actor in config.reviewer_sites:
+            allowed = config.reviewer_sites[actor]
+            if allowed:
+                if site_id is not None and site_id not in allowed:
+                    raise HTTPException(status_code=403, detail="cross-site export access denied")
+                # Restrict to permitted sites if none requested
+                if site_id is None and len(allowed) == 1:
+                    site_id = allowed[0]
 
         _validate_queue_filters(severity, taxonomy)
         if split not in {"train", "val", "test", "all"}:
@@ -402,6 +438,7 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
                 split_by=split_by,
                 severity=severity,
                 taxonomy=taxonomy,
+                site_id=site_id,
             )
         except PyMongoError:
             raise HTTPException(status_code=503, detail="dataset export unavailable")
@@ -421,6 +458,13 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
         authenticated_device = _device_for_token(_bearer(request), device_tokens)
         if authenticated_device != device_id:
             raise HTTPException(status_code=403, detail="evidence device_id does not match authenticated device")
+
+        # Ticket #33: Enforce device lifecycle status
+        device_rec = store.get_device(authenticated_device)
+        if device_rec is not None:
+            allowed, reason = check_device_access(device_rec)
+            if not allowed:
+                raise HTTPException(status_code=403, detail=f"device access denied: {reason}")
 
         sha256_header = request.headers.get("x-evidence-sha256", "").strip().lower()
         if not sha256_header or len(sha256_header) != 64:
@@ -596,6 +640,72 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
             headers={"Accept-Ranges": "bytes"},
             content_disposition_type=None,
         )
+
+    # ---- Device Lifecycle endpoints (Ticket #33) ---------------------------
+
+    @app.get("/v1/devices/{device_id}")
+    def get_device_info(device_id: str, request: Request) -> dict[str, Any]:
+        token = _bearer(request)
+        if not hmac.compare_digest(token.encode("utf-8"), dashboard_token.encode("utf-8")):
+            raise HTTPException(status_code=401, detail="admin dashboard credentials required", headers={"WWW-Authenticate": "Bearer"})
+        device = store.get_device(device_id)
+        if not device:
+            raise HTTPException(status_code=404, detail="device not found")
+        return device.to_dict()
+
+    @app.post("/v1/devices/{device_id}/quarantine")
+    async def quarantine_device_endpoint(device_id: str, request: Request) -> dict[str, Any]:
+        token = _bearer(request)
+        if not hmac.compare_digest(token.encode("utf-8"), dashboard_token.encode("utf-8")):
+            raise HTTPException(status_code=401, detail="admin dashboard credentials required", headers={"WWW-Authenticate": "Bearer"})
+        try:
+            body = json.loads(await request.body()) if await request.body() else {}
+        except Exception:
+            raise HTTPException(status_code=400, detail="malformed JSON")
+        reason = body.get("reason", "manual_quarantine")
+        try:
+            updated = store.quarantine_device(device_id, reason=reason)
+            return updated.to_dict()
+        except ReviewNotFound:
+            raise HTTPException(status_code=404, detail="device not found")
+        except DeviceLifecycleError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
+    @app.post("/v1/devices/{device_id}/reactivate")
+    async def reactivate_device_endpoint(device_id: str, request: Request) -> dict[str, Any]:
+        token = _bearer(request)
+        if not hmac.compare_digest(token.encode("utf-8"), dashboard_token.encode("utf-8")):
+            raise HTTPException(status_code=401, detail="admin dashboard credentials required", headers={"WWW-Authenticate": "Bearer"})
+        try:
+            body = json.loads(await request.body()) if await request.body() else {}
+        except Exception:
+            raise HTTPException(status_code=400, detail="malformed JSON")
+        reason = body.get("reason")
+        try:
+            updated = store.reactivate_device(device_id, reason=reason)
+            return updated.to_dict()
+        except ReviewNotFound:
+            raise HTTPException(status_code=404, detail="device not found")
+        except DeviceLifecycleError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+
+    @app.post("/v1/devices/{device_id}/revoke")
+    async def revoke_device_endpoint(device_id: str, request: Request) -> dict[str, Any]:
+        token = _bearer(request)
+        if not hmac.compare_digest(token.encode("utf-8"), dashboard_token.encode("utf-8")):
+            raise HTTPException(status_code=401, detail="admin dashboard credentials required", headers={"WWW-Authenticate": "Bearer"})
+        try:
+            body = json.loads(await request.body()) if await request.body() else {}
+        except Exception:
+            raise HTTPException(status_code=400, detail="malformed JSON")
+        reason = body.get("reason", "manual_revocation")
+        try:
+            updated = store.revoke_device(device_id, reason=reason)
+            return updated.to_dict()
+        except ReviewNotFound:
+            raise HTTPException(status_code=404, detail="device not found")
+        except DeviceLifecycleError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
 
     return app
 

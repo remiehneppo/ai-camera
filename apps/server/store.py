@@ -19,6 +19,18 @@ from pymongo.read_concern import ReadConcern
 from pymongo.write_concern import WriteConcern
 
 from domain.event_contract import canonical_event_hash, validate_revision_identity
+from domain.device_contract import (
+    DeviceLifecycleError,
+    DeviceRecord,
+    STATUS_ACTIVE,
+    STATUS_ENROLLED,
+    STATUS_QUARANTINED,
+    STATUS_REVOKED,
+    quarantine_device,
+    reactivate_device,
+    revoke_device,
+    transition_device,
+)
 from domain.review_contract import (
     LOW_PRIORITY_TAXONOMIES,
     SEVERITY_VALUES,
@@ -102,6 +114,7 @@ class EventStore:
         self.reviews = self.database.get_collection("event_reviews")
         self.review_audit = self.database.get_collection("event_review_audit")
         self.evidence_manifests = self.database.get_collection("evidence_manifests")
+        self.devices = self.database.get_collection("devices")
 
     def ensure_ready(self) -> None:
         for attempt in range(3):
@@ -594,6 +607,59 @@ class EventStore:
             })
 
         return results
+
+    # ---- Device lifecycle management (Ticket #33) -------------------------
+
+    def get_device(self, device_id: str) -> DeviceRecord | None:
+        doc = self.devices.find_one({"device_id": device_id}, {"_id": 0})
+        if not doc:
+            return None
+        return DeviceRecord.from_dict(doc)
+
+    def enroll_device(
+        self,
+        device_id: str,
+        site_id: str,
+        allowed_cameras: list[str] | tuple[str, ...] | None = None,
+    ) -> DeviceRecord:
+        now = datetime.now(timezone.utc).isoformat()
+        existing = self.get_device(device_id)
+        if existing:
+            return existing
+        record = DeviceRecord(
+            device_id=device_id,
+            site_id=site_id,
+            status=STATUS_ACTIVE,
+            enrolled_at=now,
+            updated_at=now,
+            allowed_cameras=tuple(allowed_cameras or ()),
+        )
+        self.devices.replace_one({"device_id": device_id}, record.to_dict(), upsert=True)
+        return record
+
+    def quarantine_device(self, device_id: str, reason: str) -> DeviceRecord:
+        record = self.get_device(device_id)
+        if not record:
+            raise ReviewNotFound(f"device {device_id!r} not found")
+        updated = quarantine_device(record, reason=reason)
+        self.devices.replace_one({"device_id": device_id}, updated.to_dict(), upsert=True)
+        return updated
+
+    def reactivate_device(self, device_id: str, reason: str | None = None) -> DeviceRecord:
+        record = self.get_device(device_id)
+        if not record:
+            raise ReviewNotFound(f"device {device_id!r} not found")
+        updated = reactivate_device(record, reason=reason)
+        self.devices.replace_one({"device_id": device_id}, updated.to_dict(), upsert=True)
+        return updated
+
+    def revoke_device(self, device_id: str, reason: str) -> DeviceRecord:
+        record = self.get_device(device_id)
+        if not record:
+            raise ReviewNotFound(f"device {device_id!r} not found")
+        updated = revoke_device(record, reason=reason)
+        self.devices.replace_one({"device_id": device_id}, updated.to_dict(), upsert=True)
+        return updated
 
     def close(self) -> None:
         self.client.close()

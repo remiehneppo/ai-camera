@@ -22,6 +22,8 @@ class ServerConfig:
     mongo_database: str
     evidence_dir: str
     config_hash: str
+    device_sites: Mapping[str, str] = MappingProxyType({})
+    reviewer_sites: Mapping[str, tuple[str, ...]] = MappingProxyType({})
 
 
 def load_server_config(environ: Mapping[str, str] | None = None) -> ServerConfig:
@@ -56,6 +58,28 @@ def load_server_config(environ: Mapping[str, str] | None = None) -> ServerConfig
         raise ValueError("REVIEWER_TOKENS must map unique reviewer IDs to unique bearer tokens")
     if not dashboard_token:
         raise ValueError("DASHBOARD_TOKEN must not be empty")
+
+    device_sites: dict[str, str] = {}
+    if "DEVICE_SITES" in values:
+        try:
+            device_sites_raw = json.loads(values["DEVICE_SITES"])
+            if isinstance(device_sites_raw, dict):
+                device_sites = {str(k): str(v) for k, v in device_sites_raw.items()}
+        except Exception:
+            raise ValueError("DEVICE_SITES must be a JSON object mapping device_id to site_id")
+
+    reviewer_sites: dict[str, tuple[str, ...]] = {}
+    if "REVIEWER_SITES" in values:
+        try:
+            reviewer_sites_raw = json.loads(values["REVIEWER_SITES"])
+            if isinstance(reviewer_sites_raw, dict):
+                for rev, sites in reviewer_sites_raw.items():
+                    if isinstance(sites, list):
+                        reviewer_sites[str(rev)] = tuple(str(s) for s in sites)
+                    elif isinstance(sites, str):
+                        reviewer_sites[str(rev)] = (str(sites),)
+        except Exception:
+            raise ValueError("REVIEWER_SITES must be a JSON object mapping reviewer_id to list of site_ids")
 
     try:
         parsed = urlsplit(mongo_uri)
@@ -103,4 +127,6 @@ def load_server_config(environ: Mapping[str, str] | None = None) -> ServerConfig
         mongo_database=mongo_database,
         evidence_dir=evidence_dir,
         config_hash=config_hash,
+        device_sites=MappingProxyType(device_sites),
+        reviewer_sites=MappingProxyType(reviewer_sites),
     )
