@@ -8,9 +8,14 @@ from pathlib import Path
 import shutil
 import sys
 import time
-from typing import Any
+from typing import Any, Iterable
 
 from apps.edge.config import EdgeConfig
+from domain.alert_module_config import (
+    AlertModuleDefinition,
+    AlertModuleRegistry,
+    ConfigError,
+)
 
 
 _SQLITE_FIXED = {(3, 44): (3, 44, 6), (3, 50): (3, 50, 7)}
@@ -31,7 +36,61 @@ def sqlite_wal_reset_check(version: str | None = None) -> dict[str, Any]:
     return result
 
 
-def preflight(config: EdgeConfig) -> dict[str, Any]:
+_MODULE_DOCUMENT_FIELDS = {'module', 'config_version', 'required_fields', 'thresholds', 'cameras'}
+
+
+def _document_error(message: str, **context: Any) -> ConfigError:
+    return ConfigError('invalid_module_config_document', message, **context)
+
+
+def load_module_registry(path: str | Path) -> AlertModuleRegistry:
+    """Parse one operator module x camera document, failing fast on the first bad config."""
+    try:
+        document = json.loads(Path(path).read_text())
+    except (OSError, UnicodeError, ValueError):
+        raise _document_error('module configuration document is not readable JSON') from None
+    if not isinstance(document, dict) or set(document) != {'modules'} or not isinstance(document['modules'], list):
+        raise _document_error('module configuration document must be an object with a modules list')
+    registry = AlertModuleRegistry()
+    for entry in document['modules']:
+        if not isinstance(entry, dict) or set(entry) - _MODULE_DOCUMENT_FIELDS:
+            raise _document_error('each module entry may only define module/config_version/required_fields/thresholds/cameras')
+        for key in ('module', 'config_version'):
+            if key not in entry:
+                raise _document_error('each module entry needs ' + key)
+        cameras = entry.get('cameras') or {}
+        if not isinstance(cameras, dict):
+            raise _document_error('cameras must map camera_id to configuration', module=entry['module'])
+        definition = AlertModuleDefinition(
+            module=entry['module'],
+            config_version=entry['config_version'],
+            required_fields=frozenset(entry.get('required_fields') or ()),
+            thresholds=frozenset(entry.get('thresholds') or ()),
+        )
+        registry.register(definition)
+        for camera_id, payload in cameras.items():
+            registry.stage(registry.parse(definition.module, camera_id, payload))
+    return registry
+
+
+def module_capabilities(paths: Iterable[str | Path]) -> dict[str, Any]:
+    """Doctor view of configured modules; only documents that were supplied are reported."""
+    report: dict[str, Any] = {'status': 'not_configured', 'documents': []}
+    for path in paths:
+        try:
+            capabilities = load_module_registry(path).capabilities()
+        except ConfigError as error:
+            report['status'] = 'error'
+            report['reason'] = 'invalid module configuration'
+            report.setdefault('errors', []).append({**error.describe(), 'document': str(path)})
+            continue
+        report['documents'].append({'document': str(path), **capabilities})
+        if report['status'] == 'not_configured':
+            report['status'] = 'ok'
+    return report
+
+
+def preflight(config: EdgeConfig, module_configs: Iterable[str | Path] = ()) -> dict[str, Any]:
     recorder_available = bool(shutil.which('ffmpeg') and shutil.which('ffprobe'))
     analytics: dict[str, Any] = {'status': 'disabled', 'reason': config.disabled_reason}
     if config.analytics_enabled:
@@ -44,11 +103,14 @@ def preflight(config: EdgeConfig) -> dict[str, Any]:
     sqlite = sqlite_wal_reset_check()
     if sqlite['status'] != 'ok':
         print(f"warning: {sqlite['reason']} (running {sqlite['version']})", file=sys.stderr, flush=True)
-    return dict(scope='preflight', status='ok' if recorder_available and analytics['status'] != 'unavailable' else 'error',
+    modules = module_capabilities(module_configs)
+    ok = recorder_available and analytics['status'] != 'unavailable' and modules['status'] != 'error'
+    return dict(scope='preflight', status='ok' if ok else 'error',
                 config_hash=config.config_hash, capabilities={
                     'sqlite': sqlite,
                     'recorder': {'status': 'available' if recorder_available else 'unavailable'},
-                    'analytics': analytics})
+                    'analytics': analytics,
+                    'modules': modules})
 
 
 def run(config: EdgeConfig) -> int:
@@ -95,13 +157,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', required=True, help='JSON file with explicit local source and output_dir')
     parser.add_argument('--start', action='store_true', help='run independent recorder and detector-only lab replay')
+    parser.add_argument('--module-config', action='append', default=[],
+                        help='JSON document of independent module x camera configuration; may repeat')
     args = parser.parse_args(argv)
     try:
         config = load_edge_config(json.loads(Path(args.config).read_text()))
     except (OSError, UnicodeError, ValueError, TypeError):
         print(json.dumps({'scope': 'preflight', 'status': 'error', 'reason': 'invalid edge configuration'}))
         return 1
-    report = preflight(config)
+    report = preflight(config, args.module_config)
     print(json.dumps(report, sort_keys=True), flush=True)
     if report['status'] != 'ok':
         return 1

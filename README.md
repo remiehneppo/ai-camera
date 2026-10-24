@@ -1,6 +1,6 @@
 # AI Camera lab slice
 
-Implemented software-lab slices: synthetic event/dashboard (#01), lab facts/protocol (#02), versioned review with audit trail and re-review triggers (#04), retry/revision delivery (#05), file recorder/replay (#06), durable pinned evidence (#07), server evidence upload/playback (#08), process crash recovery (#09), pinned ONNX detector oracle (#11), Python ByteTracker with time/session semantics (#13), end-to-end perception pipeline baseline (#14), live runner (#15 partial), startup/shutdown (#16), truthful health monitor with operational fault surfacing (#17), storage quota protection (#18), dataset feedback lineage (#20), ODD image quality assessment and freeze detection (#21 partial), RTMPose-Tiny pose estimation (#22), track gap and clock jump handling (#23 partial), pose scheduling and degradation (#24), person fall detection (#25), persistent lying (#26), on-vehicle review priority and danger overrides (#27), negative audit sampling and Horvitz-Thompson quality regression G2 (#28), device lifecycle and site access enforcement (#33), and pose outcomes flow into person-down incidents (#53). Full Python test suite (526 tests) passes across edge, health, quota, pose, review API, quality evaluation, device lifecycle, and contracts. Native C++ acceleration (#10/#12), camera hardware RTSP field validation, and production target deployment acceptance (G3–G5) remain open as tracked in the [tracker](.scratch/system-build-slices/PRD.md).
+Implemented software-lab slices: synthetic event/dashboard (#01), lab facts/protocol (#02), versioned review with audit trail and re-review triggers (#04), retry/revision delivery (#05), file recorder/replay (#06), durable pinned evidence (#07), server evidence upload/playback (#08), process crash recovery (#09), pinned ONNX detector oracle (#11), Python ByteTracker with time/session semantics (#13), end-to-end perception pipeline baseline (#14), live runner (#15 partial), startup/shutdown (#16), truthful health monitor with operational fault surfacing (#17), storage quota protection (#18), dataset feedback lineage (#20), ODD image quality assessment and freeze detection (#21 partial), RTMPose-Tiny pose estimation (#22), track gap and clock jump handling (#23 partial), pose scheduling and degradation (#24), person fall detection (#25), persistent lying (#26), on-vehicle review priority and danger overrides (#27), negative audit sampling and Horvitz-Thompson quality regression G2 (#28), device lifecycle and site access enforcement (#33), and pose outcomes flow into person-down incidents (#53); plus independent module x camera configuration with fail-fast doctor reporting (#03 partial). Full Python test suite (553 tests) passes across edge, health, quota, pose, review API, quality evaluation, device lifecycle, and contracts. Native C++ acceleration (#10/#12), camera hardware RTSP field validation, and production target deployment acceptance (G3–G5) remain open as tracked in the [tracker](.scratch/system-build-slices/PRD.md).
 
 ## Run the lab stack
 
@@ -175,12 +175,39 @@ Detailed breakdown of per-stage latencies (decode, preprocess, inference, NMS, t
 
 Full change record: `docs/logs/2026-10-15-implement-dispatch-summary.md` and `docs/logs/2026-10-15-code-review-of-implementation.md`.
 
+## Independent module x camera configuration (#03 delta slice)
+
+Edge doctor reads operator configuration for each alert module on each camera and reports
+what is actually configured per camera:
+
+```sh
+.venv-oracle/bin/python -m apps.edge.doctor --config edge.json --module-config modules.json
+```
+
+`modules.json` declares the module definitions and the per-camera configuration:
+
+```json
+{"modules": [{"module": "person_down", "config_version": "person-down-v1",
+              "required_fields": ["roi"], "thresholds": ["min_score"],
+              "cameras": {"cam-01": {"version": 1, "enabled": true,
+                                      "roi": [[[0.1,0.1],[0.9,0.1],[0.9,0.9]]],
+                                      "thresholds": {"min_score": 0.4}},
+                          "cam-02": {"version": 1, "enabled": false,
+                                      "disabled_reason": "capability not cleared for site"}}}}]}
+```
+
+An enabled module missing a required field, an unknown field, or a field that looks like
+secret material stops preflight with exit code 1 and an error naming module/camera/field;
+the offending value is never echoed. `capabilities.modules` reports
+`enabled`/`disabled`/`not_activated` plus the reason and config hash per camera. Registration
+records configuration only, not concurrent capacity.
+
 ## Checks
 
 Run the entire test suite with pytest using the oracle lab environment:
 ```sh
 .venv-oracle/bin/python -m pytest -q
 ```
-All **526 tests** (126 subtests) across edge perception, tracking, fall incident engine, RTMPose estimation, ODD quality assessment, health monitoring, storage quota, server review API, negative audit G2 evaluation, device lifecycle, and event contracts pass.
+All **553 tests** (126 subtests) across edge perception, tracking, fall incident engine, RTMPose estimation, ODD quality assessment, health monitoring, storage quota, server review API, negative audit G2 evaluation, device lifecycle, and event contracts pass.
 
 Run the local contract and SQLite tests with `python -m unittest discover -s tests`. MongoDB transaction, HTTP auth, and browser checks require the Compose lab to be running; they are separate from this unit suite.

@@ -1,7 +1,7 @@
 # 03: Doctor và config fail-fast qua đường chạy lab
 
 Status: ready-for-agent
-Execution: blocked
+Execution: partial (delta slice module x camera da implement; full PerceptionPipeline/factory + RKNN/RTSP con mo)
 Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
 
 **What to build:** Người triển khai kiểm config/artifact rồi start analytics; enabled config sai dừng rõ, disabled có reason và không lộ secrets.
@@ -39,3 +39,22 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 - 2026-10-13 edge config & doctor wave: Bổ sung `apps/edge/config.py` và `apps/edge/doctor.py` riêng cho edge runtime; cấu hình bất biến frozen dataclass kèm SHA-256 fingerprint; kiểm tra preflight artifact ONNX và ORT CPU provider thật qua `OracleDetector`/`load_manifest`; từ chối cấu hình sai/unsupported không lộ secrets; doctor CLI với `--start` tích hợp trực tiếp `EdgeRuntime`, phân biệt rõ preflight capability với runtime execution; analytics lỗi trong lúc chạy báo nonzero sau khi recorder hoàn tất. Giữ nguyên `apps/server/doctor.py`. Execution tiếp tục `blocked`: chưa có full PerceptionPipeline/factory, và RKNN/RTSP vẫn là capability chưa nghiệm thu. Chi tiết: [dispatch log](../../../docs/logs/2026-10-13-runtime-dispatch.md).
 
 - 2026-10-20: Đồng bộ breakdown T3 theo [requirement tình huống/Q36](../../../docs/requirements/urban-safety-scenarios.md) và [ứng viên công nghệ](../../../docs/requirements/technology-candidates.md). Chỉ bổ sung phạm vi/acceptance/gates và dependency được duyệt; giữ Status/Execution, checked criteria, evidence và lịch sử cũ. Không có evidence implementation/benchmark/nghiệm thu mới; mọi acceptance bổ sung còn unchecked.
+
+- 2026-10-24 (wave 0): Implement **delta requirement module x camera** — chưa nghiệm thu acceptance gốc.
+  Thêm `domain/alert_module_config.py`: contract thuần (no I/O) cho config theo **module × camera** gồm
+  enabled/disabled + reason, ROI normalised [0,1], lịch theo weekday/second-of-day, ngưỡng do module definition
+  khai báo, ngoại lệ có reason. Parse **fail-fast** với context `module`/`camera`/`field`, message **không echo
+  giá trị** và từ chối field giống secret (kể cả nested). `AlertModuleRegistry` giữ activation state **độc lập theo
+  (module, camera)**: `stage` chỉ ghi desired (`pending`/`disabled`), `activate` là boundary ghi observed, version cũ
+  hơn observed bị `rejected: stale_config_version` và giữ LKG, `reset_session` chỉ reset camera đó và giữ config.
+  Consumer thật: `apps/edge/doctor.py` thêm `--module-config` (lặp được) + `module_capabilities`; preflight báo
+  `capabilities.modules` theo từng camera (`enabled`/`disabled`/`not_activated` + reason + config_hash) và trả exit
+  code 1 khi config enabled sai; không document thì `not_configured`; report không claim capacity.
+  Commands: `.venv-oracle/bin/python -m pytest tests/test_alert_module_config.py tests/test_module_config_doctor.py -q`
+  ra **27 passed**; `tests/test_edge_doctor.py tests/test_edge_config.py` ra 12 passed (13 subtests); full suite
+  `.venv-oracle/bin/python -m pytest -q` ra **553 passed, 126 subtests** (baseline trước slice: 526).
+  `mypy domain/alert_module_config.py apps/edge/doctor.py`: 0 lỗi mới (2 lỗi `_SQLITE_FIXED.get` ở doctor.py:32 là
+  pre-existing, ngoài scope slice).
+  Còn mở (giữ nguyên như comment 2026-10-12): full `PerceptionPipeline` port + factory/artifact manifest, capability
+  RKNN/RTSP; mọi acceptance gốc vẫn unchecked. Phân rã và thứ tự wave:
+  [2026-10-24 work breakdown](../../../docs/logs/2026-10-24-work-breakdown-next-wave.md).
