@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 import time
-from typing import Any, Mapping
+from typing import Any, Mapping, NoReturn
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -34,6 +34,16 @@ from domain.retrieval_contract import (
     wire_payload,
 )
 from domain.review_contract import ReviewValidationError, SEVERITY_VALUES, validate_review_request
+from domain.storm_guard import (
+    OUTCOME_ACCEPTED,
+    OUTCOME_CONFLICT,
+    OUTCOME_DUPLICATE,
+    OUTCOME_MALFORMED,
+    OUTCOME_RATE_LIMITED,
+    OUTCOME_TOO_LARGE,
+    OUTCOME_UNAVAILABLE,
+    StormGuard,
+)
 from apps.server.config import ServerConfig, load_server_config
 from apps.server.dataset import export_dataset_records, records_to_jsonl
 from apps.server.live_stream import LiveStreamService
@@ -136,13 +146,18 @@ class EventBodyLimitMiddleware:
             return
         max_bytes = self.max_bytes if path == "/v1/events" else 16 * 1024
         headers = dict(scope.get("headers", []))
+        guard = _scope_guard(scope)
         content_length = headers.get(b"content-length")
         if content_length:
             try:
                 if int(content_length) > max_bytes:
+                    if guard is not None:
+                        guard.record(OUTCOME_TOO_LARGE, size_bytes=int(content_length))
                     await self._too_large(send)
                     return
             except ValueError:
+                if guard is not None:
+                    guard.record(OUTCOME_MALFORMED, detail={"reason": "invalid_content_length"})
                 await send({"type": "http.response.start", "status": 400, "headers": [(b"content-length", b"0")]})
                 await send({"type": "http.response.body", "body": b""})
                 return
@@ -157,6 +172,8 @@ class EventBodyLimitMiddleware:
                 continue
             size += len(message.get("body", b""))
             if size > max_bytes:
+                if guard is not None:
+                    guard.record(OUTCOME_TOO_LARGE, size_bytes=size)
                 await self._too_large(send)
                 return
             messages.append(message)
@@ -239,6 +256,39 @@ def _viewer_token(request: Request) -> str:
     return _bearer(request)
 
 
+def _scope_guard(scope: Mapping[str, Any]) -> StormGuard | None:
+    app = scope.get("app")
+    return getattr(getattr(app, "state", None), "ingest_guard", None)
+
+
+def _content_length(request: Request) -> int | None:
+    raw = request.headers.get("content-length")
+    try:
+        return int(raw) if raw and int(raw) >= 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _reject(
+    guard: StormGuard,
+    outcome: str,
+    status_code: int,
+    detail: str,
+    *,
+    device_id: str = "",
+    request: Request | None = None,
+    headers: Mapping[str, str] | None = None,
+) -> NoReturn:
+    """Record the ingest outcome before refusing it: a flood stays observable, not silent."""
+    guard.record(
+        outcome,
+        device_id=device_id,
+        size_bytes=_content_length(request) if request is not None else None,
+        detail={"status": status_code, "detail": detail},
+    )
+    raise HTTPException(status_code=status_code, detail=detail, headers=dict(headers or {}))
+
+
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -274,6 +324,7 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
     app.state.evidence_dir = config.evidence_dir
     app.state.config_hash = config.config_hash
     app.state.live_service = live_service
+    app.state.ingest_guard = StormGuard()
 
     @app.on_event("startup")
     def startup() -> None:
@@ -286,12 +337,30 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
         store.close()
 
     @app.get("/healthz")
-    def health() -> dict[str, str]:
+    def health(request: Request) -> dict[str, Any]:
         try:
             store.client.admin.command("ping")
         except PyMongoError:
             raise HTTPException(status_code=503, detail="database unavailable")
-        return {"status": "ok"}
+        ingest = request.app.state.ingest_guard.snapshot()
+        return {
+            "status": "degraded" if ingest["degraded"] else "ok",
+            "ingest_guard": {
+                "degraded": ingest["degraded"],
+                "truncated": ingest["truncated"],
+                "budget_spent": ingest["budget_spent"],
+                "budget_remaining": ingest["budget_remaining"],
+                "counts": ingest["counts"],
+            },
+        }
+
+    @app.get("/v1/ingest/guard")
+    def ingest_guard_state(request: Request) -> dict[str, Any]:
+        """Operator view of the inbound storm guard (ticket #41)."""
+        token = _viewer_token(request)
+        if not _is_authorized_viewer(token, dashboard_token, reviewer_tokens):
+            raise HTTPException(status_code=401, detail="invalid credentials", headers={"WWW-Authenticate": "Bearer"})
+        return request.app.state.ingest_guard.snapshot()
 
     @app.get("/v1/live/stream")
     def live_stream(request: Request, max_frames: int | None = None) -> StreamingResponse:
@@ -316,38 +385,56 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
 
     @app.post("/v1/events")
     async def ingest(request: Request) -> JSONResponse:
+        guard: StormGuard = request.app.state.ingest_guard
         authenticated_device = _device_for_token(_bearer(request), device_tokens)
+        # Ticket #41: a spent malformed budget refuses further work instead of growing the reserve.
+        if not guard.admit():
+            _reject(guard, OUTCOME_RATE_LIMITED, 429, "ingest budget exhausted for this window",
+                    device_id=authenticated_device, request=request,
+                    headers={"Retry-After": str(guard.retry_after_seconds())})
         if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
-            raise HTTPException(status_code=415, detail="Content-Type must be application/json")
+            _reject(guard, OUTCOME_MALFORMED, 415, "Content-Type must be application/json",
+                    device_id=authenticated_device, request=request)
         try:
             raw = json.loads(await request.body(), object_pairs_hook=_unique_object)
             event = validate_event(raw)
         except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
-            raise HTTPException(status_code=400, detail="malformed JSON")
+            _reject(guard, OUTCOME_MALFORMED, 400, "malformed JSON",
+                    device_id=authenticated_device, request=request)
         except EventValidationError as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
+            _reject(guard, OUTCOME_MALFORMED, 422, str(exc), device_id=authenticated_device, request=request)
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
+            _reject(guard, OUTCOME_MALFORMED, 400, str(exc), device_id=authenticated_device, request=request)
         if event["device_id"] != authenticated_device:
-            raise HTTPException(status_code=403, detail="event device_id does not match authenticated device")
+            _reject(guard, OUTCOME_CONFLICT, 403, "event device_id does not match authenticated device",
+                    device_id=authenticated_device, request=request)
 
         # Ticket #33: Enforce device lifecycle and allowed cameras
         device_rec = store.get_device(authenticated_device)
         if device_rec is not None:
             allowed, reason = check_device_access(device_rec, camera_id=event.get("camera_id"))
             if not allowed:
-                raise HTTPException(status_code=403, detail=f"device access denied: {reason}")
+                _reject(guard, OUTCOME_CONFLICT, 403, f"device access denied: {reason}",
+                        device_id=authenticated_device, request=request)
         if request.headers.get("idempotency-key") != event["message_id"]:
-            raise HTTPException(status_code=422, detail="Idempotency-Key must match message_id")
+            _reject(guard, OUTCOME_MALFORMED, 422, "Idempotency-Key must match message_id",
+                    device_id=authenticated_device, request=request)
         try:
             receipt = await run_in_threadpool(store.persist, event)
         except EventHashConflict as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            _reject(guard, OUTCOME_CONFLICT, 409, str(exc), device_id=authenticated_device, request=request)
         except EventIdentityConflict as exc:
-            raise HTTPException(status_code=409, detail=str(exc))
+            _reject(guard, OUTCOME_CONFLICT, 409, str(exc), device_id=authenticated_device, request=request)
         except PyMongoError:
             # Unknown commit result is retried by the edge with the same identity and snapshot.
-            raise HTTPException(status_code=503, detail="durable commit unavailable; retry the same event revision")
+            _reject(guard, OUTCOME_UNAVAILABLE, 503,
+                    "durable commit unavailable; retry the same event revision",
+                    device_id=authenticated_device, request=request)
+        guard.record(
+            OUTCOME_DUPLICATE if receipt.get("duplicate") else OUTCOME_ACCEPTED,
+            device_id=authenticated_device,
+            size_bytes=_content_length(request),
+        )
         return JSONResponse(receipt, status_code=200)
 
     @app.get("/v1/events")

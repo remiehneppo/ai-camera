@@ -195,6 +195,7 @@ class EventStore:
             "accepted": True,
             "accepted_at": accepted_at,
             "canonicalization": "canonical-json-python-v1",
+            "duplicate": False,
         }
 
         def commit(session: Any) -> dict[str, Any]:
@@ -202,7 +203,8 @@ class EventStore:
             if existing:
                 if existing["event_hash"] != event_hash:
                     raise EventHashConflict("event revision already exists with different content")
-                return existing["receipt"]
+                # Same identity and same canonical content: a retried delivery, not new work.
+                return {**existing["receipt"], "duplicate": True}
 
             current = self.current.find_one({"device_id": event["device_id"], "event_id": event["event_id"]}, session=session)
             first = self.revisions.find_one(
