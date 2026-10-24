@@ -117,6 +117,16 @@ class ForensicTests(unittest.TestCase):
         self.assertEqual(sample["detail"], {"b": "2", "c": "3", "d": "4"})
         self.assertEqual(sample["size_bytes"], 1234)
 
+    def test_zero_sample_policy_counts_drops_instead_of_crashing(self):
+        g, clock = guard(forensic_samples=0)
+        for _ in range(2):
+            g.record(OUTCOME_MALFORMED, device_id="dev", now=clock.now)
+        snapshot = g.snapshot(now=clock.now)
+        self.assertEqual(snapshot["forensics"], [])
+        self.assertEqual(snapshot["dropped_samples"], 2)
+        self.assertTrue(snapshot["truncated"])
+        self.assertTrue(snapshot["degraded"])
+
     def test_snapshot_cannot_be_used_to_mutate_the_guard_window(self):
         g, clock = guard(forensic_samples=2)
         g.record(OUTCOME_MALFORMED, device_id="dev", detail={"reason": "schema"}, now=clock.now)

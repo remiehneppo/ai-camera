@@ -184,6 +184,13 @@ class EventStore:
     def _key(event: dict[str, Any]) -> dict[str, Any]:
         return {"device_id": event["device_id"], "event_id": event["event_id"], "revision": event["revision"]}
 
+    @staticmethod
+    def _duplicate_receipt(existing: dict[str, Any], event_hash: str) -> dict[str, Any]:
+        """Same identity and same canonical content: a retried delivery, not new work."""
+        if existing["event_hash"] != event_hash:
+            raise EventHashConflict("event revision already exists with different content")
+        return {**existing["receipt"], "duplicate": True}
+
     def persist(self, event: dict[str, Any]) -> dict[str, Any]:
         key = self._key(event)
         event_hash = canonical_event_hash(event)
@@ -201,10 +208,7 @@ class EventStore:
         def commit(session: Any) -> dict[str, Any]:
             existing = self.revisions.find_one(key, session=session)
             if existing:
-                if existing["event_hash"] != event_hash:
-                    raise EventHashConflict("event revision already exists with different content")
-                # Same identity and same canonical content: a retried delivery, not new work.
-                return {**existing["receipt"], "duplicate": True}
+                return self._duplicate_receipt(existing, event_hash)
 
             current = self.current.find_one({"device_id": event["device_id"], "event_id": event["event_id"]}, session=session)
             first = self.revisions.find_one(
@@ -268,11 +272,11 @@ class EventStore:
                     read_preference=ReadPreference.PRIMARY,
                 )
             except DuplicateKeyError:
+                # A concurrent writer inserted the same identity first: it is a duplicate, not
+                # new work, and the receipt must say so on this path too.
                 existing = self.revisions.find_one(key)
-                if existing and existing["event_hash"] == event_hash:
-                    return existing["receipt"]
                 if existing:
-                    raise EventHashConflict("event revision already exists with different content")
+                    return self._duplicate_receipt(existing, event_hash)
                 raise
 
     def list_current(

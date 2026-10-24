@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from apps.server.config import load_server_config
 from apps.server.main import create_app
+from apps.server.store import EventHashConflict
 from domain.event_contract import MAX_EVENT_BYTES
 from domain.storm_guard import StormGuard, StormGuardPolicy
 from tests.test_server_evidence import sample_event, server_env
@@ -119,6 +120,18 @@ class StormApiTests(unittest.TestCase):
         self.assertEqual(body["status"], "degraded")
         self.assertTrue(body["ingest_guard"]["degraded"])
         self.assertEqual(body["ingest_guard"]["budget_remaining"], 0)
+
+    def test_concurrent_duplicate_receipt_is_also_marked_duplicate(self):
+        event = sample_event()
+        first = self.post_event(event)
+        self.assertEqual(first.status_code, 200, first.text)
+        stored = self.store.revisions.find_one(
+            {"device_id": event["device_id"], "event_id": event["event_id"], "revision": 1}
+        )
+        receipt = self.store._duplicate_receipt(stored, first.json()["event_hash"])
+        self.assertTrue(receipt["duplicate"])
+        with self.assertRaises(EventHashConflict):
+            self.store._duplicate_receipt(stored, "0" * 64)
 
     def test_guard_endpoint_requires_credentials(self):
         self.assertEqual(self.client.get("/v1/ingest/guard").status_code, 401)

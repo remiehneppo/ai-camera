@@ -193,6 +193,10 @@ class StormGuard:
             "size_bytes": int(size_bytes) if isinstance(size_bytes, int) else None,
             "detail": _bounded_detail(detail, self.policy.sample_text_bytes),
         }
+        if self.policy.forensic_samples == 0:
+            # Forensics explicitly disabled: count the drop, keep nothing, never crash.
+            self._dropped_samples += 1
+            return
         if len(self._samples) >= self.policy.forensic_samples:
             self._samples.pop(0)
             self._dropped_samples += 1

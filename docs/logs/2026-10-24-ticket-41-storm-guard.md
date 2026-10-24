@@ -28,9 +28,9 @@ Ngày 2026-10-24. Blocker #18/#05 đã done. Slice này làm **phía server ingr
 
 ## Bằng chứng chạy thật
 
-- `.venv-oracle/bin/python -m pytest tests/test_storm_guard.py tests/test_storm_api.py -q` ⇒ **19 passed**
-  (11 domain + 8 HTTP).
-- Full suite ⇒ **641 passed, 126 subtests** trong 136.05s (baseline 622, +19).
+- `.venv-oracle/bin/python -m pytest tests/test_storm_guard.py tests/test_storm_api.py -q` ⇒ **22 passed**
+  (12 domain + 10 HTTP).
+- Full suite ⇒ **643 passed, 126 subtests** trong 138.24s (baseline 622, +21).
 - `mypy apps/server/main.py apps/server/store.py domain/storm_guard.py` ⇒ chỉ 2 lỗi pre-existing.
 - HTTP-level đã kiểm: flood 3 malformed → 429 + Retry-After; duplicate không tiêu budget và không có forensic;
   6 event unique với budget 2 vẫn 200 hết; 415/422 đều vào `malformed`; payload > `MAX_EVENT_BYTES` → 413 +
