@@ -135,6 +135,9 @@ class EventStore:
                 self.evidence_manifests.create_index(
                     [("device_id", 1), ("event_id", 1), ("request_id", 1)], unique=True, name="evidence_manifest_identity"
                 )
+                self.devices.create_index(
+                    [("device_id", 1)], unique=True, name="device_identity"
+                )
                 with self.client.start_session() as session:
                     def probe(active: Any) -> None:
                         probes = self.database.get_collection("readiness_probes")
@@ -658,6 +661,23 @@ class EventStore:
         if not record:
             raise ReviewNotFound(f"device {device_id!r} not found")
         updated = revoke_device(record, reason=reason)
+        self.devices.replace_one({"device_id": device_id}, updated.to_dict(), upsert=True)
+        return updated
+
+    def rotate_device_token(
+        self, device_id: str, *, new_site_id: str | None = None, reason: str | None = None
+    ) -> DeviceRecord:
+        record = self.get_device(device_id)
+        if not record:
+            raise ReviewNotFound(f"device {device_id!r} not found")
+        if record.is_revoked:
+            raise DeviceLifecycleError("revoked_device_is_terminal", f"device {device_id!r} is revoked")
+        now = datetime.now(timezone.utc).isoformat()
+        updated_dict = record.to_dict()
+        updated_dict["updated_at"] = now
+        if new_site_id is not None:
+            updated_dict["site_id"] = new_site_id
+        updated = DeviceRecord.from_dict(updated_dict)
         self.devices.replace_one({"device_id": device_id}, updated.to_dict(), upsert=True)
         return updated
 

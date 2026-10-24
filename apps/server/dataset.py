@@ -98,6 +98,7 @@ def export_dataset_records(
     severity: str | None = None,
     taxonomy: str | None = None,
     site_id: str | None = None,
+    allowed_sites: tuple[str, ...] | list[str] | set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Extract reviewed event records with exact lineage, evidence manifest, and dataset split."""
     query_decision = decision if decision != "all" else None
@@ -197,6 +198,9 @@ def export_dataset_records(
 
     if site_id is not None:
         assigned_records = [r for r in assigned_records if r.get("site_id") == site_id]
+    elif allowed_sites is not None:
+        allowed_set = set(allowed_sites)
+        assigned_records = [r for r in assigned_records if r.get("site_id") in allowed_set]
 
     return assigned_records
 

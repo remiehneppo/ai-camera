@@ -258,6 +258,68 @@ class TestDeviceLifecycleFlow(unittest.TestCase):
         )
         self.assertEqual(res_ok.status_code, 200)
 
+    def test_cross_site_raw_evidence_read_is_denied(self) -> None:
+        # Ingest event from site A
+        event = make_test_event("edge-dev-site-a", camera_id="cam-01")
+        self.client.post(
+            "/v1/events",
+            headers={
+                "Authorization": "Bearer token-edge-site-a",
+                "Content-Type": "application/json",
+                "Idempotency-Key": str(event["message_id"]),
+            },
+            json=event,
+        )
+
+        # Upload dummy evidence for site A
+        dummy_video = b"test-mp4-video-data"
+        sha = hashlib.sha256(dummy_video).hexdigest()
+        meta = json.dumps({"content_type": "video/mp4", "size_bytes": len(dummy_video), "owner": f"edge-dev-site-a/{event['event_id']}/1"})
+        upload_res = self.client.put(
+            f"/v1/evidence/edge-dev-site-a/{event['event_id']}/req-001",
+            headers={
+                "Authorization": "Bearer token-edge-site-a",
+                "X-Evidence-Sha256": sha,
+                "X-Evidence-Metadata": meta,
+            },
+            content=dummy_video,
+        )
+        self.assertEqual(upload_res.status_code, 200)
+
+        # Reviewer B (site 2) tries to read manifest of site 1 -> 403 denied
+        manifest_res_b = self.client.get(
+            f"/v1/evidence/edge-dev-site-a/{event['event_id']}/req-001",
+            headers={"Authorization": "Bearer token-rev-b"},
+        )
+        self.assertEqual(manifest_res_b.status_code, 403)
+        self.assertIn("cross-site evidence access denied", manifest_res_b.json()["detail"])
+
+        # Reviewer B (site 2) tries to read media binary of site 1 -> 403 denied
+        media_res_b = self.client.get(
+            f"/v1/evidence/edge-dev-site-a/{event['event_id']}/req-001/media",
+            headers={"Authorization": "Bearer token-rev-b"},
+        )
+        self.assertEqual(media_res_b.status_code, 403)
+        self.assertIn("cross-site evidence access denied", media_res_b.json()["detail"])
+
+        # Reviewer A (site 1) reads manifest and media -> 200 OK
+        manifest_res_a = self.client.get(
+            f"/v1/evidence/edge-dev-site-a/{event['event_id']}/req-001",
+            headers={"Authorization": "Bearer token-rev-a"},
+        )
+        self.assertEqual(manifest_res_a.status_code, 200)
+
+        media_res_a = self.client.get(
+            f"/v1/evidence/edge-dev-site-a/{event['event_id']}/req-001/media",
+            headers={"Authorization": "Bearer token-rev-a"},
+        )
+        self.assertEqual(media_res_a.status_code, 200)
+
+    def test_rotate_device_token(self) -> None:
+        updated = self.store.rotate_device_token("edge-dev-site-a", new_site_id="site-district-new")
+        self.assertEqual(updated.site_id, "site-district-new")
+        self.assertEqual(self.store.get_device("edge-dev-site-a").site_id, "site-district-new")
+
 
 if __name__ == "__main__":
     unittest.main()

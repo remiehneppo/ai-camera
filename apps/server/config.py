@@ -115,6 +115,8 @@ def load_server_config(environ: Mapping[str, str] | None = None) -> ServerConfig
         "device_ids": sorted(device_tokens.values()),
         "reviewer_ids": sorted(reviewer_tokens),
         "dashboard_token_configured": True,
+        "device_sites": sorted(device_sites.items()),
+        "reviewer_sites": sorted((k, sorted(v)) for k, v in reviewer_sites.items()),
     }
     config_hash = hashlib.sha256(
         json.dumps(public_config, sort_keys=True, separators=(",", ":")).encode("utf-8")

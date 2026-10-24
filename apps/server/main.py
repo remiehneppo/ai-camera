@@ -410,12 +410,13 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
 
         # Ticket #33: Enforce reviewer site scoping for export
         actor = _reviewer_for_token(token, reviewer_tokens)
+        scoped_allowed_sites: tuple[str, ...] | None = None
         if actor is not None and actor in config.reviewer_sites:
             allowed = config.reviewer_sites[actor]
             if allowed:
                 if site_id is not None and site_id not in allowed:
                     raise HTTPException(status_code=403, detail="cross-site export access denied")
-                # Restrict to permitted sites if none requested
+                scoped_allowed_sites = allowed
                 if site_id is None and len(allowed) == 1:
                     site_id = allowed[0]
 
@@ -439,6 +440,7 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
                 severity=severity,
                 taxonomy=taxonomy,
                 site_id=site_id,
+                allowed_sites=scoped_allowed_sites,
             )
         except PyMongoError:
             raise HTTPException(status_code=503, detail="dataset export unavailable")
@@ -593,6 +595,17 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
         if not _is_authorized_viewer(token, dashboard_token, reviewer_tokens):
             raise HTTPException(status_code=401, detail="invalid credentials", headers={"WWW-Authenticate": "Bearer"})
 
+        # Ticket #33: Enforce reviewer site scoping for evidence manifest
+        actor = _reviewer_for_token(token, reviewer_tokens)
+        if actor is not None and actor in config.reviewer_sites:
+            allowed = config.reviewer_sites[actor]
+            if allowed:
+                device_rec = store.get_device(device_id)
+                event_site = device_rec.site_id if device_rec else config.device_sites.get(device_id)
+                reviewer_access = ReviewerAccessRecord(reviewer_id=actor, allowed_sites=allowed)
+                if not check_reviewer_site_access(reviewer_access, event_site):
+                    raise HTTPException(status_code=403, detail="cross-site evidence access denied")
+
         try:
             record = await run_in_threadpool(store.get_evidence, device_id, event_id, request_id, verify_file=True)
         except PyMongoError:
@@ -617,6 +630,17 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
         token = _viewer_token(request)
         if not _is_authorized_viewer(token, dashboard_token, reviewer_tokens):
             raise HTTPException(status_code=401, detail="invalid credentials", headers={"WWW-Authenticate": "Bearer"})
+
+        # Ticket #33: Enforce reviewer site scoping for evidence media
+        actor = _reviewer_for_token(token, reviewer_tokens)
+        if actor is not None and actor in config.reviewer_sites:
+            allowed = config.reviewer_sites[actor]
+            if allowed:
+                device_rec = store.get_device(device_id)
+                event_site = device_rec.site_id if device_rec else config.device_sites.get(device_id)
+                reviewer_access = ReviewerAccessRecord(reviewer_id=actor, allowed_sites=allowed)
+                if not check_reviewer_site_access(reviewer_access, event_site):
+                    raise HTTPException(status_code=403, detail="cross-site evidence access denied")
 
         try:
             record = await run_in_threadpool(store.get_evidence, device_id, event_id, request_id, verify_file=True)
