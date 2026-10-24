@@ -58,3 +58,24 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
   Còn mở (giữ nguyên như comment 2026-10-12): full `PerceptionPipeline` port + factory/artifact manifest, capability
   RKNN/RTSP; mọi acceptance gốc vẫn unchecked. Phân rã và thứ tự wave:
   [2026-10-24 work breakdown](../../../docs/logs/2026-10-24-work-breakdown-next-wave.md).
+
+- 2026-10-24 (code review, chưa fix): review 2 trục trên commit `ae66f22` (fixed point `340b5f2`), kèm tham chiếu
+  `ocr` (`@alibaba-group/open-code-review` 1.13.3). Findings đã verify bằng lệnh thật, **chưa sửa code**:
+  1. **Blocking** `apps/edge/doctor.py:61` — `entry.get('cameras') or {}` ép falsy non-dict thành `{}` nên bỏ qua
+     `isinstance(cameras, dict)`: document `"cameras": []` và `"cameras": false` được accept âm thầm (module
+     xuất hiện với 0 camera) thay vì fail-fast.
+  2. **Blocking** `apps/edge/doctor.py:67-68` — `frozenset(...)` trên input không phải collection:
+     `required_fields: 5` → `TypeError` không bắt được (crash preflight thay vì `ConfigError`); `thresholds: "minscore"`
+     bị tách thành 8 tên threshold 1 ký tự `['c','e','i','m','n','o','r','s']` và **vẫn accepted** — fail-fast bị vượt.
+  3. Judgement `domain/alert_module_config.py:282-300` — Duplicated Code: `_parse_roi` lặp lại 2 luật mà
+     `RegionOfInterest.__post_init__` (dòng 165, 171) đã sở hữu, trong khi `_parse_schedule`/`_parse_exceptions` đều
+     delegate. Sửa: catch `ConfigError` rồi re-raise qua `place.fail(..., field='roi')`.
+  4. Minor `domain/alert_module_config.py:517` — `_Place("*", camera_id)` làm lộ sentinel `module=*` trong lỗi
+     operator-facing của `session_id`.
+  5. Minor `domain/alert_module_config.py:404` — `ActivationState.describe()` không có caller (grep toàn repo);
+     `capabilities()` tự dựng dict riêng. Dead API / speculative generality.
+  Spec (partial, đúng phạm vi đã khai báo nhưng cần ghi rõ): registry chưa có **allowlisted factory** hay handle
+  **perception chia sẻ** như ADR-0001 yêu cầu; và không consumer nào ngoài doctor đọc module config
+  (`apps/edge/runtime.py`, `live_pipeline.py`, `pipeline.py` không tham chiếu), nên ROI/lịch/ngưỡng/enabled chưa tới
+  perception — #57 vẫn phải nối dây. Ngoài ra doctor chỉ `stage()` nên `capabilities.modules` không bao giờ báo
+  `enabled`, chỉ `not_activated`/`disabled`.
