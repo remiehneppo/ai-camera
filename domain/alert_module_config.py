@@ -9,6 +9,11 @@ The registry keeps one activation state per (module, camera) pair, so registerin
 module never inherits another module's state, and a camera session change re-binds the
 activation instead of silently carrying observations across sessions. Registration is not a
 capacity claim: it records configuration, not concurrent runtime load.
+
+ADR-0001 requires an allowlisted factory per registered module and sharing of
+source/detector/tracker/pose when compatible: a definition names the factory that will run
+it, `register` rejects any factory outside the allowlist, and modules that declare the same
+perception profile on the same camera are reported as one perception group instead of two.
 """
 
 from __future__ import annotations
@@ -18,9 +23,10 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from typing import Any, Final, FrozenSet, Mapping, NamedTuple, Optional, Pattern, Tuple
+from typing import Any, Final, FrozenSet, Iterable, Mapping, NamedTuple, Optional, Pattern, Tuple
 
 __all__ = [
+    "ALLOWLISTED_FACTORIES",
     "ActivationState",
     "AlertModuleDefinition",
     "AlertModuleRegistry",
@@ -40,6 +46,11 @@ __all__ = [
 ]
 
 SCHEMA_VERSION: Final[str] = "module-camera-config-v1"
+
+#: Factories this codebase ships; a module whose factory is outside this set is refused.
+ALLOWLISTED_FACTORIES: Final[FrozenSet[str]] = frozenset(
+    {"person_down", "vehicle_incident", "danger_zone"}
+)
 
 #: Configuration keys an operator may set for one module on one camera.
 CONFIG_FIELDS: Final[FrozenSet[str]] = frozenset(
@@ -69,6 +80,7 @@ ERROR_INVALID_CAMERA_ID: Final[str] = "invalid_camera_id"
 ERROR_INVALID_DEFINITION: Final[str] = "invalid_module_definition"
 ERROR_DUPLICATE_MODULE: Final[str] = "duplicate_module"
 ERROR_UNKNOWN_MODULE: Final[str] = "unknown_module"
+ERROR_FACTORY_NOT_ALLOWED: Final[str] = "factory_not_allowlisted"
 ERROR_SECRET_FIELD: Final[str] = "secret_field_not_allowed"
 ERROR_UNKNOWN_FIELD: Final[str] = "unknown_config_field"
 ERROR_MISSING_REQUIRED_FIELD: Final[str] = "missing_required_field"
@@ -93,6 +105,8 @@ class ConfigError(ValueError):
     """Typed fail-fast error carrying module/camera/field context.
 
     Messages name fields, never values: a rejected configuration must not echo a secret.
+    `message` keeps the un-prefixed text so a caller can re-raise the same failure with
+    added context without duplicating the code prefix.
     """
 
     def __init__(
@@ -105,6 +119,7 @@ class ConfigError(ValueError):
         field: Optional[str] = None,
     ) -> None:
         self.code = code
+        self.message = message
         self.module = module
         self.camera_id = camera_id
         self.field = field
@@ -122,7 +137,7 @@ class ConfigError(ValueError):
 class _Place(NamedTuple):
     """Which module x camera a failure belongs to; keeps error context out of every signature."""
 
-    module: str
+    module: Optional[str] = None
     camera_id: Optional[str] = None
 
     def fail(self, code: str, message: str, field: Optional[str] = None) -> ConfigError:
@@ -170,6 +185,10 @@ class RegionOfInterest:
                 if type(value) not in (int, float) or not math.isfinite(value) or not 0.0 <= value <= 1.0:
                     raise ConfigError(ERROR_INVALID_ROI, "region of interest coordinates must be normalised to [0, 1]")
 
+    def as_polygon(self) -> list[list[float]]:
+        """Shape accepted by `apps.edge.pipeline.Pipeline(roi_polygon=...)`."""
+        return [[float(x), float(y)] for x, y in self.points]
+
 
 @dataclass(frozen=True)
 class ScheduleWindow:
@@ -204,22 +223,38 @@ class ExceptionRule:
 
 @dataclass(frozen=True)
 class AlertModuleDefinition:
-    """What one alert module needs before it may be enabled on a camera."""
+    """What one alert module needs before it may be enabled on a camera.
+
+    `factory` names the allowlisted pipeline factory that will run the module; two modules
+    that declare the same `perception_profile` on one camera share source/detector/tracker/
+    pose rather than decoding and inferring twice.
+    """
 
     module: str
     config_version: str
+    factory: str
     required_fields: FrozenSet[str] = frozenset()
     thresholds: FrozenSet[str] = frozenset()
+    perception_profile: Optional[str] = None
 
     def __post_init__(self) -> None:
-        place = _Place(self.module if isinstance(self.module, str) else repr(self.module))
+        place = _Place(self.module if isinstance(self.module, str) else None)
         _require_identifier(self.module, ERROR_INVALID_MODULE_ID, "module")
         if not isinstance(self.config_version, str) or not self.config_version.strip():
             raise place.fail(ERROR_INVALID_DEFINITION, "config_version must be a non-empty string")
+        _require_identifier(self.factory, ERROR_FACTORY_NOT_ALLOWED, "factory", place)
+        if not isinstance(self.required_fields, (frozenset, set)):
+            raise place.fail(ERROR_INVALID_DEFINITION, "required_fields must be a set of field names")
         if set(self.required_fields) - REQUIRABLE_FIELDS:
             raise place.fail(ERROR_INVALID_DEFINITION, "required_fields may only name roi/schedule/thresholds/exceptions")
+        if not isinstance(self.thresholds, (frozenset, set)):
+            raise place.fail(ERROR_INVALID_DEFINITION, "thresholds must be a set of threshold names")
         for name in self.thresholds:
             _require_identifier(name, ERROR_INVALID_DEFINITION, "threshold name", place)
+        if self.perception_profile is None:
+            object.__setattr__(self, "perception_profile", self.factory)
+        else:
+            _require_identifier(self.perception_profile, ERROR_INVALID_DEFINITION, "perception_profile", place)
 
 
 @dataclass(frozen=True)
@@ -237,9 +272,9 @@ class CameraModuleConfig:
     exceptions: Tuple[ExceptionRule, ...] = ()
 
     def __post_init__(self) -> None:
-        place = _Place(self.module, self.camera_id)
         _require_identifier(self.module, ERROR_INVALID_MODULE_ID, "module")
-        _require_identifier(self.camera_id, ERROR_INVALID_CAMERA_ID, "camera_id", _Place(self.module))
+        _require_identifier(self.camera_id, ERROR_INVALID_CAMERA_ID, "camera_id", _Place(self.module if isinstance(self.module, str) else None))
+        place = _Place(self.module, self.camera_id)
         if type(self.version) is not int or self.version <= 0:
             raise place.fail(ERROR_INVALID_CONFIG_VERSION, "version must be a positive integer", "version")
         if type(self.enabled) is not bool:
@@ -256,6 +291,9 @@ class CameraModuleConfig:
 
     def threshold(self, name: str) -> Optional[float]:
         return dict(self.thresholds).get(name)
+
+    def roi_polygon(self) -> Optional[list[list[float]]]:
+        return self.roi[0].as_polygon() if self.roi else None
 
     def describe(self) -> dict[str, Any]:
         return {
@@ -291,14 +329,10 @@ def _parse_roi(raw: Any, place: _Place) -> Tuple[RegionOfInterest, ...]:
         )
         if len(points) != len(item):
             raise place.fail(ERROR_INVALID_ROI, "each point must be an (x, y) pair", "roi")
-        for x, y in points:
-            if type(x) not in (int, float) or type(y) not in (int, float) or not all(
-                map(math.isfinite, (x, y))
-            ) or not 0.0 <= x <= 1.0 or not 0.0 <= y <= 1.0:
-                raise place.fail(ERROR_INVALID_ROI, "region of interest coordinates must be normalised to [0, 1]", "roi")
-        if len(points) < 3:
-            raise place.fail(ERROR_INVALID_ROI, "a region of interest needs at least three points", "roi")
-        regions.append(RegionOfInterest(points=points))
+        try:
+            regions.append(RegionOfInterest(points=points))
+        except ConfigError as error:
+            raise place.fail(error.code, error.message, "roi") from None
     return tuple(regions)
 
 
@@ -312,7 +346,12 @@ def _parse_schedule(raw: Any, place: _Place) -> Tuple[ScheduleWindow, ...]:
         days = item["days"]
         if not isinstance(days, (list, tuple)):
             raise place.fail(ERROR_INVALID_SCHEDULE, "days must be a list", "schedule")
-        windows.append(ScheduleWindow(days=tuple(days), start_second=item["start_second"], end_second=item["end_second"]))
+        try:
+            windows.append(
+                ScheduleWindow(days=tuple(days), start_second=item["start_second"], end_second=item["end_second"])
+            )
+        except ConfigError as error:
+            raise place.fail(error.code, error.message, "schedule") from None
     return tuple(windows)
 
 
@@ -338,7 +377,10 @@ def _parse_exceptions(raw: Any, place: _Place) -> Tuple[ExceptionRule, ...]:
     for item in raw:
         if not isinstance(item, Mapping) or set(item) != {"code", "reason"}:
             raise place.fail(ERROR_INVALID_EXCEPTION, "each exception needs exactly code and reason", "exceptions")
-        rules.append(ExceptionRule(code=item["code"], reason=item["reason"]))
+        try:
+            rules.append(ExceptionRule(code=item["code"], reason=item["reason"]))
+        except ConfigError as error:
+            raise place.fail(error.code, error.message, "exceptions") from None
     return tuple(rules)
 
 
@@ -401,17 +443,6 @@ class ActivationState:
     status: str
     reason: Optional[str] = None
 
-    def describe(self) -> dict[str, Any]:
-        return {
-            "module": self.module,
-            "camera_id": self.camera_id,
-            "session_id": self.session_id,
-            "desired_version": self.desired_version,
-            "observed_version": self.observed_version,
-            "status": self.status,
-            "reason": self.reason,
-        }
-
 
 class AlertModuleRegistry:
     """Independent per module x camera configuration and activation state.
@@ -422,7 +453,8 @@ class AlertModuleRegistry:
     backwards. Whatever is currently observed keeps being reported until that boundary.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, allowlisted_factories: Iterable[str] = ALLOWLISTED_FACTORIES) -> None:
+        self._allowlisted_factories: FrozenSet[str] = frozenset(allowlisted_factories)
         self._definitions: dict[str, AlertModuleDefinition] = {}
         self._configs: dict[tuple[str, str], CameraModuleConfig] = {}
         self._states: dict[tuple[str, str], ActivationState] = {}
@@ -430,6 +462,13 @@ class AlertModuleRegistry:
     def register(self, definition: AlertModuleDefinition) -> None:
         if definition.module in self._definitions:
             raise ConfigError(ERROR_DUPLICATE_MODULE, "module is already registered", module=definition.module)
+        if definition.factory not in self._allowlisted_factories:
+            raise ConfigError(
+                ERROR_FACTORY_NOT_ALLOWED,
+                "module factory is not in the registered allowlist",
+                module=definition.module,
+                field="factory",
+            )
         self._definitions[definition.module] = definition
 
     def definition(self, module: str) -> AlertModuleDefinition:
@@ -474,9 +513,7 @@ class AlertModuleRegistry:
 
     def activate(self, config: CameraModuleConfig, *, session_id: str) -> ActivationState:
         self.definition(config.module)
-        _require_identifier(
-            session_id, ERROR_INVALID_SESSION_ID, "session_id", _Place(config.module, config.camera_id)
-        )
+        _require_identifier(session_id, ERROR_INVALID_SESSION_ID, "session_id", _Place(None, config.camera_id))
         key = (config.module, config.camera_id)
         previous = self._states.get(key)
         same_session = previous is not None and previous.session_id == session_id
@@ -514,7 +551,7 @@ class AlertModuleRegistry:
     def reset_session(self, camera_id: str, session_id: str) -> Tuple[str, ...]:
         """Re-bind a camera session, dropping observed state for that camera only."""
         _require_identifier(camera_id, ERROR_INVALID_CAMERA_ID, "camera_id")
-        _require_identifier(session_id, ERROR_INVALID_SESSION_ID, "session_id", _Place("*", camera_id))
+        _require_identifier(session_id, ERROR_INVALID_SESSION_ID, "session_id", _Place(None, camera_id))
         reset: list[str] = []
         for key, state in self._states.items():
             if key[1] != camera_id:
@@ -540,6 +577,7 @@ class AlertModuleRegistry:
         """Operator/doctor report: real per-camera status and the reason a module is disabled."""
         modules = []
         for module in self.modules():
+            definition = self.definition(module)
             cameras = []
             for (name, camera_id), config in sorted(self._configs.items()):
                 if name != module:
@@ -556,6 +594,77 @@ class AlertModuleRegistry:
                     }
                 )
             modules.append(
-                {"module": module, "config_version": self.definition(module).config_version, "cameras": cameras}
+                {
+                    "module": module,
+                    "config_version": definition.config_version,
+                    "factory": definition.factory,
+                    "perception_profile": definition.perception_profile,
+                    "cameras": cameras,
+                }
             )
         return {"schema_version": SCHEMA_VERSION, "modules": modules}
+
+    def active_modules(self, camera_id: str) -> Tuple[str, ...]:
+        return tuple(
+            sorted(
+                module
+                for (module, camera), state in self._states.items()
+                if camera == camera_id and state.status == STATUS_ACTIVE
+            )
+        )
+
+    def activation_for_camera(self, camera_id: str, session_id: str) -> dict[str, Any]:
+        """The single seam a runtime consumes for one camera at one session boundary.
+
+        `analytics_enabled`/`disabled_reason` are what `EdgeRuntime` needs to decide whether
+        to start analytics; `roi_polygon` is the shape `Pipeline(roi_polygon=...)` accepts.
+        """
+        _require_identifier(camera_id, ERROR_INVALID_CAMERA_ID, "camera_id")
+        _require_identifier(session_id, ERROR_INVALID_SESSION_ID, "session_id", _Place(None, camera_id))
+        active: list[dict[str, Any]] = []
+        disabled: list[dict[str, Any]] = []
+        for (module, camera), state in sorted(self._states.items()):
+            if camera != camera_id:
+                continue
+            definition = self.definition(module)
+            if state.status == STATUS_ACTIVE:
+                active.append(
+                    {"module": module, "factory": definition.factory,
+                     "perception_profile": definition.perception_profile}
+                )
+            elif state.status == STATUS_DISABLED:
+                disabled.append({"module": module, "reason": state.reason})
+        roi_polygon: Optional[list[list[float]]] = None
+        for entry in active:
+            config = self._configs.get((str(entry["module"]), camera_id))
+            if config is not None and config.roi_polygon() is not None:
+                roi_polygon = config.roi_polygon()
+                break
+        reasons = [str(entry["module"]) + ": " + str(entry["reason"]) for entry in disabled]
+        return {
+            "camera_id": camera_id,
+            "session_id": session_id,
+            "analytics_enabled": bool(active),
+            "disabled_reason": None if active else ("no module enabled for camera" + (" (" + "; ".join(reasons) + ")" if reasons else "")),
+            "roi_polygon": roi_polygon,
+            "modules": active,
+            "disabled_modules": disabled,
+        }
+
+    def perception_groups(self) -> list[dict[str, Any]]:
+        """Group active modules that may share one decode/inference execution (ADR-0001)."""
+        grouped: dict[tuple[str, str], list[str]] = {}
+        for (module, camera), state in sorted(self._states.items()):
+            if state.status != STATUS_ACTIVE:
+                continue
+            profile = str(self.definition(module).perception_profile)
+            grouped.setdefault((camera, profile), []).append(module)
+        return [
+            {
+                "camera_id": camera,
+                "perception_profile": profile,
+                "modules": sorted(modules),
+                "shared": len(modules) > 1,
+            }
+            for (camera, profile), modules in sorted(grouped.items())
+        ]

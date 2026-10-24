@@ -79,3 +79,32 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
   (`apps/edge/runtime.py`, `live_pipeline.py`, `pipeline.py` không tham chiếu), nên ROI/lịch/ngưỡng/enabled chưa tới
   perception — #57 vẫn phải nối dây. Ngoài ra doctor chỉ `stage()` nên `capabilities.modules` không bao giờ báo
   `enabled`, chỉ `not_activated`/`disabled`.
+
+- 2026-10-24 (review fixes, commit tiếp theo sau `ae66f22`): đã sửa **toàn bộ** findings của code review.
+  Standards:
+  1. `apps/edge/doctor.py` — bỏ `entry.get('cameras') or {}` (falsy non-dict giờ bị reject), thêm
+     `_name_set()` để `required_fields`/`thresholds` chỉ nhận **list/tuple/set of str** (không nhận str/bare
+     number → không còn `TypeError`, không còn silent corruption `"minscore"` → 8 threshold 1 ký tự).
+  2. `domain/alert_module_config.py` — `_parse_roi`/`_parse_schedule`/`_parse_exceptions` giờ **delegate** luật cho
+     value type và chỉ re-raise kèm `field` (thêm `ConfigError.message`), hết duplicated validation.
+  3. `reset_session` không còn sentinel `module=*` (`_Place` cho phép module=None → chỉ in `camera=`).
+  4. Xoá `ActivationState.describe()` (dead API).
+  5. Sửa 2 lỗi mypy pre-existing ở `sqlite_wal_reset_check` (tuple typing) → `mypy domain/... doctor.py runtime.py`
+     sạch hoàn toàn.
+  Spec:
+  6. ADR-0001 allowlisted factory: `AlertModuleDefinition.factory` (bắt buộc, phải là identifier) +
+     `ALLOWLISTED_FACTORIES` (`person_down`/`vehicle_incident`/`danger_zone`); `register()` trả
+     `factory_not_allowlisted` cho factory ngoài allowlist. `perception_profile` (mặc định = factory) +
+     `perception_groups()` để module tương thích **chia sẻ một decode/inference** thay vì hai.
+  7. Consumer thật: `EdgeRuntime(module_registry=..., module_session=...)` dùng seam
+     `activation_for_camera()` — analytics chỉ chạy khi camera có module **active**, reason của module disabled
+     chính là `status()['analytics']['reason']`. `doctor --module-config ... --start` truyền registry vào runtime.
+     ROI được phơi ở seam (`roi_polygon`, đúng shape `Pipeline(roi_polygon=...)`); nối dây vào live/replay lab
+     vẫn thuộc #57, không claim trước.
+  8. Doctor báo capability thật: document có `session` → activate tại boundary và report
+     `enabled`/`disabled` + `effective` switch per camera; không có `session` → `not_activated` (không giả enabled).
+  Evidence: `.venv-oracle/bin/python -m pytest tests/test_alert_module_config.py tests/test_module_config_doctor.py -q`
+  ra **42 passed** (27 domain + 15 doctor/runtime); full suite `.venv-oracle/bin/python -m pytest -q` ra
+  **568 passed, 126 subtests** (526 baseline); `mypy domain/alert_module_config.py apps/edge/doctor.py
+  apps/edge/runtime.py` → `no issues found`. Regression test riêng cho từng defect ocr bắt được
+  (`cameras: []`/`false`, `required_fields: 5`, `thresholds: "minscore"`).

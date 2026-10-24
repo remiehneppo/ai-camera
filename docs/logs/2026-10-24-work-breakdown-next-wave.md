@@ -112,3 +112,23 @@ vẫn mở). Các nhánh #10/#34/#57 được phép đi tiếp trên seam config
 
 - `domain/alert_module_config.py` (mới), `apps/edge/doctor.py`, `tests/test_alert_module_config.py` (mới),
   `tests/test_module_config_doctor.py` (mới), `README.md`, `.scratch/system-build-slices/issues/03-*.md`, log này.
+
+## 9. Vòng sửa sau code review (2026-10-24)
+
+Toàn bộ findings của review 2 trục trên `ae66f22` đã được sửa trong commit kế tiếp:
+
+| Finding | Sửa |
+|---|---|
+| `cameras` falsy non-dict bị bỏ qua (blocking) | `doctor.load_module_registry` reject non-dict `cameras`, kể cả `[]`/`false` |
+| `required_fields`/`thresholds` sai kiểu → `TypeError` hoặc silent corruption (blocking) | `_name_set()` chỉ nhận list/tuple/set of str |
+| `_parse_roi` lặp luật của `RegionOfInterest` (Duplicated Code) | delegate cho value type + re-raise kèm `field` qua `ConfigError.message` |
+| Sentinel `module=*` trong lỗi `session_id` | `_Place.module` thành Optional, chỉ in `camera=` |
+| `ActivationState.describe()` không caller | xoá |
+| 2 lỗi mypy pre-existing `sqlite_wal_reset_check` | tuple typing đúng, mypy sạch cả 3 file |
+| Spec: thiếu allowlisted factory + chia sẻ perception (ADR-0001) | `factory` bắt buộc + `ALLOWLISTED_FACTORIES` + `perception_profile`/`perception_groups()` |
+| Spec: không consumer ngoài doctor | `EdgeRuntime(module_registry=...)` dùng `activation_for_camera()`; `doctor --start` truyền registry |
+| Spec: doctor không bao giờ báo `enabled` | document `session` → activate tại boundary, report `enabled`/`disabled` + `effective` switch |
+
+Bằng chứng: `pytest tests/test_alert_module_config.py tests/test_module_config_doctor.py -q` → **42 passed**;
+full suite **568 passed, 126 subtests**; `mypy` 3 file → `no issues found`. ROI vẫn chỉ phơi ở seam — nối vào
+live/replay lab pipeline thuộc #57, không claim trước.

@@ -19,6 +19,7 @@ from typing import Any
 from apps.edge.evidence import EvidenceLifecycle
 from apps.edge.outbox import EventOutbox
 from apps.edge.recorder import FileRecorder, Segment
+from domain.alert_module_config import AlertModuleRegistry
 
 
 class _Sender:
@@ -154,7 +155,9 @@ class EdgeRuntime:
                  ring_seconds: float = 600, queue_capacity: int = 8, observation_capacity: int = 64,
                  stop_timeout_seconds: float = 3, drain_timeout_seconds: float | None = None,
                  io_timeout_seconds: float = 30,
-                 environment: str = 'lab', expected_artifact: dict[str, Any] | None = None) -> None:
+                 environment: str = 'lab', expected_artifact: dict[str, Any] | None = None,
+                 module_registry: AlertModuleRegistry | None = None,
+                 module_session: str | None = None) -> None:
         for name, value in (('sample_fps', sample_fps), ('segment_seconds', segment_seconds),
                             ('ring_seconds', ring_seconds), ('stop_timeout_seconds', stop_timeout_seconds),
                             ('io_timeout_seconds', io_timeout_seconds)):
@@ -172,6 +175,12 @@ class EdgeRuntime:
             raise ValueError('EdgeRuntime supports fast file replay only; realtime recorder continuity is unverified')
         if not camera_id or not session_id:
             raise ValueError('invalid replay identity')
+        if module_registry is not None:
+            # The module registry is the source of truth when it is supplied: analytics runs
+            # only for a camera that has an activated, enabled module.
+            switch = module_registry.activation_for_camera(camera_id, module_session or session_id)
+            analytics_enabled = switch['analytics_enabled']
+            disabled_reason = switch['disabled_reason']
         if type(analytics_enabled) is not bool or (not analytics_enabled and not disabled_reason):
             raise ValueError('disabled analytics requires explicit reason')
         source = Path(source).resolve()
