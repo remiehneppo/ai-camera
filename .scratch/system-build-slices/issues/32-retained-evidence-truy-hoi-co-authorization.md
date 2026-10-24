@@ -1,7 +1,7 @@
 # 32: Retained evidence truy hồi có authorization
 
 Status: ready-for-agent
-Execution: not-started
+Execution: done (software lab; device channel + server settle tested; real camera/SLA/window khác chưa nghiệm thu)
 Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
 
 **What to build:** Người có quyền yêu cầu clip edge/server qua outbound command và thấy pending/offline/expired/completed.
@@ -10,8 +10,8 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 ## Acceptance criteria
 
-- [ ] Long-poll ID/auth/target/expiry/replay guard, retry idempotent; không remote shell/arbitrary executable.
-- [ ] Cleanup/download/retrieval race được kiểm; metadata ACK không release clip, retention/delete scope rõ.
+- [x] Long-poll ID/auth/target/expiry/replay guard, retry idempotent; không remote shell/arbitrary executable.
+- [x] Cleanup/download/retrieval race được kiểm; metadata ACK không release clip, retention/delete scope rõ.
 
 ## Traceability
 
@@ -26,3 +26,28 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 ## Comments
 
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
+
+- 2026-10-24: Implement software lab. Ba lát cắt, cùng một contract thuần:
+  `domain/retrieval_contract.py` — command immutable (`command_id/device/issued_by/issued_at/expires_at`), allowlist
+  `target ∈ {edge, server}`, `action = retain_clip`, TTL ≤ 3600s, `retention_scope ∈ {clip, metadata}`; wire payload
+  là **closed field set** và từ chối mọi field dạng `argv/shell/script/url/exec/stdin/binary` ⇒ không thể thành remote
+  shell. State machine: `claim` idempotent trong lease (cùng lease_id, không tăng attempts) và replay-safe (command đã
+  completed trả nguyên trạng, không cấp lại); claim sau `expires_at` ⇒ `expired`; ack muộn sau expiry **không** được
+  complete. `acknowledge` đóng field set theo từng kind; `metadata` chỉ ghi receipt, **status vẫn mở, clip vẫn giữ**;
+  `artifact` complete + idempotent cùng sha256/size, khác bytes ⇒ `artifact_conflict`; `failure` chỉ nhận reason
+  allowlist. `server` target do server tự settle từ availability thật.
+  Server: `EventStore.issue_retrieval/claim_retrieval/acknowledge_retrieval/settle_server_retrieval/retrieval_view`
+  (CAS theo `status`+`lease_id`, index poll; device chưa poll ⇒ `offline`, đã poll ⇒ `pending`). Routes:
+  `POST /v1/evidence/{d}/{e}/{r}/retrieval` (reviewer-only + site scope #33), `GET /v1/retrieval/{command_id}`
+  (viewer + site scope, settle server-target), `GET /v1/devices/{d}/commands?wait=` (device token, lifecycle check,
+  long-poll bounded 5s, chỉ deliver `target=edge`), `POST /v1/devices/{d}/commands/{c}/ack` (409 cho stale
+  lease/terminal/conflict, 422 cho input sai).
+  Edge: `apps/edge/retrieval.py` — `RetrievalTransport` (HTTPS/loopback, device bearer), `RetrievalWorker`
+  (validate payload → ack `metadata` → execute → ack `artifact`/`failure`; command completed không chạy lại),
+  `RecorderClipRetainer` (idempotent `finalize_pin`, thiếu/released pin ⇒ `evidence_unavailable`).
+  Evidence: `.venv-oracle/bin/python -m pytest tests/test_retrieval_contract.py tests/test_retrieval_worker.py
+  tests/test_retrieval_api.py -q` ⇒ **53 passed**; full suite ⇒ **622 passed, 126 subtests** (baseline 568).
+  `mypy domain/retrieval_contract.py apps/edge/retrieval.py apps/server/store.py apps/server/main.py` ⇒ chỉ còn 2 lỗi
+  pre-existing (`store.decode_cursor` line 114, `FileResponse.content_disposition_type` line 691), ngoài scope.
+  Còn mở (không claim): SLA/latency trên LAN, long-poll 5s là lab bound chưa sign-off, worker loop/daemon chưa nối
+  vào runtime process, và chưa có UI hiển thị pending/offline/expired/completed (thuộc #44/#45).

@@ -1,6 +1,6 @@
 # AI Camera lab slice
 
-Implemented software-lab slices: synthetic event/dashboard (#01), lab facts/protocol (#02), versioned review with audit trail and re-review triggers (#04), retry/revision delivery (#05), file recorder/replay (#06), durable pinned evidence (#07), server evidence upload/playback (#08), process crash recovery (#09), pinned ONNX detector oracle (#11), Python ByteTracker with time/session semantics (#13), end-to-end perception pipeline baseline (#14), live runner (#15 partial), startup/shutdown (#16), truthful health monitor with operational fault surfacing (#17), storage quota protection (#18), dataset feedback lineage (#20), ODD image quality assessment and freeze detection (#21 partial), RTMPose-Tiny pose estimation (#22), track gap and clock jump handling (#23 partial), pose scheduling and degradation (#24), person fall detection (#25), persistent lying (#26), on-vehicle review priority and danger overrides (#27), negative audit sampling and Horvitz-Thompson quality regression G2 (#28), device lifecycle and site access enforcement (#33), and pose outcomes flow into person-down incidents (#53); plus independent module x camera configuration with fail-fast doctor reporting (#03 partial). Full Python test suite (568 tests) passes across edge, health, quota, pose, review API, quality evaluation, device lifecycle, and contracts. Native C++ acceleration (#10/#12), camera hardware RTSP field validation, and production target deployment acceptance (G3–G5) remain open as tracked in the [tracker](.scratch/system-build-slices/PRD.md).
+Implemented software-lab slices: synthetic event/dashboard (#01), lab facts/protocol (#02), versioned review with audit trail and re-review triggers (#04), retry/revision delivery (#05), file recorder/replay (#06), durable pinned evidence (#07), server evidence upload/playback (#08), process crash recovery (#09), pinned ONNX detector oracle (#11), Python ByteTracker with time/session semantics (#13), end-to-end perception pipeline baseline (#14), live runner (#15 partial), startup/shutdown (#16), truthful health monitor with operational fault surfacing (#17), storage quota protection (#18), dataset feedback lineage (#20), ODD image quality assessment and freeze detection (#21 partial), RTMPose-Tiny pose estimation (#22), track gap and clock jump handling (#23 partial), pose scheduling and degradation (#24), person fall detection (#25), persistent lying (#26), on-vehicle review priority and danger overrides (#27), negative audit sampling and Horvitz-Thompson quality regression G2 (#28), device lifecycle and site access enforcement (#33), pose outcomes flow into person-down incidents (#53); plus independent module x camera configuration with fail-fast doctor reporting (#03 partial) and retained-evidence retrieval commands with authorization (#32). Full Python test suite (622 tests) passes across edge, health, quota, pose, review API, quality evaluation, device lifecycle, and contracts. Native C++ acceleration (#10/#12), camera hardware RTSP field validation, and production target deployment acceptance (G3–G5) remain open as tracked in the [tracker](.scratch/system-build-slices/PRD.md).
 
 ## Run the lab stack
 
@@ -216,12 +216,49 @@ activated enabled module, and a disabled module's reason is the reason reported 
 `Pipeline(roi_polygon=...)` accepts; wiring it into the live/replay lab pipeline belongs to
 #57.
 
+## Retained-evidence retrieval (#32)
+
+A reviewer can ask one device to retain a clip; the device receives the request on an
+outbound command channel and the requester sees `pending`/`offline`/`expired`/
+`completed`/`failed`. The command payload is a closed field set — any `argv`, `shell`,
+`script`, `url` or `exec` shaped field is refused, so the channel is never a remote shell.
+
+```sh
+# reviewer asks the edge to retain the clip for one evidence request
+curl -X POST -H "Authorization: Bearer $REVIEWER_TOKEN" -H 'Content-Type: application/json' \
+     -d '{"target": "edge", "ttl_seconds": 300}' \
+     "$SERVER/v1/evidence/lab-edge-01/$EVENT/req-001/retrieval"
+
+# the device long-polls its own command channel (device bearer token)
+curl -H "Authorization: Bearer $DEVICE_TOKEN" "$SERVER/v1/devices/lab-edge-01/commands?wait=2"
+
+# the requester watches the outcome
+curl -H "Authorization: Bearer $REVIEWER_TOKEN" "$SERVER/v1/retrieval/$COMMAND_ID"
+```
+
+Semantics enforced by `domain/retrieval_contract.py` and covered by tests:
+
+- `claim` is idempotent while the lease is alive (same lease, no extra attempt) and a
+  completed command is never re-issued, so a retried poll cannot duplicate work.
+- `metadata` acknowledgement records receipt only: the command stays open and the clip is
+  **not** released, deleted or expired. Only an `artifact` acknowledgement (sha256 + size)
+  completes it, and repeating the same bytes is idempotent while different bytes conflict.
+- A command claimed or acknowledged after `expires_at` cannot complete; a target that the
+  server fulfils itself (`target: "server"`) settles from live availability, so retention
+  cleanup that removed the clip ends as `failed: evidence_unavailable` and the manifest
+  receipt survives.
+
+`apps/edge/retrieval.py` is the device side: `RetrievalWorker` validates each payload,
+records the metadata acknowledgement, runs an injected executor (`RecorderClipRetainer` for
+an edge clip, idempotent per request id) and closes the command with the artifact or an
+allowlisted failure.
+
 ## Checks
 
 Run the entire test suite with pytest using the oracle lab environment:
 ```sh
 .venv-oracle/bin/python -m pytest -q
 ```
-All **568 tests** (126 subtests) across edge perception, tracking, fall incident engine, RTMPose estimation, ODD quality assessment, health monitoring, storage quota, server review API, negative audit G2 evaluation, device lifecycle, and event contracts pass.
+All **622 tests** (126 subtests) across edge perception, tracking, fall incident engine, RTMPose estimation, ODD quality assessment, health monitoring, storage quota, server review API, negative audit G2 evaluation, device lifecycle, and event contracts pass.
 
 Run the local contract and SQLite tests with `python -m unittest discover -s tests`. MongoDB transaction, HTTP auth, and browser checks require the Compose lab to be running; they are separate from this unit suite.

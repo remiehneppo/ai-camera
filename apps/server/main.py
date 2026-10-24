@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
 import os
 from pathlib import Path
+import time
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -23,6 +25,13 @@ from domain.device_contract import (
     ReviewerAccessRecord,
     check_device_access,
     check_reviewer_site_access,
+)
+from domain.retrieval_contract import (
+    ERROR_ARTIFACT_CONFLICT,
+    ERROR_COMMAND_TERMINAL,
+    ERROR_STALE_LEASE,
+    RetrievalError,
+    wire_payload,
 )
 from domain.review_contract import ReviewValidationError, SEVERITY_VALUES, validate_review_request
 from apps.server.config import ServerConfig, load_server_config
@@ -204,6 +213,23 @@ def _is_authorized_viewer(token: str, dashboard_token: str, reviewer_tokens: dic
     if _reviewer_for_token(token, reviewer_tokens) is not None:
         return True
     return False
+
+
+MAX_COMMAND_WAIT_SECONDS = 5.0
+
+#: Retrieval failures that mean "your lease is no longer the live one", not "bad input".
+RETRIEVAL_CONFLICT_CODES = frozenset({ERROR_STALE_LEASE, ERROR_COMMAND_TERMINAL, ERROR_ARTIFACT_CONFLICT})
+
+
+def _reviewer_site_denied(actor: str | None, device_id: str, config: ServerConfig, store: EventStore) -> bool:
+    """Reviewer site scoping for a device (ticket #33), shared by every reviewer-facing route."""
+    allowed = config.reviewer_sites.get(actor or "", ())
+    if not allowed:
+        return False
+    record = store.get_device(device_id)
+    site = record.site_id if record else config.device_sites.get(device_id)
+    access = ReviewerAccessRecord(reviewer_id=actor or "", allowed_sites=allowed)
+    return not check_reviewer_site_access(access, site)
 
 
 def _viewer_token(request: Request) -> str:
@@ -664,6 +690,147 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
             headers={"Accept-Ranges": "bytes"},
             content_disposition_type=None,
         )
+
+    # ---- Retained-evidence retrieval commands (Ticket #32) ----------------
+
+    @app.post("/v1/evidence/{device_id}/{event_id}/{request_id}/retrieval")
+    async def request_retrieval(
+        device_id: str, event_id: str, request_id: str, request: Request
+    ) -> dict[str, Any]:
+        actor = _reviewer_for_token(_bearer(request), reviewer_tokens)
+        if actor is None:
+            raise HTTPException(
+                status_code=401, detail="reviewer credentials required", headers={"WWW-Authenticate": "Bearer"}
+            )
+        try:
+            for value in (device_id, event_id, request_id):
+                validate_storage_id(value)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="invalid evidence identity")
+        if _reviewer_site_denied(actor, device_id, config, store):
+            raise HTTPException(status_code=403, detail="cross-site evidence access denied")
+
+        raw = await request.body()
+        try:
+            body = json.loads(raw) if raw else {}
+        except Exception:
+            raise HTTPException(status_code=400, detail="malformed JSON")
+        if not isinstance(body, dict) or set(body) - {"target", "ttl_seconds", "retention_scope"}:
+            raise HTTPException(status_code=422, detail="retrieval request carries an unknown field")
+        target = body.get("target", "edge")
+        if target not in ("edge", "server"):
+            raise HTTPException(status_code=422, detail="target must be edge or server")
+        ttl = body.get("ttl_seconds", 300.0)
+        if type(ttl) not in (int, float) or not 0 < float(ttl) <= 3600:
+            raise HTTPException(status_code=422, detail="ttl_seconds must be within (0, 3600]")
+        scope = body.get("retention_scope", "clip")
+        if scope not in ("clip", "metadata"):
+            raise HTTPException(status_code=422, detail="retention_scope must be clip or metadata")
+        try:
+            doc = await run_in_threadpool(
+                store.issue_retrieval,
+                device_id,
+                event_id,
+                request_id,
+                target=target,
+                issued_by=actor,
+                ttl_seconds=float(ttl),
+                retention_scope=scope,
+            )
+        except ReviewNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except RetrievalError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        except PyMongoError:
+            raise HTTPException(status_code=503, detail="retrieval command store unavailable")
+        return await run_in_threadpool(store.retrieval_view, doc["command_id"])
+
+    @app.get("/v1/retrieval/{command_id}")
+    async def get_retrieval(command_id: str, request: Request) -> dict[str, Any]:
+        token = _viewer_token(request)
+        if not _is_authorized_viewer(token, dashboard_token, reviewer_tokens):
+            raise HTTPException(status_code=401, detail="invalid credentials", headers={"WWW-Authenticate": "Bearer"})
+        actor = _reviewer_for_token(token, reviewer_tokens)
+        try:
+            doc = await run_in_threadpool(store.get_retrieval, command_id)
+        except PyMongoError:
+            raise HTTPException(status_code=503, detail="retrieval command store unavailable")
+        if doc is None:
+            raise HTTPException(status_code=404, detail="retrieval command not found")
+        if _reviewer_site_denied(actor, doc["device_id"], config, store):
+            raise HTTPException(status_code=403, detail="cross-site evidence access denied")
+        try:
+            if doc["target"] == "server":
+                await run_in_threadpool(store.settle_server_retrieval, command_id)
+            return await run_in_threadpool(store.retrieval_view, command_id)
+        except ReviewNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except RetrievalError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        except ReviewConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+
+    @app.get("/v1/devices/{device_id}/commands")
+    async def poll_device_commands(device_id: str, request: Request) -> dict[str, Any]:
+        authenticated = _device_for_token(_bearer(request), device_tokens)
+        if authenticated != device_id:
+            raise HTTPException(status_code=403, detail="device_id does not match authenticated device")
+        device_rec = await run_in_threadpool(store.get_device, authenticated)
+        if device_rec is not None:
+            allowed, reason = check_device_access(device_rec)
+            if not allowed:
+                raise HTTPException(status_code=403, detail=f"device access denied: {reason}")
+        try:
+            wait = float(request.query_params.get("wait", "0"))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="wait must be a number of seconds")
+        if not 0 <= wait <= MAX_COMMAND_WAIT_SECONDS:
+            raise HTTPException(status_code=422, detail=f"wait must be within [0, {MAX_COMMAND_WAIT_SECONDS}]")
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                doc = await run_in_threadpool(store.claim_retrieval, device_id)
+            except PyMongoError:
+                raise HTTPException(status_code=503, detail="retrieval command store unavailable")
+            if doc is not None:
+                return {"commands": [wire_payload(store.retrieval_state(doc), now=time.time())]}
+            if time.monotonic() >= deadline:
+                return {"commands": []}
+            await asyncio.sleep(0.05)
+
+    @app.post("/v1/devices/{device_id}/commands/{command_id}/ack")
+    async def acknowledge_command(device_id: str, command_id: str, request: Request) -> dict[str, Any]:
+        authenticated = _device_for_token(_bearer(request), device_tokens)
+        if authenticated != device_id:
+            raise HTTPException(status_code=403, detail="device_id does not match authenticated device")
+        device_rec = await run_in_threadpool(store.get_device, authenticated)
+        if device_rec is not None:
+            allowed, reason = check_device_access(device_rec)
+            if not allowed:
+                raise HTTPException(status_code=403, detail=f"device access denied: {reason}")
+        raw = await request.body()
+        try:
+            body = json.loads(raw) if raw else {}
+        except Exception:
+            raise HTTPException(status_code=400, detail="malformed JSON")
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=422, detail="acknowledgement must be an object")
+        lease_id = body.get("lease_id")
+        ack = {key: value for key, value in body.items() if key != "lease_id"}
+        try:
+            await run_in_threadpool(
+                store.acknowledge_retrieval, command_id, device_id, lease_id=lease_id, ack=ack
+            )
+        except ReviewNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        except RetrievalError as exc:
+            status_code = 409 if exc.code in RETRIEVAL_CONFLICT_CODES else 422
+            raise HTTPException(status_code=status_code, detail=str(exc))
+        except ReviewConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
+        except PyMongoError:
+            raise HTTPException(status_code=503, detail="retrieval command store unavailable")
+        return await run_in_threadpool(store.retrieval_view, command_id)
 
     # ---- Device Lifecycle endpoints (Ticket #33) ---------------------------
 

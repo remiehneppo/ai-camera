@@ -31,6 +31,21 @@ from domain.device_contract import (
     revoke_device,
     transition_device,
 )
+from domain.retrieval_contract import (
+    DEFAULT_LEASE_SECONDS,
+    DEFAULT_OFFLINE_AFTER_SECONDS,
+    STATUS_CLAIMED,
+    STATUS_EXPIRED,
+    STATUS_PENDING,
+    EvidenceRef,
+    RetrievalCommand,
+    RetrievalState,
+    acknowledge,
+    claim,
+    issue_command,
+    requester_status,
+    settle_target,
+)
 from domain.review_contract import (
     LOW_PRIORITY_TAXONOMIES,
     SEVERITY_VALUES,
@@ -115,6 +130,8 @@ class EventStore:
         self.review_audit = self.database.get_collection("event_review_audit")
         self.evidence_manifests = self.database.get_collection("evidence_manifests")
         self.devices = self.database.get_collection("devices")
+        self.retrieval_commands = self.database.get_collection("retrieval_commands")
+        self.device_activity = self.database.get_collection("device_activity")
 
     def ensure_ready(self) -> None:
         for attempt in range(3):
@@ -137,6 +154,12 @@ class EventStore:
                 )
                 self.devices.create_index(
                     [("device_id", 1)], unique=True, name="device_identity"
+                )
+                self.retrieval_commands.create_index(
+                    [("command_id", 1)], unique=True, name="retrieval_command_identity"
+                )
+                self.retrieval_commands.create_index(
+                    [("device_id", 1), ("status", 1), ("issued_at", 1)], name="retrieval_command_poll"
                 )
                 with self.client.start_session() as session:
                     def probe(active: Any) -> None:
@@ -680,6 +703,254 @@ class EventStore:
         updated = DeviceRecord.from_dict(updated_dict)
         self.devices.replace_one({"device_id": device_id}, updated.to_dict(), upsert=True)
         return updated
+
+    # ---- Retained-evidence retrieval commands (Ticket #32) -----------------
+
+    @staticmethod
+    def retrieval_state(doc: dict[str, Any]) -> RetrievalState:
+        """Rebuild the pure contract state from a stored command document."""
+        command = RetrievalCommand(
+            command_id=doc["command_id"],
+            device_id=doc["device_id"],
+            target=doc["target"],
+            action=doc["action"],
+            evidence=EvidenceRef(**doc["evidence"]),
+            issued_by=doc["issued_by"],
+            issued_at=doc["issued_at"],
+            expires_at=doc["expires_at"],
+            retention_scope=doc["retention_scope"],
+        )
+        return RetrievalState(
+            command=command,
+            status=doc["status"],
+            lease_id=doc.get("lease_id"),
+            claimed_at=doc.get("claimed_at"),
+            attempts=doc.get("attempts", 0),
+            metadata_acknowledged=doc.get("metadata_acknowledged", False),
+            artifact=doc.get("artifact"),
+            reason=doc.get("reason"),
+        )
+
+    @staticmethod
+    def _retrieval_doc(state: RetrievalState, base: dict[str, Any] | None = None) -> dict[str, Any]:
+        doc = dict(base or {})
+        doc.update(
+            {
+                "command_id": state.command.command_id,
+                "device_id": state.command.device_id,
+                "target": state.command.target,
+                "action": state.command.action,
+                "evidence": state.command.evidence.as_dict(),
+                "issued_by": state.command.issued_by,
+                "issued_at": state.command.issued_at,
+                "expires_at": state.command.expires_at,
+                "retention_scope": state.command.retention_scope,
+                "status": state.status,
+                "lease_id": state.lease_id,
+                "claimed_at": state.claimed_at,
+                "attempts": state.attempts,
+                "metadata_acknowledged": state.metadata_acknowledged,
+                "artifact": dict(state.artifact) if state.artifact is not None else None,
+                "reason": state.reason,
+            }
+        )
+        return doc
+
+    def touch_device_activity(self, device_id: str, *, now: float | None = None) -> float:
+        now = time.time() if now is None else float(now)
+        self.device_activity.update_one(
+            {"_id": device_id},
+            {"$set": {"last_seen": now}, "$setOnInsert": {"device_id": device_id}},
+            upsert=True,
+        )
+        return now
+
+    def device_last_seen(self, device_id: str) -> float | None:
+        doc = self.device_activity.find_one({"_id": device_id}, {"last_seen": 1})
+        if not doc or "last_seen" not in doc:
+            return None
+        return float(doc["last_seen"])
+
+    def issue_retrieval(
+        self,
+        device_id: str,
+        event_id: str,
+        request_id: str,
+        *,
+        target: str,
+        issued_by: str,
+        ttl_seconds: float = 300.0,
+        retention_scope: str = "clip",
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        """Issue one retrieval command for retained evidence an owner already asked for.
+
+        Re-issuing the same target for the same evidence while it is still open returns the
+        live command instead of piling up duplicates.
+        """
+        now = time.time() if now is None else float(now)
+        if self.get_evidence(device_id, event_id, request_id) is None:
+            raise ReviewNotFound("retained evidence not found for device/event/request")
+        existing = self.retrieval_commands.find_one(
+            {
+                "device_id": device_id,
+                "target": target,
+                "evidence.event_id": event_id,
+                "evidence.request_id": request_id,
+                "status": {"$in": [STATUS_PENDING, STATUS_CLAIMED]},
+            },
+            {"_id": 0},
+        )
+        if existing is not None:
+            return existing
+        state = issue_command(
+            command_id="cmd-" + uuid4().hex,
+            device_id=device_id,
+            target=target,
+            evidence=EvidenceRef(device_id=device_id, event_id=event_id, request_id=request_id),
+            issued_by=issued_by,
+            issued_at=now,
+            ttl_seconds=ttl_seconds,
+            retention_scope=retention_scope,
+        )
+        doc = self._retrieval_doc(state, {"created_at": now})
+        self.retrieval_commands.replace_one({"command_id": doc["command_id"]}, doc, upsert=True)
+        doc.pop("_id", None)
+        return doc
+
+    def claim_retrieval(
+        self, device_id: str, *, now: float | None = None, lease_seconds: float = DEFAULT_LEASE_SECONDS
+    ) -> dict[str, Any] | None:
+        """Atomically lease the oldest open command for this device; None when there is none.
+
+        The compare-and-set keeps two concurrent polls from both creating a fresh attempt:
+        the loser re-reads and returns the same lease.
+        """
+        now = self.touch_device_activity(device_id, now=now)
+        for _ in range(5):
+            doc = self.retrieval_commands.find_one(
+                {
+                    "device_id": device_id,
+                    # A device only executes edge targets; a server target is settled by the server.
+                    "target": "edge",
+                    "status": {"$in": [STATUS_PENDING, STATUS_CLAIMED]},
+                },
+                sort=[("issued_at", 1)],
+            )
+            if doc is None:
+                return None
+            claimed = claim(self.retrieval_state(doc), now=now, lease_seconds=lease_seconds)
+            new_doc = self._retrieval_doc(claimed, doc)
+            result = self.retrieval_commands.replace_one(
+                {"_id": doc["_id"], "status": doc["status"], "lease_id": doc.get("lease_id")}, new_doc
+            )
+            if result.matched_count != 1:
+                continue
+            if claimed.status == STATUS_EXPIRED:
+                continue
+            new_doc.pop("_id", None)
+            return new_doc
+        return None
+
+    def acknowledge_retrieval(
+        self,
+        command_id: str,
+        device_id: str,
+        *,
+        lease_id: str | None,
+        ack: dict[str, Any],
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        now = self.touch_device_activity(device_id, now=now)
+        doc = self.retrieval_commands.find_one({"command_id": command_id})
+        if doc is None or doc["device_id"] != device_id:
+            raise ReviewNotFound("retrieval command not found for this device")
+        state = acknowledge(self.retrieval_state(doc), now=now, lease_id=lease_id, ack=ack)
+        new_doc = self._retrieval_doc(state, doc)
+        if new_doc == doc:
+            doc.pop("_id", None)
+            return doc
+        result = self.retrieval_commands.replace_one(
+            {"_id": doc["_id"], "status": doc["status"], "lease_id": doc.get("lease_id")}, new_doc
+        )
+        if result.matched_count != 1:
+            raise ReviewConflict("retrieval command changed concurrently; retry with the live lease")
+        new_doc.pop("_id", None)
+        return new_doc
+
+    def get_retrieval(self, command_id: str) -> dict[str, Any] | None:
+        return self.retrieval_commands.find_one({"command_id": command_id}, {"_id": 0})
+
+    def settle_server_retrieval(self, command_id: str, *, now: float | None = None) -> dict[str, Any]:
+        """Close a command whose target is the server itself by probing stored availability.
+
+        The probe runs against the live file, so retention cleanup that removed the artifact
+        after the request ends as `failed: evidence_unavailable` rather than a false completion.
+        Recording the outcome never releases the clip.
+        """
+        now = time.time() if now is None else float(now)
+        doc = self.retrieval_commands.find_one({"command_id": command_id})
+        if doc is None:
+            raise ReviewNotFound("retrieval command not found")
+        state = self.retrieval_state(doc)
+        if state.terminal or state.command.target != "server":
+            doc.pop("_id", None)
+            return doc
+        evidence = state.command.evidence
+        record = self.get_evidence(evidence.device_id, evidence.event_id, evidence.request_id, verify_file=True)
+        manifest = dict((record or {}).get("manifest") or {})
+        available = (
+            record is not None
+            and manifest.get("file_status") not in {"missing", "corrupt"}
+            and manifest.get("completeness") not in {"missing", "corrupt"}
+            and isinstance(manifest.get("sha256"), str)
+            and isinstance(manifest.get("size_bytes"), int)
+        )
+        artifact = (
+            {"sha256": manifest["sha256"], "size_bytes": manifest["size_bytes"]}
+            if available
+            else None
+        )
+        settled = settle_target(state, now=now, available=available, artifact=artifact)
+        new_doc = self._retrieval_doc(settled, doc)
+        result = self.retrieval_commands.replace_one(
+            {"_id": doc["_id"], "status": doc["status"], "lease_id": doc.get("lease_id")}, new_doc
+        )
+        if result.matched_count != 1:
+            # Another reader settled it first; the outcome is already durable.
+            current = self.retrieval_commands.find_one({"command_id": command_id}, {"_id": 0})
+            return current or new_doc
+        new_doc.pop("_id", None)
+        return new_doc
+
+    def retrieval_view(
+        self, command_id: str, *, now: float | None = None, offline_after: float = DEFAULT_OFFLINE_AFTER_SECONDS
+    ) -> dict[str, Any]:
+        """What the requesting reviewer sees: pending/offline/expired/completed/failed."""
+        now = time.time() if now is None else float(now)
+        doc = self.get_retrieval(command_id)
+        if doc is None:
+            raise ReviewNotFound("retrieval command not found")
+        state = self.retrieval_state(doc)
+        # A server target is fulfilled by the server, so device liveness is irrelevant to its status.
+        last_seen = self.device_last_seen(state.command.device_id) if state.command.target == "edge" else now
+        status = requester_status(state, now=now, device_last_seen=last_seen, offline_after=offline_after)
+        return {
+            "command_id": state.command.command_id,
+            "device_id": state.command.device_id,
+            "status": status,
+            "target": state.command.target,
+            "action": state.command.action,
+            "evidence": state.command.evidence.as_dict(),
+            "issued_by": state.command.issued_by,
+            "issued_at": state.command.issued_at,
+            "expires_at": state.command.expires_at,
+            "retention_scope": state.command.retention_scope,
+            "attempts": state.attempts,
+            "metadata_acknowledged": state.metadata_acknowledged,
+            "artifact": dict(state.artifact) if state.artifact is not None else None,
+            "reason": state.reason,
+        }
 
     def close(self) -> None:
         self.client.close()

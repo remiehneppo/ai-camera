@@ -19,7 +19,7 @@ from apps.edge.recorder import FileRecorder
 logger = logging.getLogger(__name__)
 
 
-def _validate_server_url(server_url: str) -> str:
+def validate_server_url(server_url: str) -> str:
     parsed = urlparse(server_url)
     local_http = parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
     if parsed.scheme != "https" and not local_http:
@@ -79,7 +79,7 @@ class EdgeUploader:
     ) -> None:
         self.outbox = outbox if isinstance(outbox, EventOutbox) else EventOutbox(outbox)
         self.recorder = recorder if isinstance(recorder, FileRecorder) else FileRecorder(recorder)
-        self.server_url = _validate_server_url(server_url)
+        self.server_url = validate_server_url(server_url)
         if not device_token or not isinstance(device_token, str):
             raise ValueError("device_token must be a non-empty string")
         self.device_token = device_token
