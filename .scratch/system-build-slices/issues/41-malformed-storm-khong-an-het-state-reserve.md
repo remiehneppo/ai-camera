@@ -41,7 +41,7 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
   `GET /healthz` thêm `status: degraded|ok` + summary `ingest_guard`; `GET /v1/ingest/guard` (dashboard/reviewer)
   trả snapshot đầy đủ cho operator.
   Evidence: `.venv-oracle/bin/python -m pytest tests/test_storm_guard.py tests/test_storm_api.py -q` ⇒ **17 passed**
-  (9 domain + 8 HTTP); full suite ⇒ **639 passed, 126 subtests** (baseline 622). `mypy` các file liên quan chỉ còn
+  (11 domain + 8 HTTP); full suite ⇒ **641 passed, 126 subtests** (baseline 622). `mypy` các file liên quan chỉ còn
   2 lỗi pre-existing.
   Còn mở: **counter/log phía edge** (`apps/edge/health.py`) cho payload bị từ chối tại edge; chưa inject lỗi
   ghi media (disk full) nên bullet acceptance thứ 2 giữ unchecked; 24h/soak và rate-limit phía proxy chưa đo.

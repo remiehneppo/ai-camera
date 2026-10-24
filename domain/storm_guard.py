@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import math
 import time
+from threading import RLock
 from dataclasses import dataclass, field
 from typing import Any, Callable, Final, FrozenSet, Mapping, Optional
 
@@ -111,6 +112,9 @@ class StormGuard:
 
     policy: StormGuardPolicy = field(default_factory=StormGuardPolicy)
     _now: Callable[[], float] = time.time
+    # FastAPI serves sync endpoints from a worker thread while the event loop records
+    # ingest outcomes, so the window is shared mutable state across threads.
+    _lock: RLock = field(default_factory=RLock, init=False, repr=False)
     _window_started_at: float = field(default=0.0, init=False)
     _counts: dict[str, int] = field(default_factory=dict, init=False)
     _samples: list[dict[str, Any]] = field(default_factory=list, init=False)
@@ -136,18 +140,20 @@ class StormGuard:
 
     def spent(self, *, now: Optional[float] = None) -> int:
         """How much of the malformed budget this window has consumed."""
-        now = self._clock(now)
-        self._roll(now)
-        return sum(self._counts.get(outcome, 0) for outcome in BUDGETED_OUTCOMES)
+        with self._lock:
+            now = self._clock(now)
+            self._roll(now)
+            return sum(self._counts.get(outcome, 0) for outcome in BUDGETED_OUTCOMES)
 
     def admit(self, *, now: Optional[float] = None) -> bool:
         """False once the malformed budget is spent: the caller answers 429 and persists nothing."""
         return self.spent(now=now) < self.policy.malformed_budget
 
     def retry_after_seconds(self, *, now: Optional[float] = None) -> int:
-        now = self._clock(now)
-        remaining = self.policy.window_seconds - (now - self._window_started_at)
-        return max(1, int(math.ceil(remaining)))
+        with self._lock:
+            now = self._clock(now)
+            remaining = self.policy.window_seconds - (now - self._window_started_at)
+            return max(1, int(math.ceil(remaining)))
 
     # -- recording -------------------------------------------------------
 
@@ -162,6 +168,18 @@ class StormGuard:
     ) -> None:
         if outcome not in OUTCOMES:
             raise ValueError("unknown ingest outcome")
+        with self._lock:
+            self._record_locked(outcome, device_id=device_id, detail=detail, size_bytes=size_bytes, now=now)
+
+    def _record_locked(
+        self,
+        outcome: str,
+        *,
+        device_id: str,
+        detail: Optional[Mapping[str, Any]],
+        size_bytes: Optional[int],
+        now: Optional[float],
+    ) -> None:
         now = self._clock(now)
         self._roll(now)
         self._counts[outcome] = self._counts.get(outcome, 0) + 1
@@ -183,6 +201,10 @@ class StormGuard:
     # -- reporting -------------------------------------------------------
 
     def snapshot(self, *, now: Optional[float] = None) -> dict[str, Any]:
+        with self._lock:
+            return self._snapshot_locked(now=now)
+
+    def _snapshot_locked(self, *, now: Optional[float]) -> dict[str, Any]:
         now = self._clock(now)
         self._roll(now)
         budgeted = sum(self._counts.get(outcome, 0) for outcome in BUDGETED_OUTCOMES)
@@ -199,7 +221,8 @@ class StormGuard:
             "degraded": degraded,
             "truncated": self._dropped_samples > 0,
             "dropped_samples": self._dropped_samples,
-            "forensics": [dict(sample) for sample in self._samples],
+            # Deep enough that a caller cannot mutate the guard's own window through a report.
+            "forensics": [{**sample, "detail": dict(sample["detail"])} for sample in self._samples],
             "retry_after_seconds": self.retry_after_seconds(now=now) if budgeted >= self.policy.malformed_budget else 0,
         }
 

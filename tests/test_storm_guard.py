@@ -117,6 +117,32 @@ class ForensicTests(unittest.TestCase):
         self.assertEqual(sample["detail"], {"b": "2", "c": "3", "d": "4"})
         self.assertEqual(sample["size_bytes"], 1234)
 
+    def test_snapshot_cannot_be_used_to_mutate_the_guard_window(self):
+        g, clock = guard(forensic_samples=2)
+        g.record(OUTCOME_MALFORMED, device_id="dev", detail={"reason": "schema"}, now=clock.now)
+        report = g.snapshot(now=clock.now)
+        report["forensics"][0]["detail"]["reason"] = "tampered"
+        report["counts"][OUTCOME_MALFORMED] = 999
+        fresh = g.snapshot(now=clock.now)
+        self.assertEqual(fresh["forensics"][0]["detail"], {"reason": "schema"})
+        self.assertEqual(fresh["counts"][OUTCOME_MALFORMED], 1)
+
+    def test_concurrent_recording_keeps_exact_counts(self):
+        import threading
+
+        g, clock = guard(malformed_budget=10 ** 6, forensic_samples=1)
+
+        def hammer():
+            for _ in range(5_000):
+                g.record(OUTCOME_ACCEPTED, now=clock.now)
+
+        threads = [threading.Thread(target=hammer) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(g.snapshot(now=clock.now)["counts"][OUTCOME_ACCEPTED], 20_000)
+
     def test_snapshot_is_json_serialisable_and_deterministic(self):
         g, clock = guard()
         g.record(OUTCOME_ACCEPTED, now=clock.now)
