@@ -95,6 +95,9 @@ class EdgeHealthMonitor:
             maxlen=self.spool_max_len
         )
 
+        # Synthetic-probe faults (Ticket #40): operational signal, never an incident.
+        self._probe_faults: list[dict[str, Any]] = []
+
     def mark_started(self) -> None:
         """Mark system as transitioned past startup."""
         with self._lock:
@@ -146,6 +149,11 @@ class EdgeHealthMonitor:
         """Set capability state for a component (e.g. active, degraded, unavailable)."""
         with self._lock:
             self._capabilities[component] = state
+
+    def record_probe_faults(self, faults: Any) -> None:
+        """Hold the latest synthetic-probe faults; bounded so a flap cannot grow the snapshot."""
+        with self._lock:
+            self._probe_faults = [dict(fault) for fault in list(faults)[:8]]
 
     def record_telemetry_event(self, event_type: str, data: dict[str, Any]) -> None:
         """Record a telemetry event in bounded FIFO spool, masking any sensitive fields."""
@@ -368,6 +376,14 @@ class EdgeHealthMonitor:
             else:
                 capabilities["backend"] = "reachable"
 
+            # Synthetic-probe faults are operational: they degrade health, they never open an incident.
+            with self._lock:
+                probe_faults = [dict(fault) for fault in self._probe_faults]
+            for probe_fault in probe_faults:
+                code = probe_fault.get("code")
+                if isinstance(code, str) and code and code not in operational_faults:
+                    operational_faults.append(code)
+
             # Check operational faults
             if operational_faults:
                 if status == HealthStatus.HEALTHY:
@@ -413,6 +429,8 @@ class EdgeHealthMonitor:
                 "outbox_pending_count": outbox_pending,
                 "operational_fault_count": len(operational_faults),
                 "operational_faults": operational_faults,
+                "probe_fault_count": len(probe_faults),
+                "probe_faults": probe_faults,
                 "backend_reachable": backend_ok,
             }
 

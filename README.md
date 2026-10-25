@@ -1,6 +1,6 @@
 # AI Camera lab slice
 
-Implemented software-lab slices: synthetic event/dashboard (#01), lab facts/protocol (#02), versioned review with audit trail and re-review triggers (#04), retry/revision delivery (#05), file recorder/replay (#06), durable pinned evidence (#07), server evidence upload/playback (#08), process crash recovery (#09), pinned ONNX detector oracle (#11), Python ByteTracker with time/session semantics (#13), end-to-end perception pipeline baseline (#14), live runner (#15 partial), startup/shutdown (#16), truthful health monitor with operational fault surfacing (#17), storage quota protection (#18), dataset feedback lineage (#20), ODD image quality assessment and freeze detection (#21 partial), RTMPose-Tiny pose estimation (#22), track gap and clock jump handling (#23 partial), pose scheduling and degradation (#24), person fall detection (#25), persistent lying (#26), on-vehicle review priority and danger overrides (#27), negative audit sampling and Horvitz-Thompson quality regression G2 (#28), device lifecycle and site access enforcement (#33), pose outcomes flow into person-down incidents (#53); plus independent module x camera configuration with fail-fast doctor reporting (#03 partial); retained-evidence retrieval commands with authorization (#32), and a bounded inbound storm guard (#41). Full Python test suite (643 tests) passes across edge, health, quota, pose, review API, quality evaluation, device lifecycle, and contracts. Native C++ acceleration (#10/#12), camera hardware RTSP field validation, and production target deployment acceptance (G3–G5) remain open as tracked in the [tracker](.scratch/system-build-slices/PRD.md).
+Implemented software-lab slices: synthetic event/dashboard (#01), lab facts/protocol (#02), versioned review with audit trail and re-review triggers (#04), retry/revision delivery (#05), file recorder/replay (#06), durable pinned evidence (#07), server evidence upload/playback (#08), process crash recovery (#09), pinned ONNX detector oracle (#11), Python ByteTracker with time/session semantics (#13), end-to-end perception pipeline baseline (#14), live runner (#15 partial), startup/shutdown (#16), truthful health monitor with operational fault surfacing (#17), storage quota protection (#18), dataset feedback lineage (#20), ODD image quality assessment and freeze detection (#21 partial), RTMPose-Tiny pose estimation (#22), track gap and clock jump handling (#23 partial), pose scheduling and degradation (#24), person fall detection (#25), persistent lying (#26), on-vehicle review priority and danger overrides (#27), negative audit sampling and Horvitz-Thompson quality regression G2 (#28), device lifecycle and site access enforcement (#33), pose outcomes flow into person-down incidents (#53); plus independent module x camera configuration with fail-fast doctor reporting (#03 partial); retained-evidence retrieval commands with authorization (#32), a bounded inbound storm guard (#41), and a synthetic probe that reports operational faults (#40 partial). Full Python test suite (662 tests) passes across edge, health, quota, pose, review API, quality evaluation, device lifecycle, and contracts. Native C++ acceleration (#10/#12), camera hardware RTSP field validation, and production target deployment acceptance (G3–G5) remain open as tracked in the [tracker](.scratch/system-build-slices/PRD.md).
 
 ## Run the lab stack
 
@@ -276,12 +276,49 @@ curl "$SERVER/healthz"   # -> {"status": "ok"|"degraded", "ingest_guard": {...}}
 The guard carries a fixed lab budget — 50 malformed attempts per 60s window and 8 forensic
 samples — and is not a signed production SLA; changing it is a code change, not a config knob.
 
+## Synthetic probe và operational fault (#40)
+
+A probe walks `decode → inference → journal → delivery` through injected stage callables,
+checkpoints each stage in a bounded ledger, and reports a **stall** as an operational fault
+carrying its own metric, window, threshold, owner, runbook and recovery:
+
+```python
+from apps.edge.probe import SyntheticProbe
+from domain.probe_contract import ProbeLedger
+
+report = SyntheticProbe(ProbeLedger(), {
+    "decode": decode_once, "inference": infer_once,
+    "journal": append_once, "delivery": deliver_once,
+}, reporter=health.record_probe_faults).run()
+```
+
+```json
+{"taxonomy": "operational_fault", "ok": false, "stopped_at": "journal",
+ "faults": [{"code": "probe_journal_stalled", "stage": "journal",
+             "metric": "probe_journal_age_seconds", "window_seconds": 300.0,
+             "threshold_seconds": 120.0, "owner": "edge-ops",
+             "runbook": "docs/architecture/contracts.md#operational-fault",
+             "recovery": "restart the journal stage, then re-run the synthetic probe",
+             "observed": {"last_progress_at": null, "age_seconds": null, "checkpoints": 0}}]}
+```
+
+Properties that keep a fault from becoming an incident:
+
+- the probe holds no outbox, incident engine or transport reference (an import-level test
+  pins this), and a report is not a valid event at all — `validate_event(report)` refuses it;
+- stage names and fault codes are closed enumerations, so metric label cardinality is
+  bounded by construction; the failure reason is the exception **type**, never its message;
+- `EdgeHealthMonitor.record_probe_faults()` folds the fault codes into
+  `operational_faults`, so health degrades and `all_reasons` names the stalled stage;
+- `origin=synthetic` stays `ineligible` in the outbox for **every** revision, with a reason
+  (`synthetic_or_replay_origin`) that a revision cannot rewrite.
+
 ## Checks
 
 Run the entire test suite with pytest using the oracle lab environment:
 ```sh
 .venv-oracle/bin/python -m pytest -q
 ```
-All **643 tests** (126 subtests) across edge perception, tracking, fall incident engine, RTMPose estimation, ODD quality assessment, health monitoring, storage quota, server review API, negative audit G2 evaluation, device lifecycle, and event contracts pass.
+All **662 tests** (126 subtests) across edge perception, tracking, fall incident engine, RTMPose estimation, ODD quality assessment, health monitoring, storage quota, server review API, negative audit G2 evaluation, device lifecycle, and event contracts pass.
 
 Run the local contract and SQLite tests with `python -m unittest discover -s tests`. MongoDB transaction, HTTP auth, and browser checks require the Compose lab to be running; they are separate from this unit suite.
