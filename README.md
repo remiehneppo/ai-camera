@@ -251,7 +251,11 @@ Semantics enforced by `domain/retrieval_contract.py` and covered by tests:
 `apps/edge/retrieval.py` is the device side: `RetrievalWorker` validates each payload,
 records the metadata acknowledgement, runs an injected executor (`RecorderClipRetainer` for
 an edge clip, idempotent per request id) and closes the command with the artifact or an
-allowlisted failure.
+allowlisted failure. A device only fulfils what this build implements: a command for another
+`target`, or a `retention_scope` other than `clip`, is refused with `unsupported_target` /
+`retention_scope_unsupported` instead of running the wrong executor. `retention_scope:
+"metadata"` is rejected at issue time (422) until a real metadata-only retention path exists,
+so no artifact is ever fabricated for it.
 
 ## Inbound storm guard (#41)
 
