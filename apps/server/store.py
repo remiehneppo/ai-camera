@@ -23,13 +23,9 @@ from domain.device_contract import (
     DeviceLifecycleError,
     DeviceRecord,
     STATUS_ACTIVE,
-    STATUS_ENROLLED,
-    STATUS_QUARANTINED,
-    STATUS_REVOKED,
     quarantine_device,
     reactivate_device,
     revoke_device,
-    transition_device,
 )
 from domain.retrieval_contract import (
     DEFAULT_LEASE_SECONDS,
@@ -47,13 +43,10 @@ from domain.retrieval_contract import (
     settle_target,
 )
 from domain.review_contract import (
-    LOW_PRIORITY_TAXONOMIES,
-    SEVERITY_VALUES,
     ReviewTransitionError,
     meaningful_content_hash,
     next_decision,
     review_priority_for,
-    validate_review_request,
 )
 
 
@@ -551,7 +544,8 @@ class EventStore:
         if not file_path or not file_path.is_file():
             manifest["completeness"] = "missing"
             manifest["file_status"] = "missing"
-            return self.record_evidence(device_id, event_id, request_id, manifest, doc["file_path"])
+            # A manifest written before file_path existed (or without one) must not 500 a read.
+            return self.record_evidence(device_id, event_id, request_id, manifest, file_path_val or "")
 
         expected_size = manifest.get("size_bytes")
         expected_sha256 = manifest.get("sha256")
@@ -694,7 +688,7 @@ class EventStore:
         return updated
 
     def rotate_device_token(
-        self, device_id: str, *, new_site_id: str | None = None, reason: str | None = None
+        self, device_id: str, *, new_site_id: str | None = None
     ) -> DeviceRecord:
         record = self.get_device(device_id)
         if not record:

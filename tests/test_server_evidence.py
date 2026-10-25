@@ -109,6 +109,22 @@ class ServerEvidenceStoreTests(unittest.TestCase):
         self.store.close()
         self.temp_dir.cleanup()
 
+    def test_get_evidence_survives_a_manifest_without_a_file_path(self) -> None:
+        """A legacy or partially written manifest must not turn a read into a KeyError."""
+        self.store.evidence_manifests.insert_one(
+            {
+                "device_id": "lab-edge-01",
+                "event_id": "evt-legacy",
+                "request_id": "req-legacy",
+                "manifest": {"sha256": "a" * 64, "size_bytes": 4, "completeness": "complete"},
+                "manifest_version": 1,
+                "stored_at": "2026-10-24T00:00:00Z",
+            }
+        )
+        record = self.store.get_evidence("lab-edge-01", "evt-legacy", "req-legacy", verify_file=True)
+        self.assertEqual(record["manifest"]["file_status"], "missing")
+        self.assertEqual(record["manifest"]["completeness"], "missing")
+
     def test_record_and_get_evidence(self) -> None:
         device_id = "lab-edge-01"
         event_id = str(uuid4())
