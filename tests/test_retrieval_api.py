@@ -99,6 +99,9 @@ class RetrievalApiTests(unittest.TestCase):
         self.assertEqual(self.issue(evidence, target="s3").status_code, 422)
         self.assertEqual(self.issue(evidence, ttl_seconds=10_000).status_code, 422)
         self.assertEqual(self.issue(evidence, retention_scope="everything").status_code, 422)
+        unsupported = self.issue(evidence, retention_scope="metadata")
+        self.assertEqual(unsupported.status_code, 422)
+        self.assertIn("retention_scope", unsupported.text)
         device_id, event_id, request_id, _, _ = evidence
         missing = self.client.post(f"/v1/evidence/{device_id}/{event_id}/req-missing/retrieval",
                                    json={"target": "edge"}, headers=ALICE)

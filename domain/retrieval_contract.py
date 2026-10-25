@@ -33,6 +33,7 @@ __all__ = [
     "ERROR_FORBIDDEN_FIELD",
     "ERROR_INVALID_ACK",
     "ERROR_INVALID_COMMAND",
+    "ERROR_SCOPE_NOT_SUPPORTED",
     "ERROR_STALE_LEASE",
     "ERROR_TARGET_NOT_ALLOWED",
     "ERROR_TTL_EXCEEDED",
@@ -44,6 +45,7 @@ __all__ = [
     "RetrievalCommand",
     "RetrievalError",
     "RetrievalState",
+    "SUPPORTED_RETENTION_SCOPES",
     "STATUS_CLAIMED",
     "STATUS_COMPLETED",
     "STATUS_EXPIRED",
@@ -54,6 +56,7 @@ __all__ = [
     "acknowledge",
     "claim",
     "issue_command",
+    "require_supported",
     "requester_status",
     "settle_target",
     "validate_command_payload",
@@ -79,8 +82,18 @@ ACK_FIELDS: Final[dict[str, FrozenSet[str]]] = {
 }
 
 FAILURE_REASONS: Final[FrozenSet[str]] = frozenset(
-    {"evidence_unavailable", "recorder_unavailable", "unsupported_target", "storage_insufficient"}
+    {
+        "evidence_unavailable",
+        "recorder_unavailable",
+        "unsupported_target",
+        "storage_insufficient",
+        "retention_scope_unsupported",
+    }
 )
+
+#: Scopes this lab can actually fulfil. `metadata` is a driver the API may not offer yet:
+#: refusing it is honest, fabricating a metadata-only artifact would not be.
+SUPPORTED_RETENTION_SCOPES: Final[FrozenSet[str]] = frozenset({"clip"})
 
 STATUS_PENDING: Final[str] = "pending"
 STATUS_CLAIMED: Final[str] = "claimed"
@@ -104,6 +117,7 @@ ERROR_STALE_LEASE: Final[str] = "stale_lease"
 ERROR_UNKNOWN_ACK_KIND: Final[str] = "unknown_ack_kind"
 ERROR_INVALID_ACK: Final[str] = "invalid_ack"
 ERROR_ARTIFACT_CONFLICT: Final[str] = "artifact_conflict"
+ERROR_SCOPE_NOT_SUPPORTED: Final[str] = "retention_scope_not_supported"
 
 _IDENTIFIER: Final[Pattern[str]] = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}\Z")
 _FORBIDDEN_FIELD: Final[Pattern[str]] = re.compile(
@@ -266,7 +280,14 @@ def issue_command(
         expires_at=float(issued_at) + float(ttl_seconds),
         retention_scope=retention_scope,
     )
+    require_supported(command)
     return RetrievalState(command=command)
+
+
+def require_supported(command: RetrievalCommand) -> None:
+    """Refuse a well-formed command whose scope this build cannot fulfil (fail fast, no fake receipt)."""
+    if command.retention_scope not in SUPPORTED_RETENTION_SCOPES:
+        raise _fail(ERROR_SCOPE_NOT_SUPPORTED, "retention_scope is not implemented by this build")
 
 
 def claim(state: RetrievalState, *, now: float, lease_seconds: float = DEFAULT_LEASE_SECONDS) -> RetrievalState:

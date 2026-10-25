@@ -12,6 +12,7 @@ from domain.retrieval_contract import (
     ERROR_FORBIDDEN_FIELD,
     ERROR_INVALID_ACK,
     ERROR_INVALID_COMMAND,
+    ERROR_SCOPE_NOT_SUPPORTED,
     ERROR_STALE_LEASE,
     ERROR_TARGET_NOT_ALLOWED,
     ERROR_TTL_EXCEEDED,
@@ -180,13 +181,15 @@ class AcknowledgeTests(unittest.TestCase):
         self.assertEqual(requester_status(acked, now=NOW + 2, device_last_seen=NOW), STATUS_PENDING)
         self.assertEqual(acknowledge(acked, now=NOW + 3, lease_id=state.lease_id, ack={"kind": ACK_METADATA}), acked)
 
-    def test_metadata_scope_command_still_completes_only_with_an_artifact(self):
-        state = self.claimed(scope="metadata")
-        acked = acknowledge(state, now=NOW + 1, lease_id=state.lease_id, ack={"kind": ACK_METADATA})
-        self.assertEqual(acked.status, STATUS_CLAIMED)
-        done = acknowledge(acked, now=NOW + 2, lease_id=state.lease_id,
-                           ack={"kind": ACK_ARTIFACT, "sha256": SHA, "size_bytes": 10})
-        self.assertEqual(done.status, STATUS_COMPLETED)
+    def test_unimplemented_retention_scope_is_refused_instead_of_faked(self):
+        with self.assertRaises(RetrievalError) as caught:
+            issued(scope="metadata")
+        self.assertEqual(caught.exception.code, ERROR_SCOPE_NOT_SUPPORTED)
+        # A device may still receive a well-formed metadata command from an older server: the
+        # payload stays parseable so the worker can refuse it with a typed failure.
+        payload = wire_payload(issued(), now=NOW)
+        payload["retention_scope"] = "metadata"
+        self.assertEqual(validate_command_payload(payload)["retention_scope"], "metadata")
 
     def test_artifact_acknowledgement_completes_and_is_idempotent(self):
         state = self.claimed()

@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, FrozenSet, Mapping, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -25,6 +25,7 @@ from domain.retrieval_contract import (
     ERROR_INVALID_COMMAND,
     STATUS_CLAIMED,
     STATUS_COMPLETED,
+    SUPPORTED_RETENTION_SCOPES,
     RetrievalError,
     validate_command_payload,
 )
@@ -94,6 +95,10 @@ class RetrievalTransport:
 class RetrievalWorker:
     """Execute at most one leased command per poll, exactly once per lease."""
 
+    #: Targets this worker can fulfil. A server may address other targets; this one refuses
+    #: them with an allowlisted failure instead of running the wrong executor.
+    SUPPORTED_TARGETS: FrozenSet[str] = frozenset({"edge"})
+
     def __init__(
         self,
         transport: RetrievalTransport,
@@ -115,6 +120,13 @@ class RetrievalWorker:
                 return outcome
         return None
 
+    def _refusal(self, command: Mapping[str, Any]) -> Optional[str]:
+        if command["target"] not in self.SUPPORTED_TARGETS:
+            return "unsupported_target"
+        if command["retention_scope"] not in SUPPORTED_RETENTION_SCOPES:
+            return "retention_scope_unsupported"
+        return None
+
     def _handle(self, raw: Any) -> Optional[dict[str, Any]]:
         command = validate_command_payload(raw)
         command_id = command["command_id"]
@@ -127,6 +139,11 @@ class RetrievalWorker:
         if self._now() >= command["expires_at"]:
             return {"command_id": command_id, "skipped": "expired"}
         lease = {"lease_id": command["lease_id"]}
+
+        refusal = self._refusal(command)
+        if refusal is not None:
+            self.transport.acknowledge(self.device_id, command_id, {**lease, "kind": ACK_FAILURE, "reason": refusal})
+            return {"command_id": command_id, "status": "failed", "reason": refusal}
 
         self.transport.acknowledge(self.device_id, command_id, {**lease, "kind": ACK_METADATA})
         try:

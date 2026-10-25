@@ -137,6 +137,28 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(outcome, {"command_id": "cmd-001", "skipped": "not_leased"})
         self.assertEqual(self.transport.acks, [])
 
+    def _payload(self, **overrides):
+        payload = command_payload()
+        payload.update(overrides)
+        return payload
+
+    def test_a_non_edge_target_is_refused_without_running_the_executor(self):
+        executed = []
+        outcome = self.worker([self._payload(target="server")], lambda command: executed.append(1)).poll_once()
+        self.assertEqual(executed, [])
+        self.assertEqual(outcome, {"command_id": "cmd-001", "status": "failed", "reason": "unsupported_target"})
+        self.assertEqual(self.transport.acks[-1][2]["kind"], ACK_FAILURE)
+        self.assertEqual(self.transport.acks[-1][2]["reason"], "unsupported_target")
+
+    def test_an_unimplemented_retention_scope_is_refused_without_running_the_executor(self):
+        executed = []
+        outcome = self.worker([self._payload(retention_scope="metadata")], lambda command: executed.append(1)).poll_once()
+        self.assertEqual(executed, [])
+        self.assertEqual(
+            outcome, {"command_id": "cmd-001", "status": "failed", "reason": "retention_scope_unsupported"}
+        )
+        self.assertEqual(self.transport.acks[-1][2]["reason"], "retention_scope_unsupported")
+
     def test_empty_poll_returns_nothing(self):
         self.assertIsNone(self.worker([], lambda command: {}).poll_once())
         self.assertEqual(self.transport.polls, [("lab-edge-01", 0.0)])

@@ -51,3 +51,20 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
   pre-existing (`store.decode_cursor` line 114, `FileResponse.content_disposition_type` line 691), ngoài scope.
   Còn mở (không claim): SLA/latency trên LAN, long-poll 5s là lab bound chưa sign-off, worker loop/daemon chưa nối
   vào runtime process, và chưa có UI hiển thị pending/offline/expired/completed (thuộc #44/#45).
+
+- 2026-10-24 (review round): rà lại slice này (chưa từng được review) bằng probe + đọc code; sửa 2 defect:
+  1. `RetrievalWorker` **không kiểm `target`**: một server lỗi/độc hại gửi `target=server` sẽ bị chạy bằng executor
+     của edge. Nay worker có `SUPPORTED_TARGETS = {edge}` và ack `unsupported_target` (reason đã có trong enum nhưng
+     trước đó không reachable) mà không chạy executor.
+  2. `retention_scope="metadata"` **không bao giờ complete được** (metadata ack không terminalise, mà edge executor
+     chỉ tạo được artifact clip) ⇒ field chết, và nếu ép complete thì phải bịa artifact. Nay `issue_command` từ chối
+     scope chưa implement (`retention_scope_not_supported`, HTTP 422), worker ack
+     `retention_scope_unsupported` nếu nhận command cũ từ server khác; `validate_command_payload` vẫn parse được
+     payload đó để device từ chối có kiểu.
+  Đã kiểm không phải lỗi: 6 thread `issue_retrieval` đồng thời cho cùng evidence/target ⇒ **1** command (khoá dedupe
+  theo identity đang mở giữ đúng); claim lần hai trong lease trả cùng `lease_id`; re-issue giữ TTL của command đang mở
+  (idempotent theo identity, TTL mới bị bỏ — đã ghi rõ trong docstring).
+  Evidence: `pytest tests/test_retrieval_contract.py tests/test_retrieval_worker.py tests/test_retrieval_api.py -q` ⇒
+  **56 passed**; full suite ⇒ **667 passed, 126 subtests**. `mypy` các file liên quan chỉ còn 2 lỗi pre-existing.
+  Ghi nhận chưa sửa: flood 422 vào route retrieval không đi qua storm guard (#41 chỉ áp `/v1/events`);
+  `GET /v1/retrieval/{id}` với target=server có side-effect ghi manifest (qua `get_evidence(verify_file=True)`).
