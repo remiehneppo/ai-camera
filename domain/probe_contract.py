@@ -16,6 +16,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Callable, Final, FrozenSet, Mapping, Optional
 
 __all__ = [
@@ -26,6 +27,7 @@ __all__ = [
     "POLICY_VERSION",
     "ProbeLedger",
     "ProbePolicy",
+    "RUNBOOK_PATH",
     "STAGES",
     "stall_fault_code",
 ]
@@ -37,6 +39,9 @@ STAGES: Final[tuple[str, ...]] = ("decode", "inference", "journal", "delivery")
 OPERATIONAL_FAULT_TAXONOMY: Final[str] = "operational_fault"
 
 POLICY_VERSION: Final[str] = "synthetic-probe-v1"
+
+#: Where an operator finds the runbook for a probe fault; a test keeps this anchor real.
+RUNBOOK_PATH: Final[str] = "docs/architecture/contracts.md#synthetic-probe-operational-fault"
 
 _IDENTIFIER: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}\Z")
 
@@ -82,7 +87,7 @@ FAULT_CATALOG: Final[dict[str, FaultSpec]] = {
         window_seconds=300.0,
         threshold_seconds=120.0,
         owner="edge-ops",
-        runbook="docs/architecture/contracts.md#operational-fault",
+        runbook=RUNBOOK_PATH,
         recovery="restart the " + stage + " stage, then re-run the synthetic probe",
     )
     for stage in STAGES
@@ -112,6 +117,8 @@ class ProbePolicy:
             raise ValueError("window_seconds must be finite and positive")
         if type(self.sample_correlations) is not int or self.sample_correlations < 0:
             raise ValueError("sample_correlations must be a non-negative integer")
+        # Copy the caller's mapping: a frozen policy must not change when they reuse the dict.
+        object.__setattr__(self, "stage_budgets", MappingProxyType(dict(self.stage_budgets)))
 
     def budget_for(self, stage: str) -> float:
         return float(self.stage_budgets.get(stage, DEFAULT_STAGE_BUDGET_SECONDS))
@@ -161,7 +168,8 @@ class ProbeLedger:
                 spec = FAULT_CATALOG[stall_fault_code(stage)]
                 last = self._last_progress.get(stage)
                 budget = self.policy.budget_for(stage)
-                age = None if last is None else stamp - last
+                # A clock that jumped backwards cannot measure staleness; report 0, never a negative age.
+                age = None if last is None else max(0.0, stamp - last)
                 if last is not None and age is not None and age <= budget:
                     continue
                 faults.append(
@@ -194,7 +202,7 @@ class ProbeLedger:
                 stage: {
                     "last_progress_at": self._last_progress.get(stage),
                     "age_seconds": None if self._last_progress.get(stage) is None
-                    else stamp - float(self._last_progress[stage]),
+                    else max(0.0, stamp - float(self._last_progress[stage])),
                     "budget_seconds": self.policy.budget_for(stage),
                     "checkpoints": self._checkpoints.get(stage, 0),
                 }

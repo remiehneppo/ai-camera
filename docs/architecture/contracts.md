@@ -129,3 +129,27 @@ Tests: bật provider sau nhiều tuần disabled không phát backlog; policy c
 G3 bắt buộc **conformance + capacity trên target thực đã chọn**, không bắt buộc vendor RKNN. ONNX target: native/oracle detector/pose/track/event regression trên target + hardware/software decode path thực + soak recording/upload. RKNN target: thêm conversion A01, backend A02/A03 và #29/#30 trước capacity/rollout. Backend khác chỉ mở khi được chọn và phải có gate tương đương, không dùng N/A để bỏ target testing.
 
 Ticket #31 và #35 có blockers chung, cộng `Conditional blockers (RKNN): #30`; #29/#30 deferred khi target không phải RKNN. PRD tracker là nguồn graph thực thi. Không coi baseline x86 pass là Raspberry Pi hoặc board khác đã đạt.
+
+## Synthetic-probe operational fault
+
+Probe (#40) đi qua bốn stage `decode → inference → journal → delivery`; mỗi stage có checkpoint. Fault phát ra khi
+stage **chưa từng** progress hoặc tuổi checkpoint vượt budget của stage. Fault là tín hiệu vận hành, **không** phải
+event nghiệp vụ: report có `taxonomy = operational_fault`, không qua outbox, và `validate_event(report)` từ chối.
+
+| Fault code | Metric | Window | Threshold | Owner |
+|---|---|---|---|---|
+| `probe_decode_stalled` | `probe_decode_age_seconds` | 300s | 120s | edge-ops |
+| `probe_inference_stalled` | `probe_inference_age_seconds` | 300s | 120s | edge-ops |
+| `probe_journal_stalled` | `probe_journal_age_seconds` | 300s | 120s | edge-ops |
+| `probe_delivery_stalled` | `probe_delivery_age_seconds` | 300s | 120s | edge-ops |
+
+Threshold/window là lab default, không phải SLA đã ký. Cardinality bị chặn bởi enumeration stage; correlation id chỉ
+nằm trong ring bounded và không trở thành label.
+
+**Runbook:** (1) đọc `snapshot["stages"][stage]["checkpoints"]` và `observed.last_progress_at` để biết stage chết
+hẳn hay trễ; (2) fault `journal`/`delivery` ⇒ kiểm recorder pin/gap và outbox trước khi restart; (3) fault
+`decode`/`inference` ⇒ kiểm source và backend trước khi restart worker; (4) sau khi sửa, gọi `ledger.reset()` rồi
+chạy lại probe và `record_probe_faults(snapshot["faults"])` — danh sách rỗng mới xoá degraded.
+
+**Recovery hợp lệ:** fault biến mất chỉ khi stage có checkpoint mới trong budget; không tắt probe để "hết" fault, và
+không đổi origin của event để đưa probe vào notification.

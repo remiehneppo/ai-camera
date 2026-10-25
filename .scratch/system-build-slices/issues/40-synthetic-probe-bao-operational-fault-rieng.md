@@ -46,7 +46,7 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
   Guard: `EventStore` đánh `ineligible` với reason `synthetic_or_replay_origin` cho **mọi** revision synthetic;
   revision đổi origin bị `EventIdentityConflict`; `validate_event(probe_report)` raise ⇒ fault route không thể thành
   event. Fixture synthetic giữ taxonomy nghiệp vụ riêng `synthetic_demo`.
-  Evidence: `pytest tests/test_probe.py tests/test_probe_guard.py -q` ⇒ **19 passed**; full suite ⇒ **662 passed,
+  Evidence: `pytest tests/test_probe.py tests/test_probe_guard.py -q` ⇒ **19 passed**; full suite ⇒ **665 passed,
   126 subtests** (baseline 643); `mypy domain/probe_contract.py apps/edge/probe.py apps/edge/health.py` ⇒ sạch.
   Còn mở: bullet 2 (mới inject deadlock, **chưa inject pin gap**); chưa có scheduler chạy probe định kỳ trong
   `EdgeRuntime`; owner/runbook trong catalog là placeholder; chưa có metric exporter.

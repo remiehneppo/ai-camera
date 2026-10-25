@@ -13,11 +13,14 @@ from domain.probe_contract import (
     FAULT_CODES,
     FAULT_CATALOG,
     OPERATIONAL_FAULT_TAXONOMY,
+    RUNBOOK_PATH,
     STAGES,
     ProbeLedger,
     ProbePolicy,
     stall_fault_code,
 )
+from pathlib import Path
+import re
 
 T0 = 1_000.0
 
@@ -101,6 +104,36 @@ class ContractTests(unittest.TestCase):
             from domain.probe_contract import FaultSpec
             FaultSpec(code="x", stage="decode", metric="m", window_seconds=10, threshold_seconds=20,
                       owner="o", runbook="r", recovery="c")
+
+    def test_backwards_clock_never_reports_a_negative_age(self):
+        l, clock = ledger()
+        for stage in STAGES:
+            l.checkpoint("p1", stage, at=clock.now)
+        snapshot = l.snapshot(now=clock.now - 1_000)
+        self.assertEqual(snapshot["stages"]["decode"]["age_seconds"], 0.0)
+        self.assertEqual(snapshot["fault_count"], 0, "a backwards clock must not invent a stall")
+        self.assertNotIn("-1000", json.dumps(snapshot))
+
+    def test_policy_mapping_is_frozen_against_later_caller_mutation(self):
+        budgets = {"decode": 1.0}
+        policy = ProbePolicy(stage_budgets=budgets)
+        budgets["decode"] = 999.0
+        self.assertEqual(policy.budget_for("decode"), 1.0)
+        with self.assertRaises(TypeError):
+            policy.stage_budgets["decode"] = 5.0  # type: ignore[index]
+
+    def test_every_fault_runbook_anchor_exists_in_the_repo(self):
+        path, _, anchor = RUNBOOK_PATH.partition("#")
+        self.assertTrue(Path(path).is_file(), RUNBOOK_PATH)
+        headings = [
+            line.lstrip("#").strip() for line in Path(path).read_text().splitlines() if line.startswith("#")
+        ]
+        slugs = {
+            re.sub(r"[^a-z0-9 -]", "", heading.lower()).replace(" ", "-") for heading in headings
+        }
+        self.assertIn(anchor, slugs, "the runbook anchor must resolve to a real heading")
+        for spec in FAULT_CATALOG.values():
+            self.assertEqual(spec.runbook, RUNBOOK_PATH)
 
     def test_snapshot_is_json_serialisable(self):
         l, clock = ledger()

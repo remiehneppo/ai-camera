@@ -29,9 +29,9 @@ Ngày 2026-10-24. Blocker #17/#05 đã done.
 
 ## Bằng chứng chạy thật
 
-- `.venv-oracle/bin/python -m pytest tests/test_probe.py tests/test_probe_guard.py -q` ⇒ **19 passed**
-  (14 contract/runner/health + 5 server guard).
-- Full suite ⇒ **662 passed, 126 subtests** trong 150.73s (baseline 643, +19).
+- `.venv-oracle/bin/python -m pytest tests/test_probe.py tests/test_probe_guard.py -q` ⇒ **22 passed**
+  (17 contract/runner/health + 5 server guard).
+- Full suite ⇒ **665 passed, 126 subtests** trong 150.02s (baseline 643, +22).
 - `mypy domain/probe_contract.py apps/edge/probe.py apps/edge/health.py` ⇒ `no issues found`.
 - Đã kiểm: fault payload đủ 7 trường vận hành; mọi stage chưa progress đều fault; progress xoá fault đúng stage;
   budget theo từng stage; correlation ring bounded + `reset()`; injected `TimeoutError` ở journal ⇒
