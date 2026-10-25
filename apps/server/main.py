@@ -289,6 +289,24 @@ def _reject(
     raise HTTPException(status_code=status_code, detail=detail, headers=dict(headers or {}))
 
 
+async def _json_body(request: Request) -> dict[str, Any]:
+    """Read the JSON body once; an absent body is {}, malformed JSON is 400, non-object is 422.
+
+    Starlette caches request.body(), but reading it once keeps the intent obvious and stops a
+    JSON array from reaching body.get() as an AttributeError (500) downstream.
+    """
+    raw = await request.body()
+    if not raw:
+        return {}
+    try:
+        body = json.loads(raw)
+    except Exception:
+        raise HTTPException(status_code=400, detail="malformed JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail="request body must be a JSON object")
+    return body
+
+
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -936,10 +954,7 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
         token = _bearer(request)
         if not hmac.compare_digest(token.encode("utf-8"), dashboard_token.encode("utf-8")):
             raise HTTPException(status_code=401, detail="admin dashboard credentials required", headers={"WWW-Authenticate": "Bearer"})
-        try:
-            body = json.loads(await request.body()) if await request.body() else {}
-        except Exception:
-            raise HTTPException(status_code=400, detail="malformed JSON")
+        body = await _json_body(request)
         reason = body.get("reason", "manual_quarantine")
         try:
             updated = store.quarantine_device(device_id, reason=reason)
@@ -954,10 +969,7 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
         token = _bearer(request)
         if not hmac.compare_digest(token.encode("utf-8"), dashboard_token.encode("utf-8")):
             raise HTTPException(status_code=401, detail="admin dashboard credentials required", headers={"WWW-Authenticate": "Bearer"})
-        try:
-            body = json.loads(await request.body()) if await request.body() else {}
-        except Exception:
-            raise HTTPException(status_code=400, detail="malformed JSON")
+        body = await _json_body(request)
         reason = body.get("reason")
         try:
             updated = store.reactivate_device(device_id, reason=reason)
@@ -972,10 +984,7 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
         token = _bearer(request)
         if not hmac.compare_digest(token.encode("utf-8"), dashboard_token.encode("utf-8")):
             raise HTTPException(status_code=401, detail="admin dashboard credentials required", headers={"WWW-Authenticate": "Bearer"})
-        try:
-            body = json.loads(await request.body()) if await request.body() else {}
-        except Exception:
-            raise HTTPException(status_code=400, detail="malformed JSON")
+        body = await _json_body(request)
         reason = body.get("reason", "manual_revocation")
         try:
             updated = store.revoke_device(device_id, reason=reason)

@@ -137,6 +137,21 @@ class TestDeviceLifecycleFlow(unittest.TestCase):
         self.assertEqual(res.status_code, 403)
         self.assertIn("device_credential_revoked", res.json()["detail"])
 
+    def test_device_routes_reject_a_non_object_body_without_a_500(self) -> None:
+        headers = {"Authorization": "Bearer dashboard-secret-admin", "Content-Type": "application/json"}
+        for route in ("quarantine", "reactivate", "revoke"):
+            for payload in ([{"reason": "array"}], "string", 5):
+                res = self.client.post(
+                    f"/v1/devices/edge-dev-site-a/{route}", content=json.dumps(payload), headers=headers
+                )
+                self.assertEqual(res.status_code, 422, (route, payload))
+            empty = self.client.post(
+                f"/v1/devices/edge-dev-site-a/{route}",
+                content=b"",
+                headers={"Authorization": "Bearer dashboard-secret-admin", "Content-Type": "application/json"},
+            )
+            self.assertIn(empty.status_code, (200, 404), (route, empty.text))
+
     def test_quarantined_device_is_denied_and_can_be_reactivated(self) -> None:
         # Quarantine device A via admin endpoint
         q_res = self.client.post(
