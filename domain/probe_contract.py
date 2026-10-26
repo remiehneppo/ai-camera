@@ -210,8 +210,8 @@ class ProbeLedger:
         at: Optional[float] = None,
     ) -> None:
         """Record that a stage observed missing or incomplete pin coverage."""
-        if stage not in STAGES:
-            raise ValueError("stage is not a probe stage")
+        if pin_gap_fault_code(stage) not in FAULT_CATALOG:
+            raise ValueError(f"pin gap fault not supported for stage '{stage}'; only stages with cataloged pin gap faults are allowed")
         with self._lock:
             self._pin_gaps[stage] = {
                 "detected_at": self._clock(at),

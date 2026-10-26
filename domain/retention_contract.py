@@ -38,6 +38,7 @@ __all__ = [
     "INTEGRITY_VERIFIED",
     "POLICY_VERSION",
     "RECONCILE_CORRUPT",
+    "RECONCILE_EXPIRED",
     "RECONCILE_MISSING",
     "RECONCILE_ORPHAN",
     "RECONCILE_PENDING",
@@ -81,6 +82,7 @@ RECONCILE_PENDING: Final[str] = "pending"
 RECONCILE_MISSING: Final[str] = "missing"
 RECONCILE_CORRUPT: Final[str] = "corrupt"
 RECONCILE_ORPHAN: Final[str] = "orphan"
+RECONCILE_EXPIRED: Final[str] = "expired"
 
 RECONCILE_STATES: Final[FrozenSet[str]] = frozenset(
     {
@@ -89,6 +91,7 @@ RECONCILE_STATES: Final[FrozenSet[str]] = frozenset(
         RECONCILE_MISSING,
         RECONCILE_CORRUPT,
         RECONCILE_ORPHAN,
+        RECONCILE_EXPIRED,
     }
 )
 
@@ -405,6 +408,14 @@ def classify_manifest_and_file(
     ):
         return RECONCILE_PENDING
 
+    raw_locations = manifest.get("locations")
+    locations: Mapping[str, Any] = raw_locations if isinstance(raw_locations, Mapping) else {}
+    raw_server = locations.get("server")
+    server_loc: Mapping[str, Any] = raw_server if isinstance(raw_server, Mapping) else {}
+    server_avail = server_loc.get("availability")
+    if manifest.get("file_status") == AVAILABILITY_EXPIRED or server_avail == AVAILABILITY_EXPIRED:
+        return RECONCILE_EXPIRED
+
     if not file_exists:
         return RECONCILE_MISSING
 
@@ -421,7 +432,7 @@ def apply_reconcile_outcome_to_manifest(
     reconciled_at: float,
 ) -> dict[str, Any]:
     """Update availability/integrity metadata on a manifest from reconciliation without mutating receipts."""
-    if outcome not in {RECONCILE_VERIFIED, RECONCILE_PENDING, RECONCILE_MISSING, RECONCILE_CORRUPT}:
+    if outcome not in {RECONCILE_VERIFIED, RECONCILE_PENDING, RECONCILE_MISSING, RECONCILE_CORRUPT, RECONCILE_EXPIRED}:
         raise RetentionError("invalid_reconcile_outcome", f"cannot apply outcome {outcome} to manifest")
 
     updated = deepcopy(dict(manifest))
@@ -448,6 +459,10 @@ def apply_reconcile_outcome_to_manifest(
         updated["file_status"] = INTEGRITY_CORRUPT
         server_loc["availability"] = AVAILABILITY_QUARANTINED
         server_loc["integrity"] = INTEGRITY_CORRUPT
+    elif outcome == RECONCILE_EXPIRED:
+        updated["file_status"] = AVAILABILITY_EXPIRED
+        server_loc["availability"] = AVAILABILITY_EXPIRED
+        server_loc["integrity"] = INTEGRITY_UNVERIFIED
 
     locations["server"] = server_loc
     updated["locations"] = locations
@@ -472,6 +487,7 @@ def build_reconciliation_report(
         RECONCILE_MISSING: 0,
         RECONCILE_CORRUPT: 0,
         RECONCILE_ORPHAN: 0,
+        RECONCILE_EXPIRED: 0,
     }
     item_list: list[dict[str, Any]] = []
     for item in items:

@@ -371,6 +371,36 @@ class ConfigActivationManager:
         """Attach independent recorder reference."""
         self.recorder = recorder
 
+    def reset_session(self, camera_id: str, session_id: str) -> Tuple[str, ...]:
+        """Reset continuity for camera modules at a stream session boundary."""
+        return self.registry.reset_session(camera_id, session_id)
+
+    @staticmethod
+    def _build_lkg_snapshot(
+        parsed_configs: list[CameraModuleConfig],
+        max_version: int,
+        session_id: str,
+    ) -> tuple[dict[str, Any], str]:
+        config_descs = [cfg.describe() for cfg in parsed_configs]
+        snapshot_hash = canonical_bundle_hash(config_descs)
+        provenance = {
+            f"{cfg.module}:{cfg.camera_id}": {
+                "module": cfg.module,
+                "camera_id": cfg.camera_id,
+                "version": cfg.version,
+                "config_hash": cfg.config_hash,
+                "session_id": session_id,
+            }
+            for cfg in parsed_configs
+        }
+        lkg_snapshot = {
+            "observed_version": max_version,
+            "snapshot_hash": snapshot_hash,
+            "configs": config_descs,
+            "provenance": provenance,
+        }
+        return lkg_snapshot, snapshot_hash
+
     def get_high_water_mark(self) -> int:
         return self.store.get_high_water_mark()
 
@@ -495,24 +525,7 @@ class ConfigActivationManager:
             )
 
         # Step 3: Build LKG snapshot and provenance
-        config_descs = [cfg.describe() for cfg in parsed_configs]
-        snapshot_hash = canonical_bundle_hash(config_descs)
-        provenance = {
-            f"{cfg.module}:{cfg.camera_id}": {
-                "module": cfg.module,
-                "camera_id": cfg.camera_id,
-                "version": cfg.version,
-                "config_hash": cfg.config_hash,
-                "session_id": session_id,
-            }
-            for cfg in parsed_configs
-        }
-        lkg_snapshot = {
-            "observed_version": max_version,
-            "snapshot_hash": snapshot_hash,
-            "configs": config_descs,
-            "provenance": provenance,
-        }
+        lkg_snapshot, snapshot_hash = self._build_lkg_snapshot(parsed_configs, max_version, session_id)
 
         # Step 4: Atomically persist activation in SQLite store
         self.store.commit_activation(
@@ -697,24 +710,7 @@ class ConfigActivationManager:
             )
 
         # Step 4: Build new LKG snapshot and provenance
-        config_descs = [cfg.describe() for cfg in parsed_configs]
-        snapshot_hash = canonical_bundle_hash(config_descs)
-        provenance = {
-            f"{cfg.module}:{cfg.camera_id}": {
-                "module": cfg.module,
-                "camera_id": cfg.camera_id,
-                "version": cfg.version,
-                "config_hash": cfg.config_hash,
-                "session_id": session_id,
-            }
-            for cfg in parsed_configs
-        }
-        lkg_snapshot = {
-            "observed_version": max_version,
-            "snapshot_hash": snapshot_hash,
-            "configs": config_descs,
-            "provenance": provenance,
-        }
+        lkg_snapshot, snapshot_hash = self._build_lkg_snapshot(parsed_configs, max_version, session_id)
 
         # Step 5: Atomically advance high-water mark and persist LKG in SQLite store
         self.store.commit_activation(

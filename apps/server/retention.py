@@ -14,6 +14,7 @@ Implements Tasks E03 and E02 reconciliation:
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
@@ -43,9 +44,17 @@ from domain.retention_contract import (
 __all__ = [
     "BACKUP_COLLECTIONS",
     "CentralRetentionManager",
+    "EventContext",
     "create_backup_bundle",
     "restore_and_reconcile",
 ]
+
+
+@dataclass(frozen=True)
+class EventContext:
+    decision: Optional[str] = None
+    severity: Optional[str] = None
+    site_id: Optional[str] = None
 
 BACKUP_COLLECTIONS: tuple[str, ...] = (
     "event_revisions",
@@ -176,7 +185,7 @@ class CentralRetentionManager:
                 return True
         return False
 
-    def _event_context(self, device_id: str, event_id: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    def _event_context(self, device_id: str, event_id: str) -> EventContext:
         severity: Optional[str] = None
         site_id: Optional[str] = None
         for ev in _collection_docs(self.store, "current_events"):
@@ -197,7 +206,7 @@ class CentralRetentionManager:
                 if isinstance(dec, str):
                     decision = dec
                 break
-        return decision, severity, site_id
+        return EventContext(decision=decision, severity=severity, site_id=site_id)
 
     def run_retention_sweep(
         self,
@@ -217,15 +226,15 @@ class CentralRetentionManager:
             event_id = str(record.get("event_id", ""))
             request_id = str(record.get("request_id", ""))
             has_open = self._has_open_retrieval(device_id, event_id, request_id)
-            decision_str, severity_str, site_id = self._event_context(device_id, event_id)
+            ctx = self._event_context(device_id, event_id)
 
             decision = evaluate_retention_candidate(
                 record,
                 now=stamp,
                 policy=self.policy,
                 has_open_retrieval=has_open,
-                review_decision=decision_str,
-                event_severity=severity_str,
+                review_decision=ctx.decision,
+                event_severity=ctx.severity,
             )
             if not decision.eligible_for_delete:
                 kept_items.append(
@@ -247,7 +256,7 @@ class CentralRetentionManager:
                 device_id=device_id,
                 event_id=event_id,
                 request_id=request_id,
-                site_id=site_id,
+                site_id=ctx.site_id,
                 audit_id="audit-" + uuid4().hex[:12],
             )
 
@@ -315,7 +324,7 @@ class CentralRetentionManager:
     ) -> dict[str, Any]:
         """Authorized administrative deletion of clip bytes while keeping immutable manifest receipt."""
         stamp = time.time() if now is None else float(now)
-        _, _, site_id = self._event_context(device_id, event_id)
+        ctx = self._event_context(device_id, event_id)
         audit = authorize_retention_action(
             action=ACTION_CENTRAL_DELETE,
             actor=actor,
@@ -325,7 +334,7 @@ class CentralRetentionManager:
             device_id=device_id,
             event_id=event_id,
             request_id=request_id,
-            site_id=site_id,
+            site_id=ctx.site_id,
             allowed_sites=allowed_sites,
             audit_id="audit-" + uuid4().hex[:12],
         )
@@ -343,8 +352,13 @@ class CentralRetentionManager:
 
         raw_manifest = target_record.get("manifest")
         manifest_dict = dict(raw_manifest) if isinstance(raw_manifest, Mapping) else {}
-        if bool(target_record.get("legal_hold")) or bool(manifest_dict.get("legal_hold")):
-            raise RetentionError("legal_hold_protected", "cannot delete evidence under legal hold")
+        if (
+            bool(target_record.get("legal_hold"))
+            or bool(manifest_dict.get("legal_hold"))
+            or bool(target_record.get("pinned"))
+            or bool(manifest_dict.get("pinned"))
+        ):
+            raise RetentionError("pinned_or_legal_hold_protected", "cannot delete evidence under pin or legal hold")
         if self._has_open_retrieval(device_id, event_id, request_id):
             raise RetentionError("open_retrieval_protected", "cannot delete evidence with open retrieval command")
 
@@ -381,7 +395,7 @@ class CentralRetentionManager:
     ) -> dict[str, Any]:
         """Authorized export of evidence metadata + verified file reference with audit trail."""
         stamp = time.time() if now is None else float(now)
-        _, _, site_id = self._event_context(device_id, event_id)
+        ctx = self._event_context(device_id, event_id)
         audit = authorize_retention_action(
             action=ACTION_CENTRAL_EXPORT,
             actor=actor,
@@ -391,7 +405,7 @@ class CentralRetentionManager:
             device_id=device_id,
             event_id=event_id,
             request_id=request_id,
-            site_id=site_id,
+            site_id=ctx.site_id,
             allowed_sites=allowed_sites,
             audit_id="audit-" + uuid4().hex[:12],
         )

@@ -9,6 +9,7 @@ from __future__ import annotations
 import collections
 import enum
 import logging
+import re
 import shutil
 import threading
 import time
@@ -248,15 +249,11 @@ class EdgeHealthMonitor:
             return obj
         elif isinstance(obj, dict):
             masked = {}
+            _secret_pat = re.compile(
+                r"secret|token|passw|credential|api[_-]?key|private[_-]?key|bearer|signature|auth", re.IGNORECASE
+            )
             for k, v in obj.items():
-                key_str = str(k).lower()
-                is_secret = (
-                    any(secret_key in key_str for secret_key in ("password", "token", "secret", "auth"))
-                    or key_str == "key"
-                    or key_str.endswith("_key")
-                    or key_str.startswith("key_")
-                )
-                if is_secret:
+                if _secret_pat.search(str(k)):
                     masked[k] = "<redacted>"
                 else:
                     masked[k] = self._mask_secrets_in_obj(v)

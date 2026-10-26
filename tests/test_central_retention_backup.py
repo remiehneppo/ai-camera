@@ -27,6 +27,7 @@ from domain.retention_contract import (
     INTEGRITY_CORRUPT,
     INTEGRITY_VERIFIED,
     RECONCILE_CORRUPT,
+    RECONCILE_EXPIRED,
     RECONCILE_MISSING,
     RECONCILE_ORPHAN,
     RECONCILE_PENDING,
@@ -288,6 +289,7 @@ class TestBackupRestoreAndReconciliationProof(unittest.TestCase):
         self.assertEqual(report["counts"][RECONCILE_MISSING], 0)
         self.assertEqual(report["counts"][RECONCILE_CORRUPT], 0)
         self.assertEqual(report["counts"][RECONCILE_ORPHAN], 0)
+        self.assertEqual(report["counts"][RECONCILE_EXPIRED], 0)
         self.assertEqual(len(target_store["event_revisions"]), 2)
         self.assertEqual(len(target_store["event_reviews"]), 1)
 
@@ -296,12 +298,18 @@ class TestBackupRestoreAndReconciliationProof(unittest.TestCase):
         p_miss, sha_miss, sz_miss = _make_clip_file(self.src_evidence, "dev-01", "ev-miss", "req-miss", b"will-be-deleted")
         p_corr, sha_corr, sz_corr = _make_clip_file(self.src_evidence, "dev-01", "ev-corr", "req-corr", b"will-be-tampered")
 
+        exp_rec = _make_manifest_record("dev-01", "ev-expired", "req-exp", file_path=None, sha256="exp-sha", size_bytes=1234, uploaded_at=100.0)
+        exp_rec["status"] = "expired"
+        exp_rec["manifest"]["file_status"] = "expired"
+        exp_rec["manifest"]["locations"]["server"]["availability"] = "expired"
+
         src_store: dict[str, list[dict[str, Any]]] = {
             "evidence_manifests": [
                 _make_manifest_record("dev-01", "ev-ok", "req-ok", file_path=p_ok, sha256=sha_ok, size_bytes=sz_ok, uploaded_at=500.0),
                 _make_manifest_record("dev-01", "ev-miss", "req-miss", file_path=p_miss, sha256=sha_miss, size_bytes=sz_miss, uploaded_at=501.0),
                 _make_manifest_record("dev-01", "ev-corr", "req-corr", file_path=p_corr, sha256=sha_corr, size_bytes=sz_corr, uploaded_at=502.0),
                 _make_manifest_record("dev-01", "ev-pend", "req-pend", file_path=None, sha256=None, size_bytes=None, uploaded_at=503.0, build_state="pending"),
+                exp_rec,
             ],
         }
 
@@ -332,6 +340,7 @@ class TestBackupRestoreAndReconciliationProof(unittest.TestCase):
                 RECONCILE_MISSING: 1,
                 RECONCILE_CORRUPT: 1,
                 RECONCILE_ORPHAN: 1,
+                RECONCILE_EXPIRED: 1,
             },
         )
         self.assertEqual(report["orphan_files"], ["dev-01/ev-orphan/untracked.mkv"])
@@ -352,6 +361,11 @@ class TestBackupRestoreAndReconciliationProof(unittest.TestCase):
         # Original receipt hash and size are still preserved on corrupt clip!
         self.assertEqual(by_event["ev-corr"]["sha256"], sha_corr)
         self.assertEqual(by_event["ev-corr"]["size_bytes"], sz_corr)
+
+        # Legitimate expired clip is classified as RECONCILE_EXPIRED, not MISSING!
+        self.assertEqual(by_event["ev-expired"]["locations"]["server"]["availability"], AVAILABILITY_EXPIRED)
+        self.assertEqual(by_event["ev-expired"]["sha256"], "exp-sha")
+        self.assertEqual(by_event["ev-expired"]["size_bytes"], 1234)
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import time
 from threading import RLock
 from dataclasses import dataclass, field
@@ -87,14 +88,13 @@ class StormGuardPolicy:
             raise ValueError("sample_text_bytes must be an integer >= 32")
 
 
+_SECRET_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"secret|token|passw|credential|api[_-]?key|private[_-]?key|bearer|signature|auth", re.IGNORECASE
+)
+
+
 def _is_secret_key(key: str) -> bool:
-    k = key.lower()
-    return (
-        any(secret in k for secret in ("password", "token", "secret", "auth"))
-        or k == "key"
-        or k.endswith("_key")
-        or k.startswith("key_")
-    )
+    return bool(_SECRET_KEY_PATTERN.search(str(key)))
 
 
 def _bounded_detail(detail: Optional[Mapping[str, Any]], limit: int) -> dict[str, str]:
