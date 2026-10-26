@@ -155,3 +155,31 @@ Kiểm 2026-10-26 bằng `find`/`unzip -l`/`ffprobe`, chạy thật qua `tools/e
    `A3D_frame_labels.zip` → `videos/*.mp4`, hoặc (b) tải video DoTA (`repo/dataset/download_DoTA.py`) vì DoTA có
    annotation theo frame. Khi đó mới dựng `labels.jsonl` + chấm recall/latency.
 6. License: DAD/DoTA/CADP research-only — dùng nội bộ, không commit media, chỉ lưu đường dẫn + hash.
+
+### 10.4 Hai tài nguyên còn thiếu — đã thử lấy và bị chặn (bằng chứng)
+
+**a) Video DoTA: nguồn YouTube đã chết.** `DoTA_urls.txt` có 184 URL; thử `yt-dlp --simulate` 18 URL
+(12 đầu + 6 giữa) → **18/18 "This video is unavailable"**. README của DoTA cũng cảnh báo "high ratio of lost video
+URL". Đường còn lại là bundle Google Drive chính thức (**55 GB** = 5×10 GB + 5 GB, hoặc folder 6 video riêng cho
+các URL hỏng); `drive.google.com` trả 200 và `gdown` đã cài, nên về kỹ thuật là tải được nhưng cần quyết định
+riêng vì 55 GB/hàng giờ. DoTA `annotations/` (4.677 JSON, có `anomaly_start`/`anomaly_end`/`video_start/end`)
+đã có sẵn ⇒ chỉ thiếu video.
+
+**b) Mapping A3D (số hiệu clip ↔ youtube_id) không có trong bản copy này.** Đã kiểm:
+`videos.zip` chỉ chứa `*.mp4`; `A3D_detections.zip` = 1.204 `.pkl` (1.089 positive/115 negative) khoá theo
+`<youtube_id>_<index>_<n>`; `A3D_frame_labels.zip` = **1.087** `.txt` khoá theo `<youtube_id>_<index>`;
+`annotation/*.txt` dùng id số nhưng là object-level; không file `datalist/manifest` nào. GitHub repo search
+`"A3D" accident dashcam` → **0 kết quả**. ⇒ Phải lấy danh sách gốc từ tác giả DAD/A3D (hoặc bản release có kèm
+`datalist`).
+
+**c) Phần đã sẵn sàng để chạy ngay khi có mapping:** `tools/a3d_labels.py` (có test) đọc trực tiếp
+`A3D_frame_labels.zip` — đã chạy thử trên archive thật: **1.087 label file** được parse — rồi ghép với mapping
+JSON bạn cung cấp để sinh `labels.jsonl` (clip, positive, onset 0-based + giây, duration). Tool **không đoán**
+mapping: thiếu/sai thì báo `problem_count` và exit 1.
+
+```sh
+# khi có mapping.json {"<youtube_id>_<index>": "videos/training/positive/000123.mp4", ...}
+.venv-oracle/bin/python tools/a3d_labels.py \
+  --frame-labels .../DAD_A3D/A3D_frame_labels.zip --mapping mapping.json \
+  --videos-root .../DAD_A3D --output-jsonl data/benchmark/a3d_labels.jsonl
+```
