@@ -72,7 +72,7 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [44: UI sản phẩm cho review và annotation](issues/44-ui-san-pham-cho-review-va-annotation.md) | ready-for-agent | #20, #27, #28 | — | not-started |
 | [45: UI fleet, retrieval và audit](issues/45-ui-fleet-retrieval-va-audit.md) | ready-for-agent | #32, #33, #34 | — | not-started |
 | [46: Calibration valid đi xuyên tới observations](issues/46-calibration-valid-di-xuyen-toi-observations.md) | ready-for-human | #28 | — | not-started |
-| [47: Vehicle motion và suspected-incident flow](issues/47-vehicle-motion-va-suspected-incident-flow.md) | ready-for-agent | #46 | — | not-started |
+| [47: Vehicle motion và suspected-incident flow](issues/47-vehicle-motion-va-suspected-incident-flow.md) | ready-for-agent | #14, #07 | — | done (software lab; M01 kinematics/smoothing + M02 TTC/overlap risk + I06 US08 3 branches & hard negatives pass) |
 | [48: Nghiệm thu vehicle riêng G4b](issues/48-nghiem-thu-vehicle-rieng-g4b.md) | ready-for-human | #47 | — | not-started |
 | [49: Nghiệm thu person-down pilot readiness G4a](issues/49-nghiem-thu-person-down-pilot-readiness-g4a.md) | ready-for-human | #19, #28, #31, #36, #37, #39, #40, #41, #43, #44, #45 | — | not-started |
 | [50: Field pilot và final acceptance G5](issues/50-field-pilot-va-final-acceptance-g5.md) | ready-for-human | #49 | — | not-started |

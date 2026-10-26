@@ -32,7 +32,7 @@ def validate_evidence_request(request):
     for field in ("request_id", "session_id"):
         if not isinstance(request[field], str) or not request[field] or len(request[field]) > 128:
             raise ValueError(f"invalid {field}")
-    if request["evidence_anchor_kind"] not in ("onset", "first_qualifying_observation", "synthetic"):
+    if request["evidence_anchor_kind"] not in ("onset", "first_qualifying_observation", "synthetic", "alert_condition"):
         raise ValueError("invalid evidence anchor kind")
     for field in ("evidence_anchor_time", "requested_start", "requested_end", "mapping_uncertainty"):
         value = request[field]
