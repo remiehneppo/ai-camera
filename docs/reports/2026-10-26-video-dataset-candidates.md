@@ -109,3 +109,46 @@ JSON
 3. **Avenue/ShanghaiTech** nếu lấy được: hiệu chuẩn FP trên cảnh "bình thường" đông người.
 4. **VIRAT/UA-DETRAC**: khi bắt đầu #47 vehicle.
 5. Field clips cho #57/#61/#62/#66/#67 — cần người có quyền cung cấp, không thay bằng dataset public.
+
+## 10. Kiểm tra bộ dữ liệu local: `/media/tieubaoca/HDD1/F/dataset/video/fall-accident/`
+
+Đã kiểm bằng `find`/`unzip -l`/`ffprobe` và chạy thật qua `tools/eval_clip.py` (2026-10-26). Tổng 4,6 GB.
+
+| Bộ | Có gì trên đĩa | Dùng được? | Cho việc gì |
+|---|---|---|---|
+| **DAD_A3D** | `videos.zip` 2,7 GB = **1.754 clip** 1280×720@25fps, 4,0 s, chia `training/testing` × `positive/negative` (456/830/166/302); `annotation/*.txt` **620 file** mỗi frame: `video, frame, class(car/motorbike), x1,y1,x2,y2, accident_flag`; thêm `A3D_frame_labels.zip`, `dad_annotations.zip`, `A3D_detections.zip` | **CÓ** (cần `unzip`, 926 GB trống) | Flow + detector/tracker; **proxy cho #47 suspected vehicle incident**: onset = frame đầu tiên `accident_flag=1` (22/25 file mẫu có chuyển 0→1) |
+| **CADP** | `keyframes.tar.gz` 1,5 GB = **28.281 JPEG** theo từng video; `annotations_CADP.json` 226 video (keyframe track, có `type: "Traffic camera views"`); 1 clip mẫu `repo/data/1407.mp4` 2400×1200@25fps | **CHỈ ẢNH** | Eval detector/accident-region trên ảnh; muốn chạy video phải tải clip gốc CADP |
+| **DoTA** | chỉ `repo/` + `dataset/DoTA_annotations.zip`, split, `metadata_train.json`, `download_DoTA.py` — **không có video** | **KHÔNG** | Cần chạy `repo/dataset/download_DoTA.py` để tải video (rất lớn) |
+
+Bằng chứng chạy thật trên 2 clip DAD (một positive, một negative):
+
+| Clip | frames | detections | person | car | pose | events | p50 |
+|---|---|---|---|---|---|---|---|
+| `testing/positive/000543.mp4` | 50 | 113 | 0 | 101 | 0 | 0 | 28,93 ms |
+| `testing/negative/000865.mp4` | 50 | 291 | 196 | 29 | 81 | 0 | 40,12 ms |
+
+Lệnh đã dùng:
+
+```sh
+unzip -l .../DAD_A3D/videos.zip | grep -oE 'videos/[a-z]+/[a-z]+/' | sort | uniq -c
+unzip -o -j .../DAD_A3D/videos.zip 'videos/testing/positive/000543.mp4' -d /tmp/dad_sample
+ffprobe -v error -select_streams v:0 -show_entries stream=width,height,r_frame_rate \
+  -show_entries format=duration -of csv=p=0 /tmp/dad_sample/000543.mp4
+.venv-oracle/bin/python tools/eval_clip.py --video /tmp/dad_sample/000543.mp4 \
+  --video /tmp/dad_sample/000865.mp4 --sample-fps 10 --pose
+```
+
+**Kết luận:**
+
+1. **DAD_A3D là bộ duy nhất dùng được ngay** cho video: 1.754 clip 720p ngắn + nhãn frame-level có accident flag ⇒
+   chấm được **onset + recall/precision + latency** cho nhánh *vehicle accident* (proxy #47), không phải person-down.
+2. **Cả ba đều là accident/dashcam**, không có bộ nào là **person fall** — dù thư mục tên "fall-accident". Với
+   person-down vẫn phải dùng URFD/CAUCAFall (mục 2) hoặc field data.
+3. **ODD khác**: dashcam (DAD/DoTA) và ảnh traffic-camera (CADP) ≠ camera cố định 1080p của lab ⇒ dùng để phát
+   triển/kiểm model, **không** dùng để ký #21/#49.
+4. Annotation phủ **620/1.754 (35%)**; nhãn chỉ có `car`/`motorbike`; clip positive có thể bắt đầu ngay sau onset
+   (000543 toàn flag=1) ⇒ khi chấm phải lọc theo file annotation và tự tính onset, không giả định mọi positive có
+   diễn biến trước va chạm.
+5. **License**: DAD/DoTA/CADP là research-only (thoả thuận của tác giả) — chỉ dùng nội bộ, không commit media, chỉ
+   lưu đường dẫn + hash, đúng luật repo.
+
