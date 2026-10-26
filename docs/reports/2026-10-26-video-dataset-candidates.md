@@ -100,6 +100,8 @@ JSON
 - Reachability hôm nay: URFD **200**, CAUCAFall/Mendeley **200**, VIRAT **200**; CUHK Avenue **000**,
   UCF-Crime **000** (cần mirror/đăng ký trước khi lên kế hoạch).
 
+Đã chạy bước 1: xem [URFD smoke run](2026-10-26-urfd-smoke-run.md) — luồng chạy đúng, 0 event person-down, chưa có nhãn onset để chấm recall.
+
 ## 9. Thứ tự đề xuất
 
 1. **URFD** (nhỏ, có ADL): chạy smoke end-to-end + đo FP/giờ — mở khoá #25/#26 và cho #28 negatives thật.
