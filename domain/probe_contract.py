@@ -24,11 +24,14 @@ __all__ = [
     "FAULT_CODES",
     "FaultSpec",
     "OPERATIONAL_FAULT_TAXONOMY",
+    "PIN_GAP_FAULT_CODE",
     "POLICY_VERSION",
+    "PinGapDetected",
     "ProbeLedger",
     "ProbePolicy",
     "RUNBOOK_PATH",
     "STAGES",
+    "pin_gap_fault_code",
     "stall_fault_code",
 ]
 
@@ -78,19 +81,58 @@ def stall_fault_code(stage: str) -> str:
     return "probe_" + stage + "_stalled"
 
 
+PIN_GAP_FAULT_CODE: Final[str] = "probe_journal_pin_gap"
+
+
+def pin_gap_fault_code(stage: str = "journal") -> str:
+    return "probe_" + stage + "_pin_gap"
+
+
+class PinGapDetected(RuntimeError):
+    """Raised when journal or delivery detects missing or incomplete pin coverage."""
+
+    def __init__(self, message: str = "pin gap detected", *, gap_seconds: float = 0.0) -> None:
+        super().__init__(message)
+        self.gap_seconds = max(0.0, float(gap_seconds))
+
+
 #: One documented fault per stage: metric, window, threshold, owner, runbook and recovery.
 FAULT_CATALOG: Final[dict[str, FaultSpec]] = {
-    stall_fault_code(stage): FaultSpec(
-        code=stall_fault_code(stage),
-        stage=stage,
-        metric="probe_" + stage + "_age_seconds",
+    **{
+        stall_fault_code(stage): FaultSpec(
+            code=stall_fault_code(stage),
+            stage=stage,
+            metric="probe_" + stage + "_age_seconds",
+            window_seconds=300.0,
+            threshold_seconds=120.0,
+            owner="edge-ops",
+            runbook=RUNBOOK_PATH,
+            recovery="restart the " + stage + " stage, then re-run the synthetic probe",
+        )
+        for stage in STAGES
+    },
+    PIN_GAP_FAULT_CODE: FaultSpec(
+        code=PIN_GAP_FAULT_CODE,
+        stage="journal",
+        metric="probe_journal_pin_gap_seconds",
         window_seconds=300.0,
         threshold_seconds=120.0,
         owner="edge-ops",
         runbook=RUNBOOK_PATH,
-        recovery="restart the " + stage + " stage, then re-run the synthetic probe",
-    )
-    for stage in STAGES
+        recovery="verify recorder ring coverage and outbox before restarting journal stage",
+        severity="degraded",
+    ),
+    pin_gap_fault_code("delivery"): FaultSpec(
+        code=pin_gap_fault_code("delivery"),
+        stage="delivery",
+        metric="probe_delivery_pin_gap_seconds",
+        window_seconds=300.0,
+        threshold_seconds=120.0,
+        owner="edge-ops",
+        runbook=RUNBOOK_PATH,
+        recovery="verify recorder ring coverage and outbox before restarting delivery stage",
+        severity="degraded",
+    ),
 }
 
 FAULT_CODES: Final[FrozenSet[str]] = frozenset(FAULT_CATALOG)
@@ -134,6 +176,7 @@ class ProbeLedger:
         self._last_progress: dict[str, float] = {}
         self._checkpoints: dict[str, int] = {stage: 0 for stage in STAGES}
         self._correlations: list[str] = []
+        self._pin_gaps: dict[str, dict[str, Any]] = {}
         self._started_at = float(self._now())
 
     def _clock(self, now: Optional[float]) -> float:
@@ -159,8 +202,33 @@ class ProbeLedger:
         with self._lock:
             return self._last_progress.get(stage)
 
+    def record_pin_gap(
+        self,
+        stage: str = "journal",
+        *,
+        gap_seconds: float = 0.0,
+        at: Optional[float] = None,
+    ) -> None:
+        """Record that a stage observed missing or incomplete pin coverage."""
+        if stage not in STAGES:
+            raise ValueError("stage is not a probe stage")
+        with self._lock:
+            self._pin_gaps[stage] = {
+                "detected_at": self._clock(at),
+                "gap_seconds": max(0.0, float(gap_seconds)),
+            }
+
+    def clear_pin_gap(self, stage: str = "journal") -> None:
+        """Clear recorded pin gap for a stage after healthy progress."""
+        with self._lock:
+            self._pin_gaps.pop(stage, None)
+
+    def pin_gaps(self) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            return dict(self._pin_gaps)
+
     def evaluate(self, *, now: Optional[float] = None) -> list[dict[str, Any]]:
-        """Faults for stages that never progressed or stopped progressing past their budget."""
+        """Faults for stages that never progressed or stopped progressing past their budget, plus pin gaps."""
         stamp = self._clock(now)
         faults: list[dict[str, Any]] = []
         with self._lock:
@@ -192,6 +260,31 @@ class ProbeLedger:
                         "severity": spec.severity,
                     }
                 )
+            for stage, gap_info in self._pin_gaps.items():
+                code = pin_gap_fault_code(stage)
+                if code in FAULT_CATALOG:
+                    spec = FAULT_CATALOG[code]
+                    faults.append(
+                        {
+                            "code": spec.code,
+                            "taxonomy": OPERATIONAL_FAULT_TAXONOMY,
+                            "stage": stage,
+                            "metric": spec.metric,
+                            "window_seconds": spec.window_seconds,
+                            "threshold_seconds": spec.threshold_seconds,
+                            "budget_seconds": self.policy.budget_for(stage),
+                            "observed": {
+                                "last_progress_at": self._last_progress.get(stage),
+                                "gap_seconds": gap_info["gap_seconds"],
+                                "detected_at": gap_info["detected_at"],
+                                "checkpoints": self._checkpoints.get(stage, 0),
+                            },
+                            "owner": spec.owner,
+                            "runbook": spec.runbook,
+                            "recovery": spec.recovery,
+                            "severity": spec.severity,
+                        }
+                    )
         return faults
 
     def snapshot(self, *, now: Optional[float] = None) -> dict[str, Any]:
@@ -209,6 +302,7 @@ class ProbeLedger:
                 for stage in STAGES
             }
             correlations = list(self._correlations)
+            pin_gaps = dict(self._pin_gaps)
         return {
             "policy_version": POLICY_VERSION,
             "taxonomy": OPERATIONAL_FAULT_TAXONOMY,
@@ -219,6 +313,7 @@ class ProbeLedger:
             "fault_count": len(faults),
             "degraded": bool(faults),
             "correlations": correlations,
+            "pin_gaps": pin_gaps,
         }
 
     def reset(self) -> None:
@@ -227,4 +322,5 @@ class ProbeLedger:
             self._last_progress.clear()
             self._checkpoints = {stage: 0 for stage in STAGES}
             self._correlations.clear()
+            self._pin_gaps.clear()
             self._started_at = float(self._now())

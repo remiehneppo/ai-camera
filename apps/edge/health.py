@@ -13,11 +13,12 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from apps.edge.outbox import EventOutbox
 from apps.edge.recorder import FileRecorder
 from apps.edge.rtsp import redact_rtsp_url
+from domain.storm_guard import OUTCOME_MALFORMED, OUTCOMES, StormGuard, StormGuardPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,8 @@ class EdgeHealthMonitor:
         disk_warning_percent: float = 90.0,
         disk_critical_percent: float = 98.0,
         spool_max_len: int = 100,
+        storm_guard: StormGuard | None = None,
+        forensic_sink: Any | None = None,
     ) -> None:
         self.recorder = recorder
         self.recorder_session_id = recorder_session_id
@@ -69,6 +72,18 @@ class EdgeHealthMonitor:
         self.disk_warning_percent = float(disk_warning_percent)
         self.disk_critical_percent = float(disk_critical_percent)
         self.spool_max_len = int(spool_max_len)
+
+        if storm_guard is not None:
+            self.storm_guard = storm_guard
+            if self.storm_guard.storage_available is None:
+                self.storm_guard.storage_available = self._is_storage_available
+            if forensic_sink is not None and self.storm_guard.forensic_sink is None:
+                self.storm_guard.forensic_sink = forensic_sink
+        else:
+            self.storm_guard = StormGuard(
+                storage_available=self._is_storage_available,
+                forensic_sink=forensic_sink,
+            )
 
         self._lock = threading.RLock()
         self._is_started: bool = False
@@ -88,6 +103,7 @@ class EdgeHealthMonitor:
             "recorder": "unknown",
             "outbox": "unknown",
             "backend": "unknown",
+            "storm_guard": "active",
         }
 
         # Bounded telemetry event spool (FIFO)
@@ -155,6 +171,60 @@ class EdgeHealthMonitor:
         with self._lock:
             self._probe_faults = [dict(fault) for fault in list(faults)[:8]]
 
+    def record_ingest_outcome(
+        self,
+        outcome: str,
+        *,
+        device_id: str = "",
+        detail: Mapping[str, Any] | None = None,
+        size_bytes: int | None = None,
+        now: float | None = None,
+    ) -> None:
+        """Record an inbound or edge ingest outcome into edge storm guard."""
+        masked_detail = self._mask_secrets_in_obj(dict(detail)) if detail else None
+        with self._lock:
+            self.storm_guard.record(
+                outcome,
+                device_id=device_id,
+                detail=masked_detail,
+                size_bytes=size_bytes,
+                now=now,
+            )
+
+    def record_malformed_payload(
+        self,
+        detail_or_reason: Mapping[str, Any] | str | None = None,
+        *,
+        device_id: str = "",
+        detail: Mapping[str, Any] | None = None,
+        size_bytes: int | None = None,
+        now: float | None = None,
+    ) -> None:
+        """Record a malformed payload or command received at edge."""
+        merged_detail: dict[str, Any] = {}
+        if isinstance(detail_or_reason, str):
+            merged_detail["reason"] = detail_or_reason
+        elif isinstance(detail_or_reason, Mapping):
+            merged_detail.update(detail_or_reason)
+        if detail:
+            merged_detail.update(detail)
+        self.record_ingest_outcome(
+            OUTCOME_MALFORMED,
+            device_id=device_id,
+            detail=merged_detail if merged_detail else None,
+            size_bytes=size_bytes,
+            now=now,
+        )
+
+    def record_media_failure(self, count: int = 1) -> None:
+        """Record media or forensic write failure at edge."""
+        with self._lock:
+            self.storm_guard.record_sink_failure(count=count)
+
+    def record_sink_failure(self, count: int = 1) -> None:
+        """Alias for record_media_failure."""
+        self.record_media_failure(count=count)
+
     def record_telemetry_event(self, event_type: str, data: dict[str, Any]) -> None:
         """Record a telemetry event in bounded FIFO spool, masking any sensitive fields."""
         masked_data = self._mask_secrets_in_obj(data)
@@ -221,6 +291,19 @@ class EdgeHealthMonitor:
             logger.warning("Failed to inspect disk usage: %s", exc)
             return (0.0, 0, 0)
 
+    def _is_storage_available(self) -> bool:
+        """Check if storage is available (not full and reserve intact)."""
+        disk_percent, disk_free, _ = self._measure_disk()
+        if self.quota_manager is not None:
+            min_reserve = getattr(self.quota_manager, "min_state_reserve_bytes", 0)
+            crit_pct = getattr(self.quota_manager, "critical_percent", self.disk_critical_percent)
+            if disk_free <= min_reserve or disk_percent >= crit_pct:
+                return False
+        else:
+            if disk_percent >= self.disk_critical_percent:
+                return False
+        return True
+
     def _measure_recorder_gap(self) -> float:
         """Measure maximum gap in seconds between segments in active ring."""
         if self.recorder is None or not self.recorder_session_id:
@@ -280,9 +363,9 @@ class EdgeHealthMonitor:
         except Exception:
             return False
 
-    def get_health_snapshot(self) -> dict[str, Any]:
+    def get_health_snapshot(self, *, now: float | None = None) -> dict[str, Any]:
         """Produce a complete, truthful health snapshot."""
-        now = time.time()
+        current_time = time.time() if now is None else float(now)
         disk_percent, disk_free, disk_total = self._measure_disk()
         recorder_gap = self._measure_recorder_gap()
         outbox_pending = self._measure_outbox_pending()
@@ -293,12 +376,12 @@ class EdgeHealthMonitor:
             # 1. Evaluate metrics
             # Frame age
             if self._last_receive_time is not None:
-                receive_age = max(0.0, now - self._last_receive_time)
+                receive_age = max(0.0, current_time - self._last_receive_time)
             else:
                 receive_age = None
 
             if self._clock_mapping_valid and self._last_capture_time is not None:
-                capture_age: float | None = max(0.0, now - self._last_capture_time)
+                capture_age: float | None = max(0.0, current_time - self._last_capture_time)
             else:
                 capture_age = None
 
@@ -392,6 +475,23 @@ class EdgeHealthMonitor:
                     if fault not in reasons:
                         reasons.append(fault)
 
+            # Check edge storm guard
+            storm_snapshot = self.storm_guard.snapshot(now=current_time)
+            storm_degraded = (
+                storm_snapshot.get("degraded", False)
+                or storm_snapshot.get("truncated", False)
+                or storm_snapshot.get("forensic_storage_degraded", False)
+                or storm_snapshot.get("budget_spent", 0) >= storm_snapshot.get("malformed_budget", 1)
+            )
+            if storm_degraded:
+                if status == HealthStatus.HEALTHY:
+                    status = HealthStatus.DEGRADED
+                if "malformed_storm_detected" not in reasons:
+                    reasons.append("malformed_storm_detected")
+                capabilities["storm_guard"] = "degraded"
+            else:
+                capabilities["storm_guard"] = "active"
+
             if self._is_stopped:
                 status = HealthStatus.UNAVAILABLE
                 reasons.insert(0, "system_stopped")
@@ -403,7 +503,8 @@ class EdgeHealthMonitor:
             DEGRADED_REASONS = {
                 "queue_stall", "analytics_hung", "analytics_failed",
                 "recorder_gap_exceeded", "recorder_failed", "disk_near_capacity",
-                "backend_unreachable", "upload_413_payload_too_large"
+                "backend_unreachable", "upload_413_payload_too_large",
+                "malformed_storm_detected",
             }
 
             if status == HealthStatus.UNAVAILABLE:
@@ -432,6 +533,8 @@ class EdgeHealthMonitor:
                 "probe_fault_count": len(probe_faults),
                 "probe_faults": probe_faults,
                 "backend_reachable": backend_ok,
+                "storm_guard": storm_snapshot,
+                "media_write_failures": storm_snapshot.get("media_write_failures", 0),
             }
 
             snapshot: dict[str, Any] = {
@@ -440,6 +543,7 @@ class EdgeHealthMonitor:
                 "all_reasons": reasons,
                 "capabilities": capabilities,
                 "metrics": metrics,
-                "timestamp": now,
+                "storm_guard": storm_snapshot,
+                "timestamp": current_time,
             }
             return snapshot

@@ -1,7 +1,7 @@
 # 41: Malformed storm không ăn hết state reserve
 
 Status: ready-for-agent
-Execution: partial (server ingress guard + healthz/degraded đã có; counter phía edge chưa implement)
+Execution: done (software lab; edge storm guard + health integration + media write failure handling pass)
 Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
 
 **What to build:** Flood payload sai schema và theo dõi bounded forensic samples/counters/truncation ở edge/health.
@@ -11,7 +11,7 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 ## Acceptance criteria
 
 - [x] Duplicate compact nhưng valid incident/revision không compact; unique storm có truncation/degraded rõ.
-- [ ] Quota/limits/rate/counters/retention được kiểm; media không ghi được thì không hứa giữ forensic fact vô hạn.
+- [x] Quota/limits/rate/counters/retention được kiểm; media không ghi được thì không hứa giữ forensic fact vô hạn.
 
 ## Traceability
 
@@ -45,3 +45,14 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
   2 lỗi pre-existing.
   Còn mở: **counter/log phía edge** (`apps/edge/health.py`) cho payload bị từ chối tại edge; chưa inject lỗi
   ghi media (disk full) nên bullet acceptance thứ 2 giữ unchecked; 24h/soak và rate-limit phía proxy chưa đo.
+- 2026-10-27: Hoàn tất phần phía edge và media failure handling trong software lab.
+  `domain/storm_guard.py`: Hỗ trợ `forensic_sink`, `storage_available` predicate, `record_media_failure` /
+  `record_sink_failure`. Khi ghi forensic/media gặp lỗi (`OSError`) hoặc storage hết reserve: guard an toàn
+  bỏ qua sample, tăng `dropped_samples` và `sink_failures` (`media_write_failures`), set
+  `forensic_storage_degraded: True`, không bao giờ ăn vào state reserve hay crash caller.
+  `apps/edge/health.py`: Tích hợp edge `StormGuard`, kiểm tra `_is_storage_available` theo `quota_manager`
+  reserve / critical percent. Expose `record_malformed_payload`, `record_ingest_outcome`, `record_media_failure`.
+  Khi storm guard bị degraded/truncated/storage degraded: health chuyển `HealthStatus.DEGRADED` với primary
+  reason `malformed_storm_detected` (nằm trong `DEGRADED_REASONS`).
+  Evidence: `pytest tests/test_storm_guard.py tests/test_storm_api.py tests/test_health.py -q` ⇒ **48 passed**;
+  `mypy domain/storm_guard.py apps/edge/health.py` sạch.

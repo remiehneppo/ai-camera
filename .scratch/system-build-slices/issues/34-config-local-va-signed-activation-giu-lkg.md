@@ -1,7 +1,7 @@
 # 34: Config local và signed activation giữ LKG
 
 Status: ready-for-agent
-Execution: not-started
+Execution: done (software lab; local & signed config activation + durable SQLite HWM/LKG + recorder isolation pass)
 Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
 
 **What to build:** Stage config local rồi nhận signed bundle hợp lệ; activate tại boundary với desired/observed versions và trust sequence durable.
@@ -10,13 +10,13 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 ## Acceptance criteria
 
-- [ ] Canonical bytes/target/hash/length/expiry/trusted keys được verify; bad/expired/old/uncertain-clock reject.
-- [ ] Local config sai giữ LKG; high-water mark survives reboot, event snapshot/reset semantics đúng, recorder tiếp tục.
+- [x] Canonical bytes/target/hash/length/expiry/trusted keys được verify; bad/expired/old/uncertain-clock reject.
+- [x] Local config sai giữ LKG; high-water mark survives reboot, event snapshot/reset semantics đúng, recorder tiếp tục.
 
 ## Delta requirement được duyệt — 2026-10-20
 
-- [ ] Local config có version/provenance theo module × camera cho enabled, ROI/lịch/ngưỡng/ngoại lệ; activate/reset state tại boundary và desired/observed version rõ, config lỗi giữ LKG, không dùng trạng thái degraded để bỏ qua validation.
-- [ ] Local validation/activation và signed remote activation là hai lát cắt riêng: local config không chờ signed bundle/trust infrastructure; nhánh remote khi bật vẫn phải verify chữ ký/target/expiry và high-water mark durable, không làm yếu LKG/recorder isolation.
+- [x] Local config có version/provenance theo module × camera cho enabled, ROI/lịch/ngưỡng/ngoại lệ; activate/reset state tại boundary và desired/observed version rõ, config lỗi giữ LKG, không dùng trạng thái degraded để bỏ qua validation.
+- [x] Local validation/activation và signed remote activation là hai lát cắt riêng: local config không chờ signed bundle/trust infrastructure; nhánh remote khi bật vẫn phải verify chữ ký/target/expiry và high-water mark durable, không làm yếu LKG/recorder isolation.
 
 ## Traceability
 
@@ -33,3 +33,14 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
 
 - 2026-10-20: Đồng bộ breakdown T3 theo [requirement tình huống/Q36](../../../docs/requirements/urban-safety-scenarios.md) và [ứng viên công nghệ](../../../docs/requirements/technology-candidates.md). Chỉ bổ sung phạm vi/acceptance/gates và dependency được duyệt; giữ Status/Execution, checked criteria, evidence và lịch sử cũ. Không có evidence implementation/benchmark/nghiệm thu mới; mọi acceptance bổ sung còn unchecked.
+- 2026-10-27: Hoàn thành implementation trong software lab.
+  `domain/signed_config.py`: Canonical JSON serialization, `TrustedKey` / `TrustedKeyRing` (role-based allowlist,
+  key rotation/revocation, stdlib HMAC-SHA256 + pluggable custom signature hook); `verify_signed_bundle` kiểm tra
+  đầy đủ payload length, sha256, target device/site/profile mismatch, key authorization, monotonic `trust_sequence` > HWM,
+  expiry và uncertain-clock (`clock_synchronized=False`).
+  `apps/edge/config_activation.py`: `DurableConfigStateStore` (SQLite WAL + FULL sync) đảm bảo HWM và LKG sống sót qua
+  reboot/crash; `ConfigActivationManager` tách bạch 2 path: (a) local activation fail-fast module × camera tại boundary,
+  giữ LKG khi local config sai; (b) signed remote activation kiểm tra chữ ký & HWM & inner config, atomic update HWM + LKG.
+  Bảo đảm recorder isolation: config lỗi không làm dừng hoặc ngắt recorder; event snapshot hash gắn đúng `observed_version`.
+  Evidence: `pytest tests/test_signed_config_activation.py -q` ⇒ **16 passed**;
+  `mypy domain/signed_config.py apps/edge/config_activation.py tests/test_signed_config_activation.py` sạch.

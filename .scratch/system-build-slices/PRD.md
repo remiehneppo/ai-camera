@@ -57,18 +57,18 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [29: Build artifact target reproducible](issues/29-build-artifact-target-reproducible.md) | needs-info | #02, #11 | — | not-started |
 | [30: RKNN thay engine giữ event semantics](issues/30-rknn-thay-engine-giu-event-semantics.md) | ready-for-agent | #28, #29 | — | not-started |
 | [31: Capacity target dưới record/upload/pose load](issues/31-capacity-target-duoi-record-upload-pose-load.md) | ready-for-agent | #28, #18 | #30 nếu RKNN | not-started |
-| [32: Retained evidence truy hồi có authorization](issues/32-retained-evidence-truy-hoi-co-authorization.md) | ready-for-agent | #08, #18 | — | not-started |
+| [32: Retained evidence truy hồi có authorization](issues/32-retained-evidence-truy-hoi-co-authorization.md) | ready-for-agent | #08, #18 | — | done (software lab; device channel + server settle tested) |
 | [33: Device lifecycle và site access được enforce](issues/33-device-lifecycle-va-site-access-duoc-enforce.md) | ready-for-agent | #05, #08, #17 | — | done (software lab; device lifecycle, quarantine/revoke, site scoping, cross-site deny) |
-| [34: Config local và signed activation giữ LKG](issues/34-config-local-va-signed-activation-giu-lkg.md) | ready-for-agent | #03, #16, #33 | — | not-started |
+| [34: Config local và signed activation giữ LKG](issues/34-config-local-va-signed-activation-giu-lkg.md) | ready-for-agent | #03, #16, #33 | — | done (software lab; local & signed config activation + durable SQLite HWM/LKG + recorder isolation pass) |
 | [35: Canary và rollback có authorization mới](issues/35-canary-va-rollback-co-authorization-moi.md) | ready-for-agent | #34, #28 | #30 nếu RKNN | not-started |
 | [36: WAN outage giữ event/evidence rồi resume](issues/36-wan-outage-giu-event-evidence-roi-resume.md) | ready-for-agent | #18, #32 | — | not-started |
 | [37: Power-cut kiểm chứng local durability](issues/37-power-cut-kiem-chung-local-durability.md) | ready-for-human | #09, #18, #02 | — | not-started |
 | [38: Native crash recovery đạt RTO](issues/38-native-crash-recovery-dat-rto.md) | ready-for-agent | #16, #17, #31 | — | not-started |
 | [39: Provisioning và watchdog tái tạo được](issues/39-provisioning-va-watchdog-tai-tao-duoc.md) | ready-for-agent | #35, #38 | — | not-started |
-| [40: Synthetic probe báo operational fault riêng](issues/40-synthetic-probe-bao-operational-fault-rieng.md) | ready-for-agent | #17, #05 | — | not-started |
-| [41: Malformed storm không ăn hết state reserve](issues/41-malformed-storm-khong-an-het-state-reserve.md) | ready-for-agent | #18, #05 | — | not-started |
+| [40: Synthetic probe báo operational fault riêng](issues/40-synthetic-probe-bao-operational-fault-rieng.md) | ready-for-agent | #17, #05 | — | done (software lab; pin-gap fault injection + scheduler runtime integration pass) |
+| [41: Malformed storm không ăn hết state reserve](issues/41-malformed-storm-khong-an-het-state-reserve.md) | ready-for-agent | #18, #05 | — | done (software lab; edge storm guard + health integration + media write failure handling pass) |
 | [42: Downstream delivery theo protocol được bật](issues/42-downstream-delivery-theo-protocol-duoc-bat.md) | needs-info | #27, #05, #33 | — | not-started |
-| [43: Central retention và backup/restore có proof](issues/43-central-retention-va-backup-restore-co-proof.md) | ready-for-agent | #08, #33 | — | not-started |
+| [43: Central retention và backup/restore có proof](issues/43-central-retention-va-backup-restore-co-proof.md) | ready-for-agent | #08, #33 | — | done (software lab; central retention manager + backup/restore reconciliation proof pass) |
 | [44: UI sản phẩm cho review và annotation](issues/44-ui-san-pham-cho-review-va-annotation.md) | ready-for-agent | #20, #27, #28 | — | not-started |
 | [45: UI fleet, retrieval và audit](issues/45-ui-fleet-retrieval-va-audit.md) | ready-for-agent | #32, #33, #34 | — | not-started |
 | [46: Calibration valid đi xuyên tới observations](issues/46-calibration-valid-di-xuyen-toi-observations.md) | ready-for-human | #28 | — | not-started |

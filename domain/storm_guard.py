@@ -87,6 +87,16 @@ class StormGuardPolicy:
             raise ValueError("sample_text_bytes must be an integer >= 32")
 
 
+def _is_secret_key(key: str) -> bool:
+    k = key.lower()
+    return (
+        any(secret in k for secret in ("password", "token", "secret", "auth"))
+        or k == "key"
+        or k.endswith("_key")
+        or k.startswith("key_")
+    )
+
+
 def _bounded_detail(detail: Optional[Mapping[str, Any]], limit: int) -> dict[str, str]:
     """Keep a small, flat, bounded summary: never a payload dump, never a secret value."""
     if not detail:
@@ -97,7 +107,7 @@ def _bounded_detail(detail: Optional[Mapping[str, Any]], limit: int) -> dict[str
         value = detail[key]
         if isinstance(value, (Mapping, list, tuple, set)):
             continue
-        text = str(value)[:64]
+        text = "<redacted>" if _is_secret_key(str(key)) else str(value)[:64]
         cost = len(str(key)) + len(text) + 4
         if cost > budget:
             break
@@ -112,6 +122,9 @@ class StormGuard:
 
     policy: StormGuardPolicy = field(default_factory=StormGuardPolicy)
     _now: Callable[[], float] = time.time
+    forensic_sink: Optional[Callable[[dict[str, Any]], Any]] = None
+    storage_available: Optional[Callable[[], bool]] = None
+    media_write_hook: Optional[Callable[[dict[str, Any]], Any]] = None
     # FastAPI serves sync endpoints from a worker thread while the event loop records
     # ingest outcomes, so the window is shared mutable state across threads.
     _lock: RLock = field(default_factory=RLock, init=False, repr=False)
@@ -119,9 +132,21 @@ class StormGuard:
     _counts: dict[str, int] = field(default_factory=dict, init=False)
     _samples: list[dict[str, Any]] = field(default_factory=list, init=False)
     _dropped_samples: int = field(default=0, init=False)
+    _sink_failures: int = field(default=0, init=False)
+    _forensic_storage_degraded: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         self._window_started_at = float(self._now())
+        if self.forensic_sink is None and self.media_write_hook is not None:
+            self.forensic_sink = self.media_write_hook
+
+    def _check_storage_available(self) -> bool:
+        if self.storage_available is None:
+            return True
+        try:
+            return bool(self.storage_available())
+        except Exception:
+            return False
 
     # -- window ----------------------------------------------------------
 
@@ -132,6 +157,20 @@ class StormGuard:
         self._counts = {}
         self._samples = []
         self._dropped_samples = 0
+        self._sink_failures = 0
+        self._forensic_storage_degraded = False
+
+    def record_sink_failure(self, *, count: int = 1) -> None:
+        """Record external media or forensic sink failure."""
+        with self._lock:
+            n = max(1, int(count))
+            self._sink_failures += n
+            self._dropped_samples += n
+            self._forensic_storage_degraded = True
+
+    def record_media_failure(self, *, count: int = 1) -> None:
+        """Alias for record_sink_failure."""
+        self.record_sink_failure(count=count)
 
     def _clock(self, now: Optional[float]) -> float:
         return float(self._now()) if now is None else float(now)
@@ -193,6 +232,24 @@ class StormGuard:
             "size_bytes": int(size_bytes) if isinstance(size_bytes, int) else None,
             "detail": _bounded_detail(detail, self.policy.sample_text_bytes),
         }
+
+        # Check storage availability first
+        if not self._check_storage_available():
+            self._dropped_samples += 1
+            self._sink_failures += 1
+            self._forensic_storage_degraded = True
+            return
+
+        # Attempt to write to forensic sink if configured
+        if self.forensic_sink is not None:
+            try:
+                self.forensic_sink(sample)
+            except Exception:
+                self._dropped_samples += 1
+                self._sink_failures += 1
+                self._forensic_storage_degraded = True
+                return
+
         if self.policy.forensic_samples == 0:
             # Forensics explicitly disabled: count the drop, keep nothing, never crash.
             self._dropped_samples += 1
@@ -212,7 +269,13 @@ class StormGuard:
         now = self._clock(now)
         self._roll(now)
         budgeted = sum(self._counts.get(outcome, 0) for outcome in BUDGETED_OUTCOMES)
-        degraded = budgeted >= self.policy.malformed_budget or self._dropped_samples > 0
+        storage_ok = self._check_storage_available()
+        forensic_storage_degraded = bool(self._forensic_storage_degraded or not storage_ok or self._sink_failures > 0)
+        degraded = (
+            budgeted >= self.policy.malformed_budget
+            or self._dropped_samples > 0
+            or forensic_storage_degraded
+        )
         return {
             "policy_version": POLICY_VERSION,
             "window_seconds": self.policy.window_seconds,
@@ -225,6 +288,9 @@ class StormGuard:
             "degraded": degraded,
             "truncated": self._dropped_samples > 0,
             "dropped_samples": self._dropped_samples,
+            "sink_failures": self._sink_failures,
+            "media_write_failures": self._sink_failures,
+            "forensic_storage_degraded": forensic_storage_degraded,
             # Deep enough that a caller cannot mutate the guard's own window through a report.
             "forensics": [{**sample, "detail": dict(sample["detail"])} for sample in self._samples],
             "retry_after_seconds": self.retry_after_seconds(now=now) if budgeted >= self.policy.malformed_budget else 0,

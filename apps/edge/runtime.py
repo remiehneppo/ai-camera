@@ -18,6 +18,7 @@ from typing import Any
 
 from apps.edge.evidence import EvidenceLifecycle
 from apps.edge.outbox import EventOutbox
+from apps.edge.probe import ProbeScheduler
 from apps.edge.recorder import FileRecorder, Segment
 from domain.alert_module_config import AlertModuleRegistry
 
@@ -157,7 +158,8 @@ class EdgeRuntime:
                  io_timeout_seconds: float = 30,
                  environment: str = 'lab', expected_artifact: dict[str, Any] | None = None,
                  module_registry: AlertModuleRegistry | None = None,
-                 module_session: str | None = None) -> None:
+                 module_session: str | None = None,
+                 probe_scheduler: ProbeScheduler | None = None) -> None:
         for name, value in (('sample_fps', sample_fps), ('segment_seconds', segment_seconds),
                             ('ring_seconds', ring_seconds), ('stop_timeout_seconds', stop_timeout_seconds),
                             ('io_timeout_seconds', io_timeout_seconds)):
@@ -220,6 +222,7 @@ class EdgeRuntime:
         self._closed = False
         self._pids: dict[str, int | None] = {'recorder': None, 'analytics': None}
         self._cleaned: set[int] = set()
+        self._probe_scheduler: ProbeScheduler | None = probe_scheduler
 
     def reconcile_result(self) -> dict[str, Any] | None:
         return self._reconcile_result
@@ -244,6 +247,8 @@ class EdgeRuntime:
             outbox = EventOutbox(self._outbox_path)
             self._reconcile_result = EvidenceLifecycle(outbox, self._ring).reconcile()
         self._started = True
+        if self._probe_scheduler is not None:
+            self._probe_scheduler.start()
         self._recorder_state = 'starting'
         self._recorder = self._context.Process(target=_recorder_worker,
                                                args=(self._values, self._recorder_sender))
@@ -270,6 +275,8 @@ class EdgeRuntime:
     def _refresh(self) -> None:
         if self._closed:
             return
+        if self._probe_scheduler is not None:
+            self._probe_scheduler.tick()
         while not self._transport_closed and len(self._observations) < self._retention:
             try:
                 self._observations.append(self._observation_messages.get_nowait())
@@ -311,7 +318,7 @@ class EdgeRuntime:
                    or bool(self._recorder and self._recorder.is_alive())
                    or bool(self._analytics and self._analytics.is_alive()))
         failed = self._recorder_state == 'failed' or self._analytics_state == 'failed'
-        return {'origin': 'replay', 'camera_id': self._values['camera_id'],
+        st: dict[str, Any] = {'origin': 'replay', 'camera_id': self._values['camera_id'],
                 'stream_session_id': self._values['session_id'],
                 'core_epoch': self._core_epoch,
                 'outcome': 'running' if running else ('failed' if failed else 'ok'),
@@ -324,6 +331,12 @@ class EdgeRuntime:
                               'alive': bool(self._analytics and self._analytics.is_alive())},
                 'queue_capacity': self._queue_capacity, 'transport_inflight_bound': 1,
                 'transport_message_bytes': 4 * 1024 * 1024, 'observations_retained': len(self._observations)}
+        if self._probe_scheduler is not None:
+            probe_report = self._probe_scheduler.last_report
+            st['probe'] = probe_report
+            if probe_report is not None and probe_report.get('degraded'):
+                st['degraded'] = True
+        return st
 
     def wait(self, timeout_seconds: float | None = None) -> dict[str, Any]:
         deadline = None if timeout_seconds is None else time.monotonic() + timeout_seconds
@@ -393,6 +406,8 @@ class EdgeRuntime:
             pass
 
     def stop(self) -> dict[str, Any]:
+        if self._probe_scheduler is not None:
+            self._probe_scheduler.stop(self._stop_budget)
         self.stop_analytics()
         if self._recorder is not None and self._recorder.is_alive():
             self._recorder.terminate()
@@ -410,6 +425,8 @@ class EdgeRuntime:
     def _close(self) -> None:
         if self._closed:
             return
+        if self._probe_scheduler is not None:
+            self._probe_scheduler.stop(self._stop_budget)
         for receiver in (self._recorder_messages, self._analytics_messages, self._observation_messages):
             receiver.close()
         for sender in (self._recorder_sender, self._analytics_sender, self._observation_sender):
@@ -453,3 +470,12 @@ class EdgeRuntime:
         self._refresh()
         result, self._observations = self._observations, []
         return deepcopy(result)
+
+    def tick_probe(self, now: float | None = None) -> dict[str, Any] | None:
+        if self._probe_scheduler is not None:
+            return self._probe_scheduler.tick(now)
+        return None
+
+    @property
+    def probe_scheduler(self) -> ProbeScheduler | None:
+        return self._probe_scheduler

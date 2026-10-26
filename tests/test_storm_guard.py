@@ -172,5 +172,119 @@ class ForensicTests(unittest.TestCase):
                 StormGuardPolicy(**policy)
 
 
+class MediaFailureAndSinkTests(unittest.TestCase):
+    def test_forensic_sink_receives_sample_and_bounds_retention(self):
+        sink_samples = []
+        clock = Clock()
+        g = StormGuard(
+            StormGuardPolicy(malformed_budget=5, forensic_samples=2),
+            _now=clock,
+            forensic_sink=lambda s: sink_samples.append(s),
+        )
+        # Duplicate and accepted outcomes must NOT trigger forensic sink
+        g.record(OUTCOME_ACCEPTED, now=clock.now)
+        g.record(OUTCOME_DUPLICATE, now=clock.now)
+        self.assertEqual(len(sink_samples), 0)
+
+        # Malformed triggers sink
+        g.record(OUTCOME_MALFORMED, device_id="dev-1", detail={"reason": "schema"}, now=clock.now)
+        self.assertEqual(len(sink_samples), 1)
+        self.assertEqual(sink_samples[0]["outcome"], OUTCOME_MALFORMED)
+        self.assertEqual(sink_samples[0]["device_id"], "dev-1")
+
+        snap = g.snapshot(now=clock.now)
+        self.assertFalse(snap["forensic_storage_degraded"])
+        self.assertEqual(snap["sink_failures"], 0)
+        self.assertEqual(snap["media_write_failures"], 0)
+
+    def test_forensic_sink_oserror_drops_sample_and_sets_degraded(self):
+        def failing_sink(sample):
+            raise OSError(28, "No space left on device")
+
+        clock = Clock()
+        g = StormGuard(
+            StormGuardPolicy(malformed_budget=10, forensic_samples=3),
+            _now=clock,
+            forensic_sink=failing_sink,
+        )
+        # Must not raise to caller on OSError
+        g.record(OUTCOME_MALFORMED, device_id="dev-fail", detail={"err": "bad"}, now=clock.now)
+
+        snap = g.snapshot(now=clock.now)
+        self.assertEqual(snap["dropped_samples"], 1)
+        self.assertEqual(snap["sink_failures"], 1)
+        self.assertEqual(snap["media_write_failures"], 1)
+        self.assertTrue(snap["forensic_storage_degraded"])
+        self.assertTrue(snap["degraded"])
+        self.assertTrue(snap["truncated"])
+        self.assertEqual(snap["forensics"], [], "failed sample is dropped and not retained")
+
+    def test_storage_unavailable_drops_sample_and_sets_degraded(self):
+        storage_ok = True
+        clock = Clock()
+        g = StormGuard(
+            StormGuardPolicy(malformed_budget=10, forensic_samples=3),
+            _now=clock,
+            storage_available=lambda: storage_ok,
+        )
+        g.record(OUTCOME_MALFORMED, device_id="dev-1", now=clock.now)
+        self.assertFalse(g.snapshot(now=clock.now)["forensic_storage_degraded"])
+        self.assertEqual(len(g.snapshot(now=clock.now)["forensics"]), 1)
+
+        # Simulate storage becoming unavailable (disk full / reserve reached)
+        storage_ok = False
+        snap_before = g.snapshot(now=clock.now)
+        self.assertTrue(snap_before["forensic_storage_degraded"])
+        self.assertTrue(snap_before["degraded"])
+
+        # Recording malformed payload drops sample and increments failures
+        g.record(OUTCOME_MALFORMED, device_id="dev-2", now=clock.now)
+        snap_after = g.snapshot(now=clock.now)
+        self.assertEqual(snap_after["dropped_samples"], 1)
+        self.assertEqual(snap_after["sink_failures"], 1)
+        self.assertEqual(snap_after["media_write_failures"], 1)
+        # In-memory forensics was not grown with the dropped sample
+        self.assertEqual(len(snap_after["forensics"]), 1)
+
+    def test_media_write_hook_compat_and_record_failure_direct(self):
+        hook_called = []
+        clock = Clock()
+        g = StormGuard(
+            StormGuardPolicy(malformed_budget=5, forensic_samples=2),
+            _now=clock,
+            media_write_hook=lambda s: hook_called.append(s),
+        )
+        g.record(OUTCOME_MALFORMED, device_id="dev-hook", now=clock.now)
+        self.assertEqual(len(hook_called), 1)
+
+        # Direct recording of media write failure
+        g.record_media_failure(count=2)
+        snap = g.snapshot(now=clock.now)
+        self.assertEqual(snap["media_write_failures"], 2)
+        self.assertEqual(snap["sink_failures"], 2)
+        self.assertEqual(snap["dropped_samples"], 2)
+        self.assertTrue(snap["forensic_storage_degraded"])
+
+    def test_sample_detail_redacts_secrets(self):
+        clock = Clock()
+        g = StormGuard(_now=clock)
+        g.record(
+            OUTCOME_MALFORMED,
+            device_id="dev-secret",
+            detail={
+                "auth_token": "Bearer super-secret-token",
+                "api_key": "xyz-12345",
+                "user_password": "mypassword",
+                "safe_param": "hello",
+            },
+            now=clock.now,
+        )
+        sample = g.snapshot(now=clock.now)["forensics"][0]
+        self.assertEqual(sample["detail"]["auth_token"], "<redacted>")
+        self.assertEqual(sample["detail"]["api_key"], "<redacted>")
+        self.assertEqual(sample["detail"]["user_password"], "<redacted>")
+        self.assertEqual(sample["detail"]["safe_param"], "hello")
+
+
 if __name__ == "__main__":
     unittest.main()

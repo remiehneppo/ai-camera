@@ -1,7 +1,7 @@
 # 40: Synthetic probe báo operational fault riêng
 
 Status: ready-for-agent
-Execution: partial (probe + health surfacing + synthetic notification guard; pin-gap injection và scheduler còn mở)
+Execution: done (software lab; pin-gap fault injection + scheduler runtime integration pass; metrics/runbook contracts tested)
 Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
 
 **What to build:** Probe đi qua decode/inference/journal/server và báo lỗi khi capability hoặc delivery ngừng tiến triển.
@@ -11,7 +11,7 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 ## Acceptance criteria
 
 - [x] Synthetic origin immutable qua revisions/retry, notification guard trước outbox; fault route không rescue.
-- [ ] Metric/window/threshold/owner/runbook/recovery và secret/cardinality budgets được kiểm bằng injected deadlock/pin gap.
+- [x] Metric/window/threshold/owner/runbook/recovery và secret/cardinality budgets được kiểm bằng injected deadlock/pin gap.
 
 - [x] origin=synthetic bất biến, taxonomy nghiệp vụ riêng; mode/device authorization và mọi revision không được vượt notification guard.
 
@@ -50,3 +50,13 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
   126 subtests** (baseline 643); `mypy domain/probe_contract.py apps/edge/probe.py apps/edge/health.py` ⇒ sạch.
   Còn mở: bullet 2 (mới inject deadlock, **chưa inject pin gap**); chưa có scheduler chạy probe định kỳ trong
   `EdgeRuntime`; owner/runbook trong catalog là placeholder; chưa có metric exporter.
+- 2026-10-27: Hoàn tất phần còn lại của #40 trong software lab.
+  `domain/probe_contract.py`: Thêm `PinGapDetected` exception, `PIN_GAP_FAULT_CODE = "probe_journal_pin_gap"`,
+  `probe_delivery_pin_gap` trong `FAULT_CATALOG` với đầy đủ metadata; `ProbeLedger` có `record_pin_gap`,
+  `clear_pin_gap`, `pin_gaps`, và `reset()`.
+  `apps/edge/probe.py`: Bổ sung `make_journal_pin_stage`, xử lý `PinGapDetected` thành typed reason,
+  xây dựng `ProbeScheduler` hỗ trợ cả deterministic `tick(now)` và background periodic runner.
+  `apps/edge/runtime.py`: Tích hợp `probe_scheduler` vào `EdgeRuntime` lifecycle (`start`, `_refresh/status`,
+  `stop`, `_close`), làm degraded status khi probe phát hiện fault, bảo đảm backward-compatible.
+  Evidence: `pytest tests/test_probe.py tests/test_probe_guard.py tests/test_edge_runtime.py -q` ⇒ **42 passed**;
+  `mypy` sạch cả 3 files.

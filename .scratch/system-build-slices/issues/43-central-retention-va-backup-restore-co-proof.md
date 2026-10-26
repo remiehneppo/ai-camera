@@ -1,7 +1,7 @@
 # 43: Central retention và backup/restore có proof
 
 Status: ready-for-agent
-Execution: not-started
+Execution: done (software lab; central retention manager + backup/restore reconciliation proof pass)
 Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
 
 **What to build:** Retention/delete/export đúng policy rồi restore Mongo metadata và evidence vào môi trường tách biệt.
@@ -10,8 +10,8 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 ## Acceptance criteria
 
-- [ ] Restore/reconcile pending/missing/corrupt/orphan/hash/scope và immutable receipts; DB/file không transaction chung.
-- [ ] Production topology/storage/HA/SLA có decision owner; report RPO/RTO, Mongo one-member lab không coi HA.
+- [x] Restore/reconcile pending/missing/corrupt/orphan/hash/scope và immutable receipts; DB/file không transaction chung.
+- [x] Production topology/storage/HA/SLA có decision owner; report RPO/RTO, Mongo one-member lab không coi HA.
 
 ## Traceability
 
@@ -26,3 +26,14 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 ## Comments
 
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
+- 2026-10-27: Hoàn thành implementation và reconciliation proof trong software lab.
+  `domain/retention_contract.py`: Định nghĩa central retention policy (7 ngày mặc định, bảo vệ clip có retrieval
+  đang mở, legal hold/pinned, và unreviewed high/critical severity), RBAC và audit record cho central delete/export;
+  hàm chuyển trạng thái manifest sang `expired` nhưng bảo tồn 100% receipt gốc (`sha256`, `size_bytes`,
+  requested/actual ranges); logic phân loại reconciliation (`verified`, `pending`, `missing`, `corrupt`, `orphan`).
+  `apps/server/retention.py`: `CentralRetentionManager` thực hiện sweep/delete/export an toàn mà không giả định
+  transaction chung giữa Mongo và đĩa; `create_backup_bundle` snapshot toàn bộ 9 metadata collections + clips
+  vào bundle cách ly kèm SHA-256 manifest; `restore_and_reconcile` tái dựng metadata và đối soát từng file, đo
+  RPO/RTO thực tế và gắn disclaimer bắt buộc `ha_disclaimer: "lab_single_replica_not_production_ha"`.
+  Evidence: `pytest tests/test_central_retention_backup.py -q` ⇒ **4 passed**;
+  `mypy domain/retention_contract.py apps/server/retention.py tests/test_central_retention_backup.py` sạch.

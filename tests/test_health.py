@@ -12,6 +12,7 @@ from apps.edge.outbox import EventOutbox
 from apps.edge.recorder import FileRecorder
 from apps.edge.pipeline import PerceptionPipeline
 from apps.edge.live_pipeline import LivePerceptionRunner
+from domain.storm_guard import StormGuard, StormGuardPolicy, OUTCOME_ACCEPTED, OUTCOME_DUPLICATE, OUTCOME_MALFORMED
 
 
 class TestEdgeHealthMonitor(unittest.TestCase):
@@ -260,3 +261,106 @@ class TestEdgeHealthMonitor(unittest.TestCase):
         self.assertEqual(snapshot["status"], "degraded")
         self.assertIn("upload_413_payload_too_large", snapshot["all_reasons"])
         self.assertEqual(snapshot["metrics"]["operational_fault_count"], 1)
+
+    def test_storm_guard_summary_and_counters_in_health_snapshot(self):
+        monitor = EdgeHealthMonitor()
+        monitor.mark_started()
+        monitor.record_frame_received()
+
+        # Accepted and duplicate outcomes stay compact
+        monitor.record_ingest_outcome(OUTCOME_ACCEPTED, device_id="dev-1")
+        monitor.record_ingest_outcome(OUTCOME_DUPLICATE, device_id="dev-1")
+
+        snapshot = monitor.get_health_snapshot()
+        self.assertEqual(snapshot["status"], "healthy")
+        self.assertIn("storm_guard", snapshot)
+        self.assertIn("storm_guard", snapshot["metrics"])
+        self.assertEqual(snapshot["storm_guard"]["counts"]["accepted"], 1)
+        self.assertEqual(snapshot["storm_guard"]["counts"]["duplicate"], 1)
+        self.assertEqual(snapshot["storm_guard"]["budget_spent"], 0)
+        self.assertEqual(snapshot["capabilities"]["storm_guard"], "active")
+
+    def test_malformed_storm_transitions_health_to_degraded(self):
+        guard = StormGuard(StormGuardPolicy(malformed_budget=2, forensic_samples=2))
+        monitor = EdgeHealthMonitor(storm_guard=guard)
+        monitor.mark_started()
+        monitor.record_frame_received()
+        self.assertEqual(monitor.get_health_snapshot()["status"], "healthy")
+
+        # 1st malformed payload (budget not exhausted yet)
+        monitor.record_malformed_payload("invalid_schema_field", device_id="dev-1")
+        snap1 = monitor.get_health_snapshot()
+        self.assertEqual(snap1["status"], "healthy")
+        self.assertEqual(snap1["storm_guard"]["budget_spent"], 1)
+
+        # 2nd malformed payload (budget exhausted -> storm degraded)
+        monitor.record_malformed_payload("syntax_error", device_id="dev-1")
+        snap2 = monitor.get_health_snapshot()
+        self.assertEqual(snap2["status"], "degraded")
+        self.assertEqual(snap2["reason"], "malformed_storm_detected")
+        self.assertIn("malformed_storm_detected", snap2["all_reasons"])
+        self.assertEqual(snap2["capabilities"]["storm_guard"], "degraded")
+        self.assertEqual(snap2["storm_guard"]["budget_spent"], 2)
+        self.assertTrue(snap2["storm_guard"]["degraded"])
+
+    def test_media_write_failure_forensic_drops_and_degrades(self):
+        def failing_sink(sample):
+            raise OSError(28, "No space left on device")
+
+        guard = StormGuard(StormGuardPolicy(malformed_budget=10, forensic_samples=5), forensic_sink=failing_sink)
+        monitor = EdgeHealthMonitor(storm_guard=guard)
+        monitor.mark_started()
+        monitor.record_frame_received()
+
+        # Malformed payload triggers forensic write, which fails with OSError
+        # Must drop sample, not crash or propagate OSError
+        monitor.record_malformed_payload("bad_payload", device_id="dev-edge")
+
+        snapshot = monitor.get_health_snapshot()
+        self.assertEqual(snapshot["status"], "degraded")
+        self.assertEqual(snapshot["reason"], "malformed_storm_detected")
+        self.assertEqual(snapshot["storm_guard"]["dropped_samples"], 1)
+        self.assertEqual(snapshot["storm_guard"]["sink_failures"], 1)
+        self.assertEqual(snapshot["storm_guard"]["media_write_failures"], 1)
+        self.assertTrue(snapshot["storm_guard"]["forensic_storage_degraded"])
+        self.assertEqual(snapshot["metrics"]["media_write_failures"], 1)
+
+    def test_disk_reserve_hit_during_storm_drops_forensics(self):
+        monitor = EdgeHealthMonitor(disk_warning_percent=80.0, disk_critical_percent=95.0)
+        monitor.mark_started()
+        monitor.record_frame_received()
+
+        # Simulate disk near warning capacity (85%)
+        monitor._measure_disk = lambda: (85.0, 1500000, 10000000)
+        snap1 = monitor.get_health_snapshot()
+        self.assertEqual(snap1["status"], "degraded")
+        self.assertEqual(snap1["reason"], "disk_near_capacity")
+
+        # Now simulate disk reserve reached / storage unavailable during storm
+        monitor.storm_guard.storage_available = lambda: False
+        monitor.record_malformed_payload("corrupt_event", device_id="edge-1")
+
+        snap2 = monitor.get_health_snapshot()
+        self.assertEqual(snap2["status"], "degraded")
+        self.assertIn("malformed_storm_detected", snap2["all_reasons"])
+        self.assertEqual(snap2["storm_guard"]["dropped_samples"], 1)
+        self.assertTrue(snap2["storm_guard"]["forensic_storage_degraded"])
+
+    def test_secrets_masking_in_malformed_payload_forensics(self):
+        monitor = EdgeHealthMonitor()
+        monitor.record_malformed_payload(
+            detail={
+                "auth_token": "Bearer super-secret",
+                "api_key": "top-secret-key",
+                "password": "secret-pass",
+                "field_error": "missing timestamp",
+            }
+        )
+        snapshot = monitor.get_health_snapshot()
+        forensics = snapshot["storm_guard"]["forensics"]
+        self.assertEqual(len(forensics), 1)
+        detail = forensics[0]["detail"]
+        self.assertEqual(detail["auth_token"], "<redacted>")
+        self.assertEqual(detail["api_key"], "<redacted>")
+        self.assertEqual(detail["password"], "<redacted>")
+        self.assertEqual(detail["field_error"], "missing timestamp")
