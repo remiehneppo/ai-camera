@@ -229,3 +229,27 @@ này sẽ nằm im.
   `ffmpeg -framerate 10 -i Test032/%03d.tif -c:v libx264 -pix_fmt yuv420p Test032.mp4`.
 - Giá trị của UCSD với dự án nằm ở **Train = cảnh bình thường, camera cố định** ⇒ dùng làm **hard negatives** để đo
   **FP/giờ** cho person-down (đúng thứ #28 cần), không phải để đo recall fall.
+
+### 11.6 UCSD: đã tải xong, đã verify và đã chạy (cập nhật cuối)
+
+- Tải đủ **740.306.953 / 740.306.953 byte**, `gzip -t` = **OK** (lần đầu bị cắt ở 310 MB, resume `curl -C -` 3 lượt).
+- Cấu trúc: `UCSD_Anomaly_Dataset.v1p2/UCSDped1/{Train,Test}/TrainNNN/*.tif` — **200 frame TIF mỗi clip**,
+  geometry gốc **238×158 px**, 10 fps ⇒ đã convert 4 clip sang mp4 (`-framerate 10 -i %03d.tif`), 20 s/clip.
+
+| Clip (đã convert) | frames | detections | person | **events** | p50 |
+|---|---|---|---|---|---|
+| Train_Train001 | 200 | 2.685 | 2.635 | **0** | 27,27 ms |
+| Train_Train002 | 200 | 3.802 | 3.788 | **0** | 18,94 ms |
+| Train_Train003 | 200 | 3.462 | 3.435 | **0** | 18,96 ms |
+| Test_Test001 | 200 | 3.139 | 3.056 | **0** | 18,58 ms |
+
+**Đọc kết quả cho đúng:**
+
+1. **0 event trong 60 s cảnh bình thường (Train) + 20 s Test** ⇒ không có false positive person-down, nhưng đây là
+   **pass yếu**: 238×158 quá thấp so với ODD 1080p, detector "thấy" 13–19 blob/frame (person) chủ yếu do upscale,
+   nên việc engine không bắn chỉ chứng minh "không có chuỗi fall đủ điều kiện", không chứng minh FP-rate trên
+   cảnh đông người thật.
+2. Vì vậy UCSD **không dùng làm bộ negatives chính** cho #28; negatives đúng ODD phải là clip 1080p camera tĩnh
+   (ví dụ chính các clip `UniDataPro` không có fall, hoặc UCF-Crime normal nếu tìm được split normal 640×480+).
+3. Giá trị còn lại của UCSD: kiểm **đường ống trên image-sequence** (convert → pipeline) và làm smoke test nhanh,
+   không tốn 1,5 GB giải nén mỗi lần.
