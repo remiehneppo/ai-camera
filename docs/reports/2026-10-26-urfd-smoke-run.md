@@ -1,5 +1,8 @@
 # URFD smoke run — chạy luồng thật trên dữ liệu fall (2026-10-26)
 
+> Sổ đăng ký dataset đã kiểm (dùng lại về sau): [docs/datasets/video-datasets.md](../datasets/video-datasets.md)
+
+
 Chạy thử theo [khảo sát dataset](2026-10-26-video-dataset-candidates.md): tải một subset **UR Fall Detection**
 (rgb cam0) và chạy qua pipeline edge thật. Mục tiêu của lượt này là **kiểm luồng + đo hiệu năng**, không phải
 nghiệm thu chất lượng.

@@ -1,5 +1,8 @@
 # Dataset video cho bài toán hiện tại — khảo sát & cách chạy (2026-10-26)
 
+> Sổ đăng ký dataset đã kiểm (dùng lại về sau): [docs/datasets/video-datasets.md](../datasets/video-datasets.md)
+
+
 Mục đích: chọn dataset **camera cố định** để (a) chạy thử luồng event→clip→server→review và (b) chấm
 điểm capability đang mở, thay vì chỉ benchmark độ trễ trên 2 clip Wikimedia sẵn có.
 

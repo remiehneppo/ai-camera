@@ -13,6 +13,7 @@ Cập nhật requirement 2026-10-20. Có mã/lệnh thử nghiệm software lab 
 | Quyết định kiến trúc và lý do | [ADR-0001 pipeline](adr/0001-feature-pipeline-boundaries.md), [ADR-0002 downstream](adr/0002-server-downstream-event-publishing.md), [ADR-0003 backend](adr/0003-fastapi-mongodb-backend.md), [ADR-0004 contracts](adr/0004-integration-contracts.md) |
 | Phase, ownership, 89 task phạm vi | [Plan triển khai](architecture/implementation-plan.md) |
 | Chọn và theo dõi công việc | [Tracker thực thi](../.scratch/system-build-slices/PRD.md) và [Index mở rộng](../.scratch/system-build-slices/requirements-expansion-index.md) — nguồn duy nhất của Execution/blockers |
+| Dataset video để chạy thử và đánh giá (đã kiểm, có license + lệnh chạy) | [Sổ đăng ký dataset](datasets/video-datasets.md) |
 | Chi tiết nghiệm thu theo module | [18 checklist module](implementation-checklists/README.md) |
 | Cross-module failure tests và release | [Integration/G0–G5](implementation-checklists/integration-release.md) |
 | Facts/ODD/sizing/benchmark còn cần | [Deployment readiness](architecture/deployment-readiness.md) |
