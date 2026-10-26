@@ -793,7 +793,8 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
             file_path,
             media_type=media_type,
             headers={"Accept-Ranges": "bytes"},
-            content_disposition_type=None,
+            # Inline, not the "attachment" default: the lab dashboard streams the clip.
+            content_disposition_type="inline",
         )
 
     # ---- Retained-evidence retrieval commands (Ticket #32) ----------------
@@ -802,35 +803,44 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
     async def request_retrieval(
         device_id: str, event_id: str, request_id: str, request: Request
     ) -> dict[str, Any]:
+        guard: StormGuard = request.app.state.ingest_guard
         actor = _reviewer_for_token(_bearer(request), reviewer_tokens)
         if actor is None:
             raise HTTPException(
                 status_code=401, detail="reviewer credentials required", headers={"WWW-Authenticate": "Bearer"}
             )
+        # Ticket #41: this is a write endpoint too, so a malformed flood is budgeted here as well.
+        if not guard.admit():
+            _reject(guard, OUTCOME_RATE_LIMITED, 429, "ingest budget exhausted for this window",
+                    device_id=device_id, request=request,
+                    headers={"Retry-After": str(guard.retry_after_seconds())})
         try:
             for value in (device_id, event_id, request_id):
                 validate_storage_id(value)
         except ValueError:
-            raise HTTPException(status_code=422, detail="invalid evidence identity")
+            _reject(guard, OUTCOME_MALFORMED, 422, "invalid evidence identity", device_id=device_id, request=request)
         if _reviewer_site_denied(actor, device_id, config, store):
-            raise HTTPException(status_code=403, detail="cross-site evidence access denied")
+            _reject(guard, OUTCOME_CONFLICT, 403, "cross-site evidence access denied", device_id=device_id, request=request)
 
         raw = await request.body()
         try:
             body = json.loads(raw) if raw else {}
         except Exception:
-            raise HTTPException(status_code=400, detail="malformed JSON")
+            _reject(guard, OUTCOME_MALFORMED, 400, "malformed JSON", device_id=device_id, request=request)
         if not isinstance(body, dict) or set(body) - {"target", "ttl_seconds", "retention_scope"}:
-            raise HTTPException(status_code=422, detail="retrieval request carries an unknown field")
+            _reject(guard, OUTCOME_MALFORMED, 422, "retrieval request carries an unknown field",
+                    device_id=device_id, request=request)
         target = body.get("target", "edge")
         if target not in ("edge", "server"):
-            raise HTTPException(status_code=422, detail="target must be edge or server")
+            _reject(guard, OUTCOME_MALFORMED, 422, "target must be edge or server", device_id=device_id, request=request)
         ttl = body.get("ttl_seconds", 300.0)
         if type(ttl) not in (int, float) or not 0 < float(ttl) <= 3600:
-            raise HTTPException(status_code=422, detail="ttl_seconds must be within (0, 3600]")
+            _reject(guard, OUTCOME_MALFORMED, 422, "ttl_seconds must be within (0, 3600]",
+                    device_id=device_id, request=request)
         scope = body.get("retention_scope", "clip")
         if scope not in ("clip", "metadata"):
-            raise HTTPException(status_code=422, detail="retention_scope must be clip or metadata")
+            _reject(guard, OUTCOME_MALFORMED, 422, "retention_scope must be clip or metadata",
+                    device_id=device_id, request=request)
         try:
             doc = await run_in_threadpool(
                 store.issue_retrieval,
@@ -843,11 +853,13 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
                 retention_scope=scope,
             )
         except ReviewNotFound as exc:
-            raise HTTPException(status_code=404, detail=str(exc))
+            _reject(guard, OUTCOME_CONFLICT, 404, str(exc), device_id=device_id, request=request)
         except RetrievalError as exc:
-            raise HTTPException(status_code=422, detail=str(exc))
+            _reject(guard, OUTCOME_MALFORMED, 422, str(exc), device_id=device_id, request=request)
         except PyMongoError:
-            raise HTTPException(status_code=503, detail="retrieval command store unavailable")
+            _reject(guard, OUTCOME_UNAVAILABLE, 503, "retrieval command store unavailable",
+                    device_id=device_id, request=request)
+        guard.record(OUTCOME_ACCEPTED, device_id=device_id, size_bytes=_content_length(request))
         return await run_in_threadpool(store.retrieval_view, doc["command_id"])
 
     @app.get("/v1/retrieval/{command_id}")

@@ -68,3 +68,14 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
   **56 passed**; full suite ⇒ **667 passed, 126 subtests**. `mypy` các file liên quan chỉ còn 2 lỗi pre-existing.
   Ghi nhận chưa sửa: flood 422 vào route retrieval không đi qua storm guard (#41 chỉ áp `/v1/events`);
   `GET /v1/retrieval/{id}` với target=server có side-effect ghi manifest (qua `get_evidence(verify_file=True)`).
+
+- 2026-10-25 (đóng 2 gap đã chỉ ra):
+  1. `POST /v1/evidence/{d}/{e}/{r}/retrieval` giờ đi qua **storm guard** như `/v1/events`: `admit()` trước khi
+     parse (hết budget ⇒ 429 + `Retry-After`), mỗi nhánh ghi outcome (`malformed`/`conflict`/`unavailable`/
+     `accepted`), nên flood vào route ghi này không còn vô hình với operator (`GET /v1/ingest/guard`).
+  2. `GET /v1/retrieval/{id}` với `target=server` **không còn ghi** manifest: availability probe chuyển sang
+     `_stored_artifact_present()` (read-only: file tồn tại + size khớp), nên một lần GET không bump `review_guard`
+     và không tự đánh `corrupt/missing` cho evidence. Kiểm tra hash đầy đủ vẫn ở endpoint tải evidence.
+  Evidence: `pytest tests/test_retrieval_api.py -q` ⇒ **16 passed** (2 test mới: flood ⇒ 429 + counters; GET
+  server-target không đổi manifest dù file bị truncate); full suite ⇒ **671 passed, 126 subtests**;
+  `mypy apps domain tools` ⇒ **no issues found** (52 file, 0 lỗi — 6 lỗi pre-existing đã sửa).

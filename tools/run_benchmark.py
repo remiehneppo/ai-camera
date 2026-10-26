@@ -139,7 +139,8 @@ def run_single_benchmark(
             t_pipe1 = time.perf_counter()
             pipeline_latencies.append((t_pipe1 - t_pipe0) * 1000.0)
 
-            obs = pipeline.last_observation
+            # last_observation is None until the first frame is processed.
+            obs = pipeline.last_observation or {}
             dets = obs.get("detections", [])
             total_detections += len(dets)
             max_detections_in_frame = max(max_detections_in_frame, len(dets))

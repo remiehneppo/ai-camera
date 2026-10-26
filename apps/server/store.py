@@ -101,6 +101,7 @@ def decode_cursor(cursor_str: str) -> tuple[str, Any]:
         i_str = data["i"]
         if not isinstance(u, str) or not isinstance(i_str, str):
             raise ValueError
+        doc_id: Any
         try:
             doc_id = ObjectId(i_str)
         except Exception:
@@ -881,12 +882,29 @@ class EventStore:
     def get_retrieval(self, command_id: str) -> dict[str, Any] | None:
         return self.retrieval_commands.find_one({"command_id": command_id}, {"_id": 0})
 
+    @staticmethod
+    def _stored_artifact_present(file_path: Any, size_bytes: int) -> bool:
+        """Cheap, read-only availability probe: the file exists and matches the recorded size.
+
+        Deliberately no hashing here: this runs on a requester read path, so the full integrity
+        check stays where it belongs (the evidence download endpoint).
+        """
+        if not isinstance(file_path, str) or not file_path:
+            return False
+        path = Path(file_path)
+        try:
+            return path.is_file() and path.stat().st_size == size_bytes
+        except OSError:
+            return False
+
     def settle_server_retrieval(self, command_id: str, *, now: float | None = None) -> dict[str, Any]:
         """Close a command whose target is the server itself by probing stored availability.
 
-        The probe runs against the live file, so retention cleanup that removed the artifact
-        after the request ends as `failed: evidence_unavailable` rather than a false completion.
-        Recording the outcome never releases the clip.
+        The probe is read-only: a requester reading the command must not repair or annotate the
+        evidence manifest (that would bump review_guard and could flag a re-review from a GET).
+        Retention cleanup that removed the artifact after the request therefore ends as
+        `failed: evidence_unavailable` rather than a false completion, and recording the outcome
+        never releases the clip.
         """
         now = time.time() if now is None else float(now)
         doc = self.retrieval_commands.find_one({"command_id": command_id})
@@ -897,7 +915,7 @@ class EventStore:
             doc.pop("_id", None)
             return doc
         evidence = state.command.evidence
-        record = self.get_evidence(evidence.device_id, evidence.event_id, evidence.request_id, verify_file=True)
+        record = self.get_evidence(evidence.device_id, evidence.event_id, evidence.request_id)
         manifest = dict((record or {}).get("manifest") or {})
         available = (
             record is not None
@@ -905,6 +923,7 @@ class EventStore:
             and manifest.get("completeness") not in {"missing", "corrupt"}
             and isinstance(manifest.get("sha256"), str)
             and isinstance(manifest.get("size_bytes"), int)
+            and self._stored_artifact_present((record or {}).get("file_path"), manifest["size_bytes"])
         )
         artifact = (
             {"sha256": manifest["sha256"], "size_bytes": manifest["size_bytes"]}

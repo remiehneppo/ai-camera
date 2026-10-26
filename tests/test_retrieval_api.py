@@ -110,6 +110,32 @@ class RetrievalApiTests(unittest.TestCase):
                                      content=b"{not json", headers={**ALICE, "Content-Type": "application/json"})
         self.assertEqual(malformed.status_code, 400)
 
+    def test_retrieval_flood_is_budgeted_like_ingest(self):
+        from domain.storm_guard import StormGuard, StormGuardPolicy
+
+        self.app.state.ingest_guard = StormGuard(StormGuardPolicy(malformed_budget=2, forensic_samples=2))
+        evidence = self.evidence()
+        for _ in range(2):
+            self.assertEqual(self.issue(evidence, argv=["x"]).status_code, 422)
+        refused = self.issue(evidence, argv=["x"])
+        self.assertEqual(refused.status_code, 429)
+        self.assertIn("retry-after", {key.lower(): value for key, value in refused.headers.items()})
+        state = self.client.get("/v1/ingest/guard", headers=DASHBOARD).json()
+        self.assertEqual((state["counts"]["malformed"], state["counts"]["rate_limited"]), (2, 1))
+        self.assertTrue(state["degraded"])
+
+    def test_server_target_read_path_does_not_touch_the_manifest(self):
+        evidence = self.evidence()
+        device_id, event_id, request_id, path, _ = evidence
+        path.write_bytes(b"truncated")  # size no longer matches the recorded manifest
+        key = {"device_id": device_id, "event_id": event_id, "request_id": request_id}
+        before = self.store.evidence_manifests.find_one(key, {"_id": 0})
+        command = self.issue(evidence, target="server").json()
+        view = self.view(command["command_id"]).json()
+        self.assertEqual((view["status"], view["reason"]), ("failed", "evidence_unavailable"))
+        after = self.store.evidence_manifests.find_one(key, {"_id": 0})
+        self.assertEqual(after, before, "a requester GET must not repair or annotate the manifest")
+
     def test_reissue_while_open_returns_the_same_command(self):
         evidence, first = self.issued_command()
         again = self.issue(evidence).json()

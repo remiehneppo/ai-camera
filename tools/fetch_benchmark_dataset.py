@@ -8,11 +8,12 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 BENCHMARK_DIR = ROOT / "data/benchmark"
 
-DATASET_MANIFEST = {
+DATASET_MANIFEST: dict[str, Any] = {
     "schema_version": 1,
     "dataset_id": "urban-surveillance-benchmark-v1",
     "description": "Open-license 1080p urban surveillance video clips for AI camera edge pipeline benchmarking.",
