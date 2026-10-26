@@ -294,12 +294,26 @@ def format_markdown_report(results: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _display_path(path: Path) -> str:
+    """Show a repo-relative path when possible; an absolute output outside the repo is fine too."""
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-frames", type=int, default=120, help="maximum frames to evaluate per video (default: 120)")
     parser.add_argument("--sample-fps", type=float, default=10.0, help="analysis sampling FPS (default: 10.0)")
     parser.add_argument("--output-report", type=str, default="docs/reports/2026-10-21-pipeline-benchmark-report.md", help="path to output markdown report")
     parser.add_argument("--output-json", type=str, default="data/benchmark/benchmark_results.json", help="path to output json results")
+    parser.add_argument(
+        "--video",
+        action="append",
+        default=[],
+        help="extra local video file to benchmark (repeatable); defaults to the two bundled benchmark clips",
+    )
     args = parser.parse_args()
 
     benchmark_dir = ROOT / "data/benchmark"
@@ -307,6 +321,9 @@ def main() -> int:
         benchmark_dir / "shibuya_crossing_1080p.mp4",
         benchmark_dir / "intersection_traffic_1080p.mp4",
     ]
+    if args.video:
+        # A fetched dataset clip is benchmarked on its own, without editing this list.
+        videos = [Path(item).expanduser().resolve() for item in args.video]
 
     for v in videos:
         if not v.is_file():
@@ -342,14 +359,14 @@ def main() -> int:
     json_path = ROOT / args.output_json
     json_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(all_results, indent=2))
-    print(f"[SAVED] JSON metrics saved to: {json_path.relative_to(ROOT)}")
+    print(f"[SAVED] JSON metrics saved to: {_display_path(json_path)}")
 
     # Generate and save Markdown report
     report_content = format_markdown_report(all_results)
     report_path = ROOT / args.output_report
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(report_content)
-    print(f"[SAVED] Full Markdown report saved to: {report_path.relative_to(ROOT)}")
+    print(f"[SAVED] Full Markdown report saved to: {_display_path(report_path)}")
     print()
     print("=" * 70)
     print("                      SUMMARY TABLE")
