@@ -421,11 +421,15 @@ class VehicleIncidentEngine:
                         deflected = True
 
                 has_collision = False
-                if (decel_1 or decel_2) and one_halted:
+                # Collision requires mutual impact evidence:
+                # 1) At least one vehicle experienced an impact deceleration spike and halted
+                if (decel_1 and decel_2) and one_halted:
                     has_collision = True
-                elif both_halted and (pair.max_closing_speed > 15.0 or risk.iou > 0.08):
+                elif (decel_1 or decel_2) and both_halted and (pair.max_closing_speed > 20.0 or risk.iou > 0.1):
                     has_collision = True
-                elif (decel_1 or decel_2 or risk.iou > 0.1) and deflected:
+                elif (decel_1 or decel_2 or risk.iou > 0.15) and deflected:
+                    has_collision = True
+                elif both_halted and risk.iou > 0.2 and pair.max_closing_speed > 25.0:
                     has_collision = True
 
                 if has_collision:
@@ -461,7 +465,7 @@ class VehicleIncidentEngine:
             triggered = False
             severity = "critical"
 
-            # Case 3a: Two-wheeler fallen over
+            # Case 3a: Two-wheeler fallen over (was moving upright, aspect ratio inverted to horizontal)
             if state.label in TWO_WHEELER_LABELS:
                 ar = state.last_aspect_ratio or 0.0
                 if state.initial_is_upright and ar >= self.two_wheeler_rollover_ar:
@@ -472,7 +476,12 @@ class VehicleIncidentEngine:
             elif state.label in ("car", "truck", "bus"):
                 ar = state.last_aspect_ratio or 1.8
                 init_ar = state.initial_aspect_ratio or 1.8
-                if (init_ar - ar) >= self.car_rollover_ar_delta or ar < 0.9:
+                # Rollover requires aspect ratio inversion from wide to narrow/tall while stopped or impacting
+                had_halt_or_impact = state.is_stationary or (
+                    state.last_deceleration_spike_time is not None
+                    and (ts - state.last_deceleration_spike_time) <= 1.5
+                )
+                if (init_ar - ar) >= self.car_rollover_ar_delta and had_halt_or_impact:
                     triggered = True
                     severity = "critical"
 
@@ -552,7 +561,7 @@ class VehicleIncidentEngine:
                 # Evidence 2: Pedestrian down / impact (lying aspect ratio >= 1.2 or sudden AR change)
                 p_down = (p.last_aspect_ratio or 0.0) >= self.pedestrian_lying_ar
 
-                if (v_decel and in_proximity) or (p_down and in_proximity):
+                if (p_down and in_proximity) or (v_decel and iou > 0.15 and dist <= self.proximity_distance * 0.8):
                     pair.last_alert_time = ts
                     v.last_alert_time = ts
                     p.last_alert_time = ts
