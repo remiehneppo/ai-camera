@@ -28,6 +28,25 @@ from apps.edge.pose import PoseManager, PoseScheduler, RtmposeEstimator  # noqa:
 from apps.edge.recorder import FileRecorder  # noqa: E402
 
 
+def events_from_outbox(outbox: EventOutbox) -> list[dict[str, Any]]:
+    """Persisted incidents as flat records (EventOutbox.pending() rows carry a parsed 'event')."""
+    events: list[dict[str, Any]] = []
+    for row in outbox.pending():
+        snapshot = row["event"]
+        payload = snapshot.get("payload", {})
+        events.append(
+            {
+                "taxonomy": payload.get("taxonomy"),
+                "lifecycle": payload.get("lifecycle"),
+                "severity": payload.get("severity"),
+                "origin": snapshot.get("origin"),
+                "revision": snapshot.get("revision"),
+                "pose_status": (payload.get("pose_evidence") or {}).get("status"),
+            }
+        )
+    return events
+
+
 def evaluate(video_path: Path, *, sample_fps: float, max_frames: int, with_pose: bool) -> dict[str, Any]:
     if not video_path.is_file():
         raise FileNotFoundError(f"video not found: {video_path}")
@@ -95,20 +114,7 @@ def evaluate(video_path: Path, *, sample_fps: float, max_frames: int, with_pose:
             frame_idx += 1
         cap.release()
 
-        events: list[dict[str, Any]] = []
-        for row in outbox.pending():
-            snapshot = json.loads(row["snapshot_json"])
-            payload = snapshot.get("payload", {})
-            events.append(
-                {
-                    "taxonomy": payload.get("taxonomy"),
-                    "lifecycle": payload.get("lifecycle"),
-                    "severity": payload.get("severity"),
-                    "origin": snapshot.get("origin"),
-                    "revision": snapshot.get("revision"),
-                    "pose_status": (payload.get("pose_evidence") or {}).get("status"),
-                }
-            )
+        events = events_from_outbox(outbox)
         by_taxonomy: dict[str, int] = {}
         for event in events:
             by_taxonomy[event["taxonomy"]] = by_taxonomy.get(event["taxonomy"], 0) + 1

@@ -183,3 +183,39 @@ mapping: thiếu/sai thì báo `problem_count` và exit 1.
   --frame-labels .../DAD_A3D/A3D_frame_labels.zip --mapping mapping.json \
   --videos-root .../DAD_A3D --output-jsonl data/benchmark/a3d_labels.jsonl
 ```
+
+## 11. Bộ dữ liệu tải trong lượt này (2026-10-26) và kết quả chạy
+
+### 11.1 Đã tải
+
+| Bộ | Nguồn / license | Nội dung | Kích thước |
+|---|---|---|---|
+| **UniDataPro/fall-detection** | HuggingFace, **CC BY-NC-ND 4.0** | 5 clip fall thật, **1920×1080@30 fps**, 21,8–27,9 s (full dataset 1.047 video, bản HF là mẫu) | 284 MB |
+| **UCF-Crime mirror** | HuggingFace `ertiaM/Anomaly_Detection_in_Surveillance_Videos` (license không ghi; UCF-Crime là research-only) | 950 mp4, 13 lớp (Abuse/Arrest/Arson/Assault/Burglary/Explosion/Fighting/RoadAccidents/Robbery/Shooting/Shoplifting/Stealing/Vandalism), **320×240** | tải 6 clip ≈ 40 MB (1 file lỗi 15 byte: `Fighting001_x264.mp4`) |
+| **UCSD Anomaly** | `svcl.ucsd.edu` (research) | Ped1/Ped2, camera cố định ngoài trời, có nhãn frame-level theo clip (`.m`) | 740 MB (đang tải) |
+
+### 11.2 Kết quả chạy thật trên fall 1080p (5 fps sampling, pose ON)
+
+| Clip | frames | person | pose outcomes | **events** | taxonomy | p50 |
+|---|---|---|---|---|---|---|
+| `fall_0001.mp4` | 112 | 64 | 24 | **1** | `person_fall` (candidate, critical, pose ok) | 50,94 ms |
+| `fall_0002.mp4` | 111 | 81 | 8 | 0 | — | 53,59 ms |
+| `fall_0003.mp4` | 109 | 70 | 28 | 0 | — | 53,22 ms |
+
+⇒ Trên **đúng ODD lab (1080p, camera tĩnh)**, pipeline **thật sự kích hoạt `person_fall`** (1/3 clip mẫu). Đây là
+quan sát, **không phải recall**: chưa có nhãn onset cho 5 clip này; muốn có recall phải có bộ đầy đủ 1.047 video +
+metadata annotation (bản HF không kèm annotation).
+
+### 11.3 Lỗi công cụ phát hiện trong lượt này (đã sửa + test)
+
+`tools/eval_clip.py` crash `KeyError: 'snapshot_json'` ngay khi có event đầu tiên: `EventOutbox.pending()` trả
+`{"event": <snapshot>}`, không phải JSON thô. Đã tách `events_from_outbox()`, sửa và thêm
+`tests/test_eval_clip.py` (2 test). Các con số 0-event trước đó vẫn đúng, nhưng nếu không gặp clip fall thật thì lỗi
+này sẽ nằm im.
+
+### 11.4 Ghi chú license
+
+- **UniDataPro: CC BY-NC-ND** — chỉ dùng nội bộ để test, **không** dùng thương mại, **không** phái sinh/cắt ghép để
+  phân phối; media nằm trong `data/` (gitignored), repo chỉ lưu đường dẫn + kích thước.
+- **UCF-Crime / UCSD**: research-only. `Fighting001_x264.mp4` tải lỗi (15 byte) ⇒ nếu dùng phải tải lại và kiểm
+  `ffprobe`, đừng tính file rỗng vào metric.
