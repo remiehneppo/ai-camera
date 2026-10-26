@@ -219,3 +219,13 @@ này sẽ nằm im.
   phân phối; media nằm trong `data/` (gitignored), repo chỉ lưu đường dẫn + kích thước.
 - **UCF-Crime / UCSD**: research-only. `Fighting001_x264.mp4` tải lỗi (15 byte) ⇒ nếu dùng phải tải lại và kiểm
   `ffprobe`, đừng tính file rỗng vào metric.
+
+### 11.5 UCSD: tải bị cắt + cấu trúc là chuỗi ảnh
+
+- Lần tải đầu dừng ở **310.381.148 / 740.306.953 byte** ⇒ `gzip -t` báo **"unexpected end of file"**. Đã bật
+  vòng `curl -C -` (resume) tới khi đủ byte rồi mới `gzip -t` lại; **không dùng file chưa kiểm** để chấm điểm.
+- Cấu trúc thực tế (đọc từ tar): `UCSD_Anomaly_Dataset.v1p2/UCSDped1/{Train,Test}/TestNNN/` với **chuỗi frame
+  `.tif`**, không phải mp4 ⇒ phải convert trước khi chạy pipeline:
+  `ffmpeg -framerate 10 -i Test032/%03d.tif -c:v libx264 -pix_fmt yuv420p Test032.mp4`.
+- Giá trị của UCSD với dự án nằm ở **Train = cảnh bình thường, camera cố định** ⇒ dùng làm **hard negatives** để đo
+  **FP/giờ** cho person-down (đúng thứ #28 cần), không phải để đo recall fall.
