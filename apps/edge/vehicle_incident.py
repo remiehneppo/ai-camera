@@ -351,6 +351,11 @@ class VehicleIncidentEngine:
                 )
                 pair.prev_iou = risk.iou
 
+                # Filter duplicate detections of the same physical vehicle under multiple classes (e.g. bus vs truck)
+                # Two distinct vehicles cannot physically occupy >= 65% of each other's 2D bounding box
+                if risk.iou >= 0.65:
+                    continue
+
                 # Convergence detection
                 if risk.closing_speed > 10.0 or risk.iou > 0.05 or risk.risk_level in ("high", "critical"):
                     if not pair.had_convergence:

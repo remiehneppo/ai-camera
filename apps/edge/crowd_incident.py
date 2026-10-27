@@ -258,14 +258,15 @@ class CrowdIncidentEngine:
             state.kinematics = k
             return k
 
-        dt = ts - prev.timestamp
+        dt = max(0.04, ts - prev.timestamp)
         raw_vx = (cx - prev.cx) / dt
         raw_vy = (cy - prev.cy) / dt
         raw_speed = math.hypot(raw_vx, raw_vy)
-        raw_acc = (raw_speed - prev.speed) / dt
+        # Suppress single-frame bounding box noise spikes
+        raw_acc = max(-150.0, min(150.0, (raw_speed - prev.speed) / dt))
 
-        # Exponential smoothing with alpha ~ 0.7
-        alpha = min(1.0, max(0.1, dt / 0.15))
+        # Exponential smoothing with alpha ~ 0.6
+        alpha = min(0.8, max(0.1, dt / 0.20))
         vx = alpha * raw_vx + (1.0 - alpha) * prev.vx
         vy = alpha * raw_vy + (1.0 - alpha) * prev.vy
         speed = math.hypot(vx, vy)
