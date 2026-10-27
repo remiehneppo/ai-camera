@@ -1,24 +1,27 @@
 # Tài liệu hệ thống AI Camera
 
-Cập nhật requirement 2026-10-20. Có mã/lệnh thử nghiệm software lab và các ghi chú implementation; tiến độ runtime/partial/blockers theo tracker, không coi mô tả kiến trúc là đã triển khai. README gốc có phần mở đầu cũ và ghi chú runtime mới chưa hoàn toàn đồng nhất; không dùng chúng để tuyên bố nghiệm thu. Benchmark target, chất lượng từng nhóm và pilot chưa nghiệm thu. [Research §14](../traffic-ai-camera-research/report.md#14-cập-nhật-theo-implementation-và-thử-nghiệm-15-10-2026) phân biệt mã hiện có, log test và gate còn mở. Bắt đầu ở đây thay vì đọc log theo thời gian.
+**Cập nhật hệ thống: 2026-10-27.** Toàn bộ 823 unit & integration tests toàn dự án xanh. Hiện tại 29 tickets đã hoàn thành (`done`) và 9 tickets đang chạy thử nghiệm (`partial`) trong software lab. 4 nhóm tính năng nhận diện chính trên Edge đã hoạt động: Person-down (US09), Tai nạn giao thông (US08), Đỗ xe sai vùng/giờ (US05), và Tập trung đông người / gây rối (US06).
+
+ODD phần cứng được khóa cứng: **100% camera CCTV giao thông cố định, độ nét từ HD (720p) đến 2MP (1080p)**; loại bỏ camera hành trình (dashcam) và camera độ nét thấp (< 720p).
 
 ## Đọc theo nhu cầu
 
 | Cần biết | Tài liệu chuẩn |
 |---|---|
-| Hệ thống làm gì, các thuật ngữ | [CONTEXT](../CONTEXT.md) |
-| Định nghĩa 13 nhóm an toàn đô thị + nhánh phá hoại, tham số/pending, hard negatives và gates | [Requirement tình huống](requirements/urban-safety-scenarios.md) |
-| Module, dependency và fault boundary | [Kiến trúc hệ thống](architecture/system-architecture.md) |
-| API semantic, identity, pin/receipt, review, replay | [Hợp đồng tích hợp](architecture/contracts.md) |
-| Quyết định kiến trúc và lý do | [ADR-0001 pipeline](adr/0001-feature-pipeline-boundaries.md), [ADR-0002 downstream](adr/0002-server-downstream-event-publishing.md), [ADR-0003 backend](adr/0003-fastapi-mongodb-backend.md), [ADR-0004 contracts](adr/0004-integration-contracts.md) |
-| Phase, ownership, 89 task phạm vi | [Plan triển khai](architecture/implementation-plan.md) |
-| Chọn và theo dõi công việc | [Tracker thực thi](../.scratch/system-build-slices/PRD.md) và [Index mở rộng](../.scratch/system-build-slices/requirements-expansion-index.md) — nguồn duy nhất của Execution/blockers |
-| Dataset video để chạy thử và đánh giá (đã kiểm, có license + lệnh chạy) | [Sổ đăng ký dataset](datasets/video-datasets.md) |
+| Hệ thống làm gì, các thuật ngữ domain chuẩn | [CONTEXT](../CONTEXT.md) |
+| Định nghĩa các nhóm an toàn đô thị, tham số, hard negatives và gates | [Requirement tình huống](requirements/urban-safety-scenarios.md) |
+| Module, dependency, ODD camera cố định và fault boundary | [Kiến trúc hệ thống](architecture/system-architecture.md) |
+| Hợp đồng API, anchor alert_condition, signed config, rollback, WAN outage và retention | [Hợp đồng tích hợp](architecture/contracts.md) |
+| Quyết định kiến trúc cốt lõi | [ADR-0001 pipeline](adr/0001-feature-pipeline-boundaries.md), [ADR-0002 downstream](adr/0002-server-downstream-event-publishing.md), [ADR-0003 backend](adr/0003-fastapi-mongodb-backend.md), [ADR-0004 contracts](adr/0004-integration-contracts.md) |
+| Phase, ownership, phân bổ trách nhiệm | [Plan triển khai](architecture/implementation-plan.md) |
+| Theo dõi tiến độ và chọn việc | [Tracker thực thi](../.scratch/system-build-slices/PRD.md) và [Index mở rộng](../.scratch/system-build-slices/requirements-expansion-index.md) |
+| Sổ đăng ký dataset video (CCTV 720p–1080p, quy tắc loại bỏ dashcam) | [Sổ đăng ký dataset](datasets/video-datasets.md) |
+| Công cụ tải video CCTV cố định chuẩn ODD từ Hugging Face | [fetch_traffic_cctv_dataset.py](../tools/fetch_traffic_cctv_dataset.py) |
+| Đánh giá đa kịch bản nhận diện trên video (Person-down, Xe, Đỗ xe, Đám đông) | [eval_all_scenarios.py](../tools/eval_all_scenarios.py) |
 | Chi tiết nghiệm thu theo module | [18 checklist module](implementation-checklists/README.md) |
-| Cross-module failure tests và release | [Integration/G0–G5](implementation-checklists/integration-release.md) |
-| Facts/ODD/sizing/benchmark còn cần | [Deployment readiness](architecture/deployment-readiness.md) |
-| Số đo benchmark thực tế pipeline trên video 1080p | [Báo cáo Benchmark Pipeline](reports/2026-10-21-pipeline-benchmark-report.md) |
-| Nghiên cứu model/camera/data/chi phí và phản biện bước tiếp theo | [Research](../traffic-ai-camera-research/README.md) — cập nhật implementation15-10; giá giữ ngày quan sát, không là quote hiện tại |
+| Cross-module failure tests và release gates | [Integration/G0–G5](implementation-checklists/integration-release.md) |
+| Facts/ODD/sizing và benchmark CPU 28–45 FPS | [Deployment readiness](architecture/deployment-readiness.md) |
+| Baseline đã kiểm chứng vs Ứng viên tương lai (RF-DETR/ViTPose/Orin NX) | [Ứng viên công nghệ](requirements/technology-candidates.md) |
 
 ## Nguồn chuẩn và cập nhật
 

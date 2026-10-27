@@ -64,14 +64,29 @@ _Avoid_: Video chứng minh toàn bộ thời gian tồn tại của sự kiện
 **Urban safety scenario**: Nhóm tình huống an toàn đô thị cần người trực xác minh, được định nghĩa bằng dấu hiệu quan sát và ranh giới riêng.
 _Avoid_: Một khả năng đã triển khai; kết luận nguyên nhân, ý định hoặc trách nhiệm.
 
-**Crowd concentration**: Tập trung đông người theo số lượng, mật độ và thời gian trong vùng quan sát.
-_Avoid_: Gây rối mặc nhiên.
+**Vehicle incident**: Sự cố đường bộ nghi ngờ có xe tham gia (xe–xe, xe–người, xe tự ngã/lật hoặc đâm dải phân cách/vật cản cố định) được phân loại theo động học và xung lực va chạm thực tế.
+_Avoid_: Tự kết luận lỗi vi phạm, ý định hoặc trách nhiệm pháp lý.
 
-**Suspected public disorder**: Nghi ngờ gây rối dựa trên hành vi xô đẩy/đánh nhau, đập phá, ném vật vào người/tài sản hoặc cùng chiếm/chặn luồng giao thông.
-_Avoid_: Đông người, chạy hoặc vung tay riêng lẻ.
+**Pairwise interaction risk**: Phân tích rủi ro tương tác cặp giữa các phương tiện hoặc giữa xe và người trong không gian ảnh 2D (tốc độ thu hẹp khoảng cách closing speed, tỉ lệ giao nhau IoU và tốc độ giãn nở IoU, cấp độ rủi ro TTC).
+_Avoid_: Coi TTC thấp hoặc bounding box overlap riêng lẻ là bằng chứng va chạm đã xác định.
+
+**Illegal parking**: Tình huống phương tiện cơ giới đứng yên liên tục trong vùng cấm đỗ (ROI) hoặc ngoài khung giờ cho phép vượt quá thời gian ngưỡng dwell_seconds.
+_Avoid_: Xe dừng chờ đèn đỏ, xe kẹt trong dòng ùn tắc giao thông, hoặc xe dừng đỗ ngắn hạn hợp lệ ngoài lịch cấm.
+
+**Dwell duration**: Khoảng thời gian phương tiện đứng yên liên tục được đo đạc sau khi đã loại trừ rung giật bounding box và yêu cầu tối thiểu 2 frame quan sát liên tục.
+_Avoid_: Bịa đặt thời gian đứng yên qua khoảng mất dấu camera (track gap) hoặc giả định đứng yên ngay ở frame đầu tiên (zero-history assumption).
+
+**Crowd concentration**: Tập trung đông người theo số lượng người N và thời gian duy trì T trong vùng quan sát.
+_Avoid_: Mặc nhiên suy diễn thành gây rối trật tự.
+
+**Suspected public disorder**: Nghi ngờ gây rối trật tự dựa trên hành vi phân tán hoảng loạn (dispersal divergence), xung đột động học vận tốc cao, hoặc biến thiên góc hướng hỗn loạn trong đám đông.
+_Avoid_: Đám đông tụ tập trật tự, hàng đợi xe buýt, người chạy bộ riêng lẻ.
 
 **Suspected property vandalism**: Nghi ngờ tác động đập/đá/phá kéo hoặc ném vật vào tài sản; độc lập với tương tác bạo lực giữa người.
 _Avoid_: Thiệt hại hoặc ý định đã xác định; mọi thao tác sửa chữa/dọn dẹp.
+
+**Fixed CCTV Traffic Camera ODD**: Phạm vi điều kiện hoạt động chuẩn của camera giám sát giao thông gắn cố định trên cột đèn, ngã tư hoặc cầu vượt, có độ phân giải từ HD (720p / 1280×720) đến 2MP (Full HD 1080p / 1920×1080).
+_Avoid_: Camera hành trình (dashcam - chuyển động di động tạo luồng quang học giả), camera quay quét lia liên tục, camera độ nét thấp (<720p).
 
 ## Tài liệu liên quan
 

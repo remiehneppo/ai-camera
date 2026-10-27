@@ -86,7 +86,11 @@ F03/J05 ghi backlog B, tốc độ upload hữu dụng U và tốc độ sinh ev
 
 G3 áp dụng target thực: ONNX vẫn phải native/oracle/event conformance và soak; chỉ thêm conversion/RKNN parity khi chọn RKNN. Chưa chọn target thì chưa ký capacity, nhưng không chặn lab ONNX.
 
-*Lưu ý benchmark lab (cập nhật 2026-10-21):* Đã thực hiện đo đạc benchmark pipeline sơ bộ trên workstation x86 (Intel Core i5-12400F, ONNX Runtime CPU) với 2 clip video 1080p chuẩn mở tại [Báo cáo Benchmark Pipeline](../reports/2026-10-21-pipeline-benchmark-report.md). Kết quả xác nhận thông lượng đạt 16.35–20.10 FPS (Baseline) và 8.84–10.56 FPS (kèm RTMPose-Tiny, ~3.8ms/người), RAM 266–530 MB. Đây là căn cứ tham chiếu năng lực phần mềm; benchmark trên actual hardware SKU đích (Jetson Orin NX) và thermal soak 24–72h vẫn là điều kiện bắt buộc trước khi ký nghiệm thu capacity.
+*Lưu ý benchmark lab (cập nhật 2026-10-27):* Đã thực hiện đo đạc benchmark pipeline đa kịch bản toàn diện trên workstation x86 (Intel Core i5-12400F, ONNX Runtime CPU) chạy đồng thời cả 4 Engine nhận diện (Person-down, Vehicle incident, Illegal parking, Crowd incident) kèm ByteTracker và RTMPose-Tiny:
+- **Video 1080p Full HD (`fall_0001`, `shibuya_crossing`):** Độ trễ trung vị P50 đạt 30.3–36.8 ms/frame (tương đương **28–33 FPS** xử lý thời gian thực).
+- **Video 720p HD (`AccidentBench Fixed CCTV`):** Độ trễ trung vị P50 đạt 22.0–24.3 ms/frame (tương đương **40–45 FPS**).
+- **Ràng buộc ODD phần cứng:** Đã khóa vĩnh viễn tiêu chuẩn: **100% camera CCTV giao thông cố định, độ phân giải HD (720p) đến 2MP (1080p)**. Tuyệt đối loại bỏ camera hành trình (dashcam) và camera độ nét thấp (< 720p) khỏi benchmark và hồ sơ triển khai.
+Đây là căn cứ xác nhận năng lực phần mềm đạt chuẩn real-time ($\ge 25\text{ FPS}$) ngay trên CPU thông thường. Benchmark trên actual hardware SKU đích (Jetson Orin NX) và thermal soak 24–72h vẫn là điều kiện bắt buộc trước khi ký nghiệm thu capacity.
 
 ## Manifest benchmark tối thiểu
 

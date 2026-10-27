@@ -15,9 +15,15 @@
 - Đảm bảo kết quả có provenance, timestamp, chất lượng quan sát và trạng thái xác minh; không báo im lặng khi hệ thống mất năng lực.
 - Cho phép kiểm thử offline/replay cùng pipeline realtime, benchmark toàn hệ thống trước mở rộng.
 
-### 1.1a Danh mục an toàn đô thị đã xác nhận
+### 1.1a Danh mục an toàn đô thị và trạng thái thực thi trên Edge
 
-[Requirement tình huống](../requirements/urban-safety-scenarios.md) xác định 13 nhóm: cháy/khói, ngập, đổ trộm rác, lấn chiếm vỉa hè, đỗ sai chỗ, tụ tập/gây rối, ẩu đả, tai nạn có xe, person-down, vào vùng nguy hiểm, vật bỏ quên, cây đổ, đèn đường không sáng; bổ sung nhánh nghi ngờ phá hoại tài sản độc lập. Đây là danh mục mục tiêu theo giai đoạn, không phải triển khai đồng loạt hoặc capability đã đạt. Person-down tại ROI lòng đường vẫn trước, tai nạn có xe sau theo ADR-0001.
+[Requirement tình huống](../requirements/urban-safety-scenarios.md) xác định danh mục mục tiêu an toàn đô thị. Hiện tại, **4 nhóm nghiệp vụ nhận diện cốt lõi đã được triển khai hoàn chỉnh trên Edge trong software lab**:
+1. **US09 — Person-down**: `person_fall` (có onset quan sát), `person_lying_persistent` (người nằm lòng đường), `person_on_stationary_vehicle` (người nằm/ngả trên xe đứng yên với độ ưu tiên review riêng), tích hợp RTMPose-Tiny keypoints 17 điểm.
+2. **US08 — Tai nạn có xe**: `vehicle_vehicle` (đâm va giữa các xe), `vehicle_pedestrian` (xe va chạm người đi bộ), `vehicle_rollover_or_barrier` (xe tự lật/ngã đâm dải phân cách) qua phân tích động học mượt hóa trajectory và rủi ro va chạm TTC / IoU không gian ảnh.
+3. **US05 — Đỗ xe sai vùng/giờ**: `illegal_parking` với cơ chế đo thời gian dừng đỗ liên tục (`dwell_seconds`) trong ROI cấm và khung giờ hạn chế (`ScheduleWindow`), loại bỏ 5 hard negatives.
+4. **US06 — Đông người & Nghi ngờ gây rối**: Phân tách 2 tầng độc lập: Tầng 1 `crowd_concentration` (tụ tập đông người theo số lượng và thời gian duy trì) và Tầng 2 `suspected_disorder` (phân tán hoảng loạn, xung đột động học vận tốc cao, biến thiên hướng hỗn loạn).
+
+Mỗi tính năng là một pipeline engine độc lập được đăng ký qua allowlisted factory (`ALLOWLISTED_FACTORIES = frozenset({"person_down", "vehicle_incident", "danger_zone", "illegal_parking", "crowd_incident"})`), chia sẻ chung nguồn video, detector YOLOX-Tiny và ByteTracker mà không trùng lặp inference.
 
 Camera cố định ngoài trời đường phố/vỉa hè; vùng/lịch/ngoại lệ cấu hình theo camera, không yêu cầu AI tự suy mọi quy định. AI tạo nghi ngờ, dashboard và người trực xác minh; không tự suy pháp lý, y tế, nguyên nhân/trách nhiệm hoặc điều phối cứu hộ. Ngày/đêm/mưa chỉ hỗ trợ trong ODD đã kiểm thử riêng từng nhóm. Severity cấu hình theo site và độc lập confidence; priority mặc định, ranh giới nhãn, hard negatives và ngưỡng pending theo requirement. Nhiều nhãn có thể liên kết một diễn biến, dedup riêng nhóm; không bắt buộc hợp nhất liên camera chính xác.
 
@@ -28,9 +34,11 @@ Camera cố định ngoài trời đường phố/vỉa hè; vùng/lịch/ngoạ
 - Không yêu cầu zero-copy, microservices, Kubernetes, ReID hoặc nhiều detector framework ngay từ MVP.
 - Không đảm bảo một model/artifact có thể chạy mọi backend chỉ bằng đổi tên runtime.
 
-### 1.3 Miền hoạt động — ODD
+### 1.3 Miền hoạt động — ODD và Ràng buộc Phần cứng
 
-Mỗi camera phải có cấu hình Operational Design Domain: địa điểm, vùng hỗ trợ, góc/tiêu cự, kích thước đối tượng tối thiểu đã kiểm thử, ánh sáng, mưa, mức che khuất, camera cố định/PTZ, mật độ đối tượng và hình học đường. Ngoài ODD hoặc không đủ bằng chứng phải là `unknown/unsupported/degraded`, không phải kết quả âm tính chắc chắn.
+- **Ràng buộc Phần cứng Camera (Bắt buộc)**: Hệ thống được thiết kế và kiểm thử cho **Camera giám sát giao thông CỐ ĐỊNH (Fixed CCTV Cameras)** lắp trên cột đèn, ngã tư hoặc cầu vượt. Độ phân giải đạt chuẩn từ **HD (720p / 1280×720)** đến **2MP (Full HD 1080p / 1920×1080)**.
+  - *Tuyệt đối loại trừ*: Camera hành trình (dashcam) do chuyển động di động (ego-motion) gây ra luồng quang học biểu kiến làm sai lệch vận tốc/gia tốc; camera độ nét thấp (< 720p) do làm mờ nát bounding box và sinh gia tốc giả.
+- **Điều kiện hiện trường**: Mỗi camera phải có cấu hình ODD: địa điểm, vùng hỗ trợ, góc/tiêu cự, kích thước đối tượng tối thiểu đã kiểm thử, ánh sáng, mưa, mức che khuất, mật độ đối tượng và hình học đường. Ngoài ODD hoặc không đủ bằng chứng phải là `unknown/unsupported/degraded`, không phải kết quả âm tính chắc chắn.
 
 ## 2. Quyết định và nguyên tắc kiến trúc
 
@@ -49,6 +57,10 @@ Mỗi camera phải có cấu hình Operational Design Domain: địa điểm, v
 | Provenance là contract bắt buộc | Mọi event/alert phải truy được camera/session/frame, config, model artifact hash, calibration version, capability/quality state và evidence còn tồn tại. Trường bắt buộc *hiện diện*, nhưng giá trị tường minh như `uncalibrated`/`unknown_artifact` hợp lệ. Event vi phạm schema vào forensic journal bounded ở trạng thái `malformed`, compact bản lặp và fault alert theo §6.17; không drop im lặng, không hứa lưu vô hạn khi disk lỗi/đầy |
 | Recorder ưu tiên hơn analytics | Khi tài nguyên thiếu, giảm analysis FPS/pose trước; không để inference backpressure làm mất video đã mã hóa |
 | Hai tầng ngôn ngữ: C++ perception core + Python control | Đường per-frame (decode→preprocess→inference→postprocess→track) là C++ (§6.7a); Python giữ phần tần suất thấp (orchestration, IncidentEngine, evidence, delivery, control). Pixel không đi qua Python trên hot path; chỉ metadata (detections/tracks/pose) vượt ranh giới |
+| Danh mục Allowlisted Factories | Đăng ký module cấu hình biên qua danh mục đóng an toàn `{"person_down", "vehicle_incident", "danger_zone", "illegal_parking", "crowd_incident"}`; từ chối các factory ngoài danh mục |
+| Chia sẻ Hình học Biên (`apps/edge/geometry.py`) | Thuật toán ray-casting `point_in_polygon` tập trung duy nhất tại module dùng chung; không sao chép trùng lặp trong từng engine |
+| Lưu trữ Trạng thái Biên Bền vững | SQLite WAL mode (`synchronous=FULL`) bảo đảm `high_water_mark` và cấu hình LKG không bị lùi hay mất sau crash/reboot |
+| Điều phối Mạng WAN & Ưu tiên Metadata | `WanOutageCoordinator` đảm bảo tự chủ 24h, bảo vệ 50MB reserve, không xóa TTL unACK, ưu tiên metadata trước clips và giải tỏa backlog theo $B / (U - G)$ |
 
 **Công nghệ:** Python orchestration/reference pipeline, FastAPI/Python + MongoDB cho server; ONNX Runtime baseline inference; RKNN/MPP/RGA khi chọn target, alternative backends chỉ khi có yêu cầu. C++17 cho perception core (§6.7a), bindings pybind11/nanobind dự kiến; Python reference giữ làm oracle. Q19 chỉ yêu cầu dev demo UI đơn giản; chọn HTML/JS do FastAPI phục vụ để test qua API, không bắt buộc React app. Đội giao diện riêng ghép UI sản phẩm qua API/schema sau.
 

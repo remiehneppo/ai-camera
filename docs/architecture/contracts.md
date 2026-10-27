@@ -36,17 +36,18 @@ Fixtures bắt buộc: 3→1→2, chỉ có revision 3, hai writer concurrent, s
 
 Lab dùng event ring 10 phút, pre10/post20 giây, server clips 7 ngày; outage24h là sizing budget, không phải TTL xóa unACK. Timestamp khoảng evidence dùng source event-time và mapping sang recorder session kèm uncertainty, không join frame IDs giữa hai RTSP sessions.
 
-| Trường hợp | Anchor | Requested interval |
-|---|---|---|
-| Person fall có onset quan sát | onset estimate có provenance | anchor − 10s đến anchor + 20s |
-| Persistent lying/on-vehicle thiếu onset | first qualifying observation của chuỗi persistence đang dùng | anchor − 10s đến anchor + 20s; không gọi anchor này là onset |
-| Synthetic fixture | thời điểm anchor khai báo trong fixture | cùng policy pre/post |
+| Trường hợp | Anchor | Requested interval | Trạng thái thực thi |
+|---|---|---|---|
+| Person fall có onset quan sát | onset estimate có provenance | anchor − 10s đến anchor + 20s | Đang hoạt động |
+| Persistent lying/on-vehicle thiếu onset | first qualifying observation của chuỗi persistence đang dùng | anchor − 10s đến anchor + 20s; không gọi anchor này là onset | Đang hoạt động |
+| Alert-condition incidents (Tai nạn xe US08, Đỗ xe US05, Đông người US06) | mốc thời gian nguồn khi thỏa mãn điều kiện tạo cảnh báo theo vùng/ngưỡng | anchor − 10s đến anchor + 20s; evidence_anchor_kind="alert_condition" | Đang hoạt động |
+| Synthetic fixture | thời điểm anchor khai báo trong fixture | cùng policy pre/post | Đang hoạt động |
 
 Manifest/request mang `evidence_anchor_kind`, `evidence_anchor_time`, `requested_start/end`, mapping uncertainty, policy version và actual ranges/gaps. Complete được tính trên requested interval với gap tolerance đã ký. Trigger muộn tại t=15 với onset t=0 vẫn yêu cầu [-10,20], không lấy [5,35]. Khi onset/interval thay đổi tạo request mới có `supersedes_request_id`; không sửa requested range của ID đã ACK. Event revision mới liên kết request mới, artifact cũ vẫn giữ lineage/audit.
 
-MVP pin khi event cần evidence được persist; **không tạo candidate pins mặc định**. F03 phải chứng minh ring10 phút bao phủ maximum anchor-to-pin delay (verification + scheduling/handoff + recovery), pre-roll và mapping/keyframe margin. Nếu không đủ, báo partial/missing; không ký completeness cho profile đó. Tăng ring hoặc thêm candidate hold chỉ qua policy/budget được duyệt, không pin vô hạn hoặc làm yếu bảo vệ unACK.
+MVP pin khi event cần evidence được persist; **không tạo candidate pins mặc định**. F03 phải chứng minh ring 10 phút bao phủ maximum anchor-to-pin delay (verification + scheduling/handoff + recovery), pre-roll và mapping/keyframe margin. Nếu không đủ, báo partial/missing; không ký completeness cho profile đó. Tăng ring hoặc thêm candidate hold chỉ qua policy/budget được duyệt, không pin vô hạn hoặc làm yếu bảo vệ unACK.
 
-**Mở rộng nhóm mới — Q36 ngày 2026-10-20:** Bảng baseline person-down phía trên giữ nguyên: fall dùng onset estimate, persistent lying/on-vehicle thiếu onset dùng first qualifying observation của chuỗi persistence. Các nhóm mới trong [requirement tình huống an toàn đô thị](../requirements/urban-safety-scenarios.md) dùng source-time tại **mốc đủ điều kiện tạo cảnh báo** theo rule/ROI/lịch/ngưỡng đã phê duyệt. Cả hai policy giữ requested interval cố định anchor − 10s đến anchor + 20s; `evidence_anchor_kind` và policy version phải phân biệt theo loại, không đồng nhất onset với alert-condition anchor. Đây là đặc tả mở rộng, không tuyên bố code đã đổi; nhóm mới cần fixtures/conformance và event regression trước triển khai. Không thay protocol request/ACK hoặc sửa interval của request đã có.
+**Chuẩn hóa chính sách neo Q36:** Bảng baseline person-down phía trên giữ nguyên: fall dùng onset estimate, persistent lying/on-vehicle thiếu onset dùng first qualifying observation của chuỗi persistence. Các nhóm sự cố mới (US08 tai nạn xe, US05 đỗ xe sai vùng/giờ, US06 đông người & gây rối) sử dụng source-time tại **mốc đủ điều kiện tạo cảnh báo (`evidence_anchor_kind = "alert_condition"`)** theo rule/ROI/lịch/ngưỡng đã phê duyệt. Cả hai policy giữ requested interval cố định anchor − 10s đến anchor + 20s; `evidence_anchor_kind` và policy version được phân biệt rạch ròi theo loại, không đồng nhất onset với alert-condition anchor.
 
 Với sự kiện kéo dài, complete chỉ xác nhận coverage requested interval, không có nghĩa full episode. Mốc bắt đầu quan sát/duration/vùng/config phải có provenance; metadata không thay video hoặc chứng minh toàn bộ thời gian tồn tại. Onset ngoài clip/không quan sát được phải thể hiện rõ; không tự thêm nhiều clip hoặc NVR dài ngày.
 
@@ -94,7 +95,15 @@ Ví dụ semantic (không thay network schema):
 }
 ```
 
-Sau server retention, server availability thành expired; receipt/history vẫn tồn tại theo metadata policy. SLI completeness chỉ đếm complete, không đếm partial vì upload thành công. Manifest version tăng khi metadata trạng thái thay đổi; immutable artifact hash/bytes giữ nguyên.
+Sau server retention (mặc định 7 ngày = 604.800s), server availability chuyển thành `expired`; file video được thu hồi dọn đĩa nhưng **100% receipt gốc bất biến (`sha256`, `size_bytes`, `device_id`, `event_id`, `request_id`, `requested_start/end`, `actual_start/end`) được bảo toàn vĩnh viễn** phục vụ đối soát, kiểm toán và truy nguyên. 
+
+Quy trình tạo backup bundle và đối soát khôi phục (Ticket #43) snapshot toàn bộ metadata và tệp evidence, sau đó phục hồi và phân loại độc lập không giả định transaction chung giữa DB và đĩa:
+- `verified`: Tệp đĩa khớp chính xác kích thước và mã băm SHA-256 với receipt trong manifest.
+- `pending`: Evidence chưa thu thập/upload hoàn tất.
+- `missing`: Manifest hợp lệ tồn tại trong DB nhưng tệp đĩa bị mất/xóa bất thường.
+- `corrupt`: Tệp đĩa bị sai lệch kích thước hoặc mã băm so với receipt gốc $\rightarrow$ cách ly (`quarantined`).
+- `orphan`: Tệp đĩa tồn tại nhưng không có manifest tương ứng trong DB.
+- `expired`: Tệp đĩa đã được dọn dẹp hợp lệ sau khi hết hạn retention policy; manifest receipt vẫn được giữ nguyên.
 
 ## 5. Review freshness và correction
 
@@ -153,3 +162,34 @@ chạy lại probe và `record_probe_faults(snapshot["faults"])` — danh sách 
 
 **Recovery hợp lệ:** fault biến mất chỉ khi stage có checkpoint mới trong budget; không tắt probe để "hết" fault, và
 không đổi origin của event để đưa probe vào notification.
+
+## 8. Cấu hình có chữ ký và rollback có thẩm quyền (Signed Configuration & Rollback — #34, #35)
+
+Hệ thống quản lý cấu hình biên hỗ trợ hai luồng riêng biệt: local staging và remote signed bundle. Toàn bộ trạng thái và lịch sử kích hoạt được lưu trữ bền vững tại edge thông qua SQLite WAL mode (`synchronous=FULL`).
+
+- **Tuần tự hóa Canonical JSON (`canonical_bundle_bytes`):** Đảm bảo tính tất định bằng cách sắp xếp khóa, mã hóa UTF-8, dấu phân cách compact `(",", ":")` và cấm giá trị NaN/vô hạn. Mã băm cấu hình được tính bằng SHA-256.
+- **Ràng buộc mục tiêu (`TargetSpec`):** Xác thực chặt chẽ `target_device_id`, `target_site_id`, và `target_profile`. Bundle không khớp mục tiêu bị từ chối ngay lập tức.
+- **Phân quyền vai trò (Role Authorization):** 
+  - Ký cấu hình tiến (`forward activation`): bắt buộc key có role `config_signer`.
+  - Ký rollback (`rollback activation`): key có role `config_signer` hoặc `config_rollback`. Các role khác (viewer, auditor) bị từ chối.
+- **Nguyên tắc đơn điệu của High-Water Mark (`trust_sequence`):**
+  - **TUYỆT ĐỐI KHÔNG HẠ SEQUENCE:** Rollback về cấu hình cũ hoặc LKG **bắt buộc phải sử dụng một `trust_sequence` mới cao hơn `high_water_mark` hiện tại**. Bundle có `trust_sequence <= current_hwm` bị từ chối với lỗi `stale_trust_sequence`.
+  - Giữ nguyên LKG khi lỗi: Mọi nỗ lực kích hoạt thất bại (sai chữ ký, sai mục tiêu, cấu hình module không hợp lệ, hoặc đồng hồ chưa đồng bộ `clock_synchronized=False`) đều giữ nguyên cấu hình Last-Known-Good (LKG) hiện hành và không làm gián đoạn tiến trình ghi video độc lập của recorder.
+- **Vòng đời Canary Rollout:** Cho phép kích hoạt thử nghiệm trên một tập camera/module con, theo dõi tỷ lệ lỗi (`error_rate`) và tự động phục hồi LKG cơ sở nếu phát hiện bất thường trước khi quyết định mở rộng toàn hạm đội (`promote_canary`).
+
+## 9. Tự chủ mạng WAN và giải tỏa backlog (WAN Outage Autonomy & Backlog Drain — #36)
+
+Edge analytics được thiết kế để tự chủ hoàn toàn khi mất kết nối mạng WAN tới máy chủ trung tâm:
+
+- **Ngưỡng tự chủ 24h & Bảo vệ State Reserve:**
+  - Định mức tự chủ tối thiểu 24 giờ (86.400s) cho lưu trữ sự kiện và clip bằng chứng.
+  - Luôn bảo vệ ngưỡng dự trữ tối thiểu 50MB (`min_state_reserve_bytes`). Khi dung lượng chạm ngưỡng, hệ thống chuyển trạng thái `degraded` thay vì làm hỏng cơ sở dữ liệu SQLite hoặc ghi đè dữ liệu được bảo vệ.
+- **Chính sách Không đặt TTL cho Dữ liệu Chưa ACK (Strict No-TTL Rule):**
+  - Tuyệt đối **không áp dụng hạn chót (TTL) để xóa các clip bằng chứng và sự kiện chưa được máy chủ xác nhận (unACKed)** trong suốt thời gian ngắt mạng WAN. Dữ liệu sự kiện được bảo vệ trọn vẹn cho tới khi kết nối được phục hồi.
+- **Chính sách Ưu tiên Metadata (Metadata Priority Policy):**
+  - Khi kết nối WAN được khôi phục, bộ điều phối `WanOutageCoordinator` luôn ưu tiên xả toàn bộ hàng đợi sự kiện metadata trong outbox trước khi bắt đầu tải lên các tệp clip media dung lượng lớn, ngăn chặn việc nghẽn đường truyền làm chậm trễ thông tin cảnh báo.
+- **Mô hình Giải tỏa Backlog $B / (U - G)$:**
+  - Gọi $B$ là dung lượng backlog tích lũy, $U$ là băng thông tải lên hữu dụng, và $G$ là tốc độ sinh dữ liệu mới tại edge.
+  - Nếu $U \le G$: Hệ thống từ chối xác nhận khả năng thoát backlog (`recovery_impossible`).
+  - Nếu $U > G$: Thời gian giải tỏa backlog lý thuyết được xác định chính xác theo công thức $T = B / (U - G)$, được đối soát và giám sát trong suốt quá trình phục hồi mạng.
+  - Cam kết RPO = 0s (dựa trên tính toàn vẹn của ổ đĩa cục bộ, không cam đoan chống hỏng đĩa vật lý).

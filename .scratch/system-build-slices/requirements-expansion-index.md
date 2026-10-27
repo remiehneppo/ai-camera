@@ -38,8 +38,8 @@ Mũi tên `ticket → prerequisites` ở đây là **hard implementation depende
 | [#59 — Ngập theo vùng/mốc đến evidence/review](issues/59-ngap-theo-vung-moc-den-evidence-review.md) | #57 | External inputs pending, xem nguồn issue |
 | [#60 — Rác: hành vi và tồn lưu đến review](issues/60-rac-hanh-vi-va-ton-luu-den-review.md) | #57 | External inputs pending, xem nguồn issue |
 | [#61 — Chiếm dụng vỉa hè theo camera đến review](issues/61-chiem-dung-via-he-theo-camera-den-review.md) | #57 | External inputs pending, xem nguồn issue |
-| [#62 — Đỗ xe sai vùng/giờ đến review](issues/62-do-xe-sai-vung-gio-den-review.md) | #57 | External inputs pending, xem nguồn issue |
-| [#63 — Đông người và nghi gây rối đến review](issues/63-dong-nguoi-va-nghi-gay-roi-den-review.md) | #57 | External inputs pending, xem nguồn issue |
+| [#62 — Đỗ xe sai vùng/giờ đến review](issues/62-do-xe-sai-vung-gio-den-review.md) | #57 | Software lab engine + scenario tests pass (partial); field held-out pending |
+| [#63 — Đông người và nghi gây rối đến review](issues/63-dong-nguoi-va-nghi-gay-roi-den-review.md) | #57 | Software lab engine + scenario tests pass (partial); field held-out pending |
 | [#64 — Ẩu đả theo chuỗi tương tác đến review](issues/64-au-da-theo-chuoi-tuong-tac-den-review.md) | #57 | External inputs pending, xem nguồn issue |
 | [#65 — Vật bỏ quên: hai nhãn đến review](issues/65-vat-bo-quen-hai-nhan-den-review.md) | #57 | External inputs pending, xem nguồn issue |
 | [#66 — Cây/cành lớn đã đổ đến review](issues/66-cay-canh-lon-da-do-den-review.md) | #57 | External inputs pending, xem nguồn issue |

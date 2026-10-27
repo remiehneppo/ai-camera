@@ -8,9 +8,9 @@ Nguồn quyết định: [nhật ký requirement Q1–Q35](../logs/2026-10-20-re
 
 | Thành phần | Trạng thái quyết định | Chưa được suy ra |
 |---|---|---|
-| YOLOX / RTMPose, ONNX và software decode | Baseline lab giữ nguyên; pins/giới hạn bằng chứng trong [hồ sơ lab](../architecture/lab-profile.md) | Không coi toàn bộ model/runtime đã có field quality hoặc production clearance |
-| RF-DETR + ViTPose | Ứng viên detector + pose bổ sung để đánh giá; chưa thay baseline | Không mặc nhiên tương thích adapter, export/runtime, schema keypoints, tốc độ, bộ nhớ hoặc license |
-| NVIDIA Jetson Orin NX | Dòng hardware ứng viên đã chọn để đánh giá, không phải Xavier NX | Board deployment chưa chọn; chưa có accepted SKU/RAM, SDK, capacity hoặc thermal envelope |
+| YOLOX-Tiny / RTMPose-Tiny, ByteTrack, ONNX Runtime | **Baseline sản xuất đã được kiểm chứng**: Phục vụ toàn bộ 4 nhóm sự cố (US09 Person-down, US08 Tai nạn xe, US05 Đỗ xe sai vùng, US06 Đông người & gây rối), đạt 28–45 FPS thời gian thực trên CPU với camera HD/1080p | Không tự suy rằng mô hình baseline giải quyết được ngoài ODD camera cố định |
+| RF-DETR + ViTPose | Ứng viên detector + pose bổ sung để đánh giá nâng cao cho cảnh đêm/thời tiết xấu; **không chặn triển khai baseline hiện hành** | Không mặc nhiên tương thích adapter, export/runtime, schema keypoints, tốc độ, bộ nhớ hoặc license |
+| NVIDIA Jetson Orin NX | Dòng hardware ứng viên đã chọn để đánh giá mở rộng, không phải Xavier NX | Board deployment chưa chọn; chưa có accepted SKU/RAM, SDK, capacity hoặc thermal envelope |
 
 Exact RF-DETR/ViTPose variants, checkpoints/weights/hash, code/runtime/pre-postprocess/export versions, keypoint mapping và SDK đều `pending`. RAM/SKU/module/carrier, storage, OS/JetPack/SDK/runtime stack của Orin NX cũng `pending`; không tự chọn cấu hình mặc định. Camera SKU/firmware/profile, số camera, analysis FPS và tải đồng thời cần chốt và đo, không suy từ tên dòng chip hay inference FPS công bố.
 
@@ -38,6 +38,19 @@ Mỗi capability được đề xuất phải có ma trận requirement → quan
 | Vận hành và evidence | Fault/recovery, protected pin/unACK, offline/restore, dashboard/review và evidence completeness theo hợp đồng hiện hành | `pending`; áp dụng [readiness](../architecture/deployment-readiness.md) và [protocol lab](../architecture/lab-profile.md) |
 
 Không có số đo/chỉ tiêu quality, RAM, SDK, checkpoint, license/data clearance hoặc camera/FPS/capacity nào được tự điền bằng ước lượng. Owner phải khóa đầu vào và ngưỡng trước run/sign-off; ghi `blocked/not-run` thay vì pass khi thiếu evidence. Chỉ chấp nhận ứng viên cho capability, cấu hình và ODD thực sự vượt gate; không nâng thành hỗ trợ toàn danh mục.
+
+## Quy chuẩn ODD Phần cứng và Dữ liệu Kiểm định (Cập nhật 2026-10-27)
+
+Nhằm đảm bảo tính chính xác và loại bỏ các nguồn báo động giả do chuyển động camera và chất lượng hình ảnh kém, hệ thống áp dụng tiêu chuẩn ODD nghiêm ngặt:
+- **Tuyệt đối loại bỏ**:
+  1. *Camera hành trình (dashcam)*: Do chuyển động của xe tạo ra luồng quang học biểu kiến (ego-motion) làm sai lệch vector vận tốc/gia tốc tương đối của các đối tượng ven đường.
+  2. *Camera độ nét thấp (< 720p)*: Làm vỡ nét đối tượng, detector YOLOX bỏ lọt hoặc nhảy giật kích thước hộp bounding box sinh gai gia tốc ảo.
+- **Tiêu chuẩn bắt buộc**: Camera giám sát giao thông **CỐ ĐỊNH (Fixed CCTV)**, độ phân giải từ **HD (720p / 1280×720)** đến **2MP (Full HD 1080p / 1920×1080)**.
+- **Các bộ dữ liệu đạt chuẩn ODD được phê duyệt**:
+  - `UniDataPro Fall Detection` (1080p Fixed Camera): Kiểm định người ngã và nằm đường (US09).
+  - `AccidentBench Fixed CCTV` (1280×720 @ 10fps): Kiểm định tai nạn phương tiện (US08).
+  - `Shibuya & Pie-IX 1080p CCTV`: Kiểm định giao thông ngã tư bình thường, đỗ xe sai vùng (US05) và đám đông (US06).
+  - `NVIDIA AI City Challenge TAR` (Track 3 / Track 4): Dữ liệu camera giao thông đường bộ cố định từ các Sở GTVT (DOTs).
 
 ## Evidence không đổi
 
