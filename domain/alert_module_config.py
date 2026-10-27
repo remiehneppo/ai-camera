@@ -49,7 +49,7 @@ SCHEMA_VERSION: Final[str] = "module-camera-config-v1"
 
 #: Factories this codebase ships; a module whose factory is outside this set is refused.
 ALLOWLISTED_FACTORIES: Final[FrozenSet[str]] = frozenset(
-    {"person_down", "vehicle_incident", "danger_zone"}
+    {"person_down", "vehicle_incident", "danger_zone", "illegal_parking", "crowd_incident"}
 )
 
 #: Configuration keys an operator may set for one module on one camera.

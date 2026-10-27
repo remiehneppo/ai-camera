@@ -1,0 +1,581 @@
+"""Crowd Incident Engine for edge crowd concentration & suspected disorder detection (Ticket #63 / US06).
+
+Evaluates pedestrian tracks (person, pedestrian) in ROI (point_in_polygon) and optional schedule.
+Implements two distinct, independent layers (per US06 spec):
+1) Layer 1: Crowd Concentration (crowd_concentration):
+   - Pedestrian count in ROI N >= min_crowd_count (e.g. 5, configurable) persisting for
+     duration T >= min_duration_seconds (e.g. 3.0s).
+   - Severity: "low" or "medium" (default "medium" / Thường per requirements §2).
+2) Layer 2: Suspected Public Disorder (suspected_disorder):
+   - Clustered pedestrians exhibiting rapid dispersive / chaotic motion or aggressive kinetic
+     surging (high average speed/acceleration, sudden dispersal divergence, or rapid erratic
+     direction changes) among the crowd.
+   - Severity: "high" (default "Cao" per requirements §2).
+   - Explicitly enforces that crowd concentration alone does NOT imply disorder.
+
+Rejects hard negatives:
+1) Normal orderly queue / bus stop line: steady or low velocity does NOT trigger disorder.
+2) Isolated individual running or waving hands: single person does NOT trigger crowd concentration or disorder.
+3) Transient pedestrian crossing / walking past: brief crossing (T < min_duration_seconds) does NOT trigger crowd concentration.
+4) Pedestrians outside restricted ROI: do NOT count towards crowd threshold.
+5) Observation gap / track discontinuity: resets persistence timer.
+
+Generates valid full-snapshot event contracts passing domain.event_contract.validate_event:
+- pipeline_id: "crowd-incident-pipeline-v1"
+- pipeline_version: "1"
+- payload["taxonomy"]: "crowd_concentration" | "suspected_disorder"
+- payload["severity"]: "medium" (crowd) | "high" (disorder)
+- payload["crowd_count"]: count of pedestrians in cluster
+- evidence_requests with Q36 anchor: evidence_anchor_kind="alert_condition",
+  requested_start = anchor - 10, requested_end = anchor + 20.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+import math
+from typing import Any, Callable, Sequence
+from uuid import uuid4
+
+from apps.edge.tracker import Track
+from domain.event_contract import validate_event
+from domain.evidence_contract import make_evidence_request
+
+PEDESTRIAN_LABELS: frozenset[str] = frozenset({"person", "pedestrian"})
+
+
+def point_in_polygon(
+    x: float,
+    y: float,
+    polygon: Sequence[Sequence[float]] | None,
+) -> bool:
+    """Ray casting algorithm for testing if a 2D point is inside a polygon."""
+    if not polygon or len(polygon) < 3:
+        return True
+    n = len(polygon)
+    inside = False
+    p1x, p1y = polygon[0]
+    for i in range(1, n + 1):
+        p2x, p2y = polygon[i % n]
+        if y > min(p1y, p2y):
+            if y <= max(p1y, p2y):
+                if x <= max(p1x, p2x):
+                    if p1y != p2y:
+                        xints = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
+                    if p1x == p2x or x <= xints:
+                        inside = not inside
+        p1x, p1y = p2x, p2y
+    return inside
+
+
+def _extract_track_data(track: Any) -> tuple[int | str, str, list[float], float, float, float]:
+    """Extract (track_id, label, bbox, score, cx, cy) from Track object or dict."""
+    if isinstance(track, dict):
+        tid = track["track_id"]
+        label = str(track.get("label", "person"))
+        bbox = [float(x) for x in track["bbox"]]
+        score = float(track.get("score", 0.9))
+        cx = float(track.get("cx", (bbox[0] + bbox[2]) / 2.0))
+        cy = float(track.get("cy", (bbox[1] + bbox[3]) / 2.0))
+        return tid, label, bbox, score, cx, cy
+
+    tid = track.track_id
+    label = str(getattr(track, "label", "person"))
+    bbox = [float(x) for x in track.bbox]
+    score = float(getattr(track, "score", 0.9))
+    cx = float(getattr(track, "cx", (bbox[0] + bbox[2]) / 2.0))
+    cy = float(getattr(track, "cy", (bbox[1] + bbox[3]) / 2.0))
+    return tid, label, bbox, score, cx, cy
+
+
+@dataclass
+class _PedestrianKinematics:
+    """Kinematic state of one pedestrian track."""
+    track_id: int | str
+    timestamp: float
+    cx: float
+    cy: float
+    vx: float = 0.0
+    vy: float = 0.0
+    speed: float = 0.0
+    acceleration: float = 0.0
+    heading: float = 0.0
+
+
+@dataclass
+class _PedestrianState:
+    """Track state and recent history for crowd & disorder evaluation."""
+    track_id: int | str
+    label: str
+    last_bbox: list[float] = field(default_factory=list)
+    last_score: float = 0.9
+    last_timestamp: float = 0.0
+    kinematics: _PedestrianKinematics | None = None
+    history_detections: list[dict[str, Any]] = field(default_factory=list)
+
+
+class CrowdIncidentEngine:
+    """Independent edge incident detection engine for crowd concentration & suspected disorder (Ticket #63 / US06).
+
+    Factory: "crowd_incident"
+    """
+
+    factory: str = "crowd_incident"
+
+    def __init__(
+        self,
+        camera_id: str = "camera-001",
+        device_id: str = "device-edge-001",
+        stream_session_id: str | None = None,
+        pipeline_id: str = "crowd-incident-pipeline-v1",
+        pipeline_version: str = "1",
+        config_version: str = "crowd-incident-v1",
+        origin: str = "live",
+        model_artifact_hash: str = "sha256-crowd-incident-v1",
+        calibration_version: str = "uncalibrated-image-v1",
+        quality_state: str = "nominal",
+        roi_polygon: Sequence[Sequence[float]] | None = None,
+        # Layer 1: Crowd Concentration
+        min_crowd_count: int = 5,
+        min_duration_seconds: float = 3.0,
+        crowd_severity: str = "medium",
+        # Layer 2: Suspected Disorder
+        min_disorder_count: int = 3,
+        disorder_severity: str = "high",
+        disorder_speed_threshold: float = 45.0,
+        disorder_acceleration_threshold: float = 60.0,
+        disorder_dispersal_threshold: float = 25.0,
+        disorder_direction_variance_threshold: float = 0.6,
+        # Controls
+        max_observation_gap: float = 1.0,
+        cooldown_seconds: float = 10.0,
+        schedule_filter: Callable[[float], bool] | dict[str, Any] | None = None,
+    ) -> None:
+        self.camera_id = str(camera_id)
+        self.device_id = str(device_id)
+        self.stream_session_id = str(stream_session_id) if stream_session_id is not None else str(uuid4())
+        self.pipeline_id = str(pipeline_id)
+        self.pipeline_version = str(pipeline_version)
+        self.config_version = str(config_version)
+        self.origin = str(origin)
+        self.model_artifact_hash = str(model_artifact_hash)
+        self.calibration_version = str(calibration_version)
+        self.quality_state = str(quality_state)
+        self.roi_polygon = roi_polygon
+
+        # Layer 1 parameters
+        self.min_crowd_count = int(min_crowd_count)
+        self.min_duration_seconds = float(min_duration_seconds)
+        self.crowd_severity = str(crowd_severity)
+
+        # Layer 2 parameters
+        self.min_disorder_count = int(min_disorder_count)
+        self.disorder_severity = str(disorder_severity)
+        self.disorder_speed_threshold = float(disorder_speed_threshold)
+        self.disorder_acceleration_threshold = float(disorder_acceleration_threshold)
+        self.disorder_dispersal_threshold = float(disorder_dispersal_threshold)
+        self.disorder_direction_variance_threshold = float(disorder_direction_variance_threshold)
+
+        # General controls
+        self.max_observation_gap = float(max_observation_gap)
+        self.cooldown_seconds = float(cooldown_seconds)
+        self.schedule_filter = schedule_filter
+
+        # Internal state
+        self._tracks: dict[int | str, _PedestrianState] = {}
+        self._crowd_start_time: float | None = None
+        self._last_crowd_alert_time: float | None = None
+        self._last_disorder_alert_time: float | None = None
+        self._last_timestamp: float | None = None
+        self._current_crowd_count: int = 0
+
+    @property
+    def current_crowd_count(self) -> int:
+        """Current number of pedestrian tracks within ROI."""
+        return self._current_crowd_count
+
+    @property
+    def is_crowd_persisting(self) -> bool:
+        """Whether a crowd >= min_crowd_count is currently persisting."""
+        return self._crowd_start_time is not None
+
+    @property
+    def crowd_persistence_duration(self) -> float:
+        """Current persistence duration of the crowd in seconds."""
+        if self._crowd_start_time is None or self._last_timestamp is None:
+            return 0.0
+        return max(0.0, self._last_timestamp - self._crowd_start_time)
+
+    def reset(self) -> None:
+        """Clear all internal tracking states, persistence timers, and alert history."""
+        self._tracks.clear()
+        self._crowd_start_time = None
+        self._last_crowd_alert_time = None
+        self._last_disorder_alert_time = None
+        self._last_timestamp = None
+        self._current_crowd_count = 0
+
+    def observation_gap(self) -> None:
+        """Reset kinematics and crowd persistence timer across an observation gap."""
+        self._crowd_start_time = None
+        self._current_crowd_count = 0
+        for state in self._tracks.values():
+            state.kinematics = None
+        self._last_timestamp = None
+
+    def _is_schedule_active(self, ts: float) -> bool:
+        """Evaluate if the engine is active at given timestamp under optional schedule."""
+        if self.schedule_filter is None:
+            return True
+        if callable(self.schedule_filter):
+            return bool(self.schedule_filter(ts))
+        if isinstance(self.schedule_filter, dict):
+            # Dict form: e.g. {"active_hours": [(8, 17)]}
+            active_hours = self.schedule_filter.get("active_hours")
+            if active_hours:
+                hour = (ts / 3600.0) % 24.0
+                return any(start <= hour <= end for start, end in active_hours)
+        return True
+
+    def _in_roi(self, bbox: list[float], cx: float, cy: float) -> bool:
+        """Check if track center or bottom-center is within configured ROI."""
+        if self.roi_polygon is None:
+            return True
+        foot_x = (bbox[0] + bbox[2]) / 2.0
+        foot_y = float(bbox[3])
+        return (
+            point_in_polygon(foot_x, foot_y, self.roi_polygon)
+            or point_in_polygon(cx, cy, self.roi_polygon)
+        )
+
+    def _update_kinematics(self, state: _PedestrianState, ts: float, cx: float, cy: float) -> _PedestrianKinematics:
+        prev = state.kinematics
+        if prev is None or (ts - prev.timestamp) <= 0.0 or (ts - prev.timestamp) > self.max_observation_gap:
+            k = _PedestrianKinematics(
+                track_id=state.track_id,
+                timestamp=ts,
+                cx=cx,
+                cy=cy,
+                vx=0.0,
+                vy=0.0,
+                speed=0.0,
+                acceleration=0.0,
+                heading=0.0,
+            )
+            state.kinematics = k
+            return k
+
+        dt = ts - prev.timestamp
+        raw_vx = (cx - prev.cx) / dt
+        raw_vy = (cy - prev.cy) / dt
+        raw_speed = math.hypot(raw_vx, raw_vy)
+        raw_acc = (raw_speed - prev.speed) / dt
+
+        # Exponential smoothing with alpha ~ 0.7
+        alpha = min(1.0, max(0.1, dt / 0.15))
+        vx = alpha * raw_vx + (1.0 - alpha) * prev.vx
+        vy = alpha * raw_vy + (1.0 - alpha) * prev.vy
+        speed = math.hypot(vx, vy)
+        acc = alpha * raw_acc + (1.0 - alpha) * prev.acceleration
+        heading = math.atan2(vy, vx) if speed > 5.0 else prev.heading
+
+        k = _PedestrianKinematics(
+            track_id=state.track_id,
+            timestamp=ts,
+            cx=cx,
+            cy=cy,
+            vx=vx,
+            vy=vy,
+            speed=speed,
+            acceleration=acc,
+            heading=heading,
+        )
+        state.kinematics = k
+        return k
+
+    def _evaluate_disorder(
+        self,
+        pedestrians_in_roi: list[_PedestrianState],
+        ts: float,
+    ) -> tuple[bool, dict[str, Any]]:
+        """Evaluate Layer 2: Suspected Public Disorder kinematic indicators.
+
+        Requires at least min_disorder_count pedestrians clustered in ROI.
+        Checks for:
+        1) Rapid dispersal divergence (scattering away from cluster center of mass).
+        2) Aggressive kinetic surging (high collective speed & acceleration).
+        3) Chaotic / erratic conflicting directions among moving crowd.
+        """
+        n = len(pedestrians_in_roi)
+        if n < self.min_disorder_count:
+            return False, {}
+
+        kin_list = [p.kinematics for p in pedestrians_in_roi if p.kinematics is not None]
+        if len(kin_list) < self.min_disorder_count:
+            return False, {}
+
+        speeds = [k.speed for k in kin_list]
+        mean_speed = sum(speeds) / len(speeds)
+        accelerations = [abs(k.acceleration) for k in kin_list]
+        mean_acc = sum(accelerations) / len(accelerations)
+
+        # 1. Cluster center of mass & Dispersal Divergence
+        cm_x = sum(k.cx for k in kin_list) / len(kin_list)
+        cm_y = sum(k.cy for k in kin_list) / len(kin_list)
+
+        radial_velocities: list[float] = []
+        for k in kin_list:
+            dx = k.cx - cm_x
+            dy = k.cy - cm_y
+            dist = math.hypot(dx, dy)
+            if dist > 1e-3:
+                # Dot product of velocity with outward radial unit vector
+                v_radial = (k.vx * dx + k.vy * dy) / dist
+                radial_velocities.append(v_radial)
+            else:
+                radial_velocities.append(0.0)
+
+        mean_dispersal = sum(radial_velocities) / len(radial_velocities) if radial_velocities else 0.0
+
+        # 2. Direction variance (circular variance = 1 - R)
+        moving_kin = [k for k in kin_list if k.speed >= 10.0]
+        if len(moving_kin) >= 2:
+            sum_cos = sum(math.cos(k.heading) for k in moving_kin)
+            sum_sin = sum(math.sin(k.heading) for k in moving_kin)
+            r_norm = math.hypot(sum_cos, sum_sin) / len(moving_kin)
+            dir_variance = max(0.0, 1.0 - r_norm)
+        else:
+            dir_variance = 0.0
+
+        # Check conditions
+        is_dispersal = (
+            mean_dispersal >= self.disorder_dispersal_threshold
+            and mean_speed >= 25.0
+            and any(s >= 30.0 for s in speeds)
+        )
+
+        surging_count = sum(1 for k in kin_list if k.speed >= self.disorder_speed_threshold and abs(k.acceleration) >= 40.0)
+        is_surge = (
+            mean_speed >= self.disorder_speed_threshold
+            and mean_acc >= self.disorder_acceleration_threshold
+            and surging_count >= 2
+        )
+
+        is_chaotic = (
+            dir_variance >= self.disorder_direction_variance_threshold
+            and mean_speed >= 30.0
+            and any(s >= self.disorder_speed_threshold for s in speeds)
+            and len(moving_kin) >= self.min_disorder_count
+        )
+
+        is_disorder = is_dispersal or is_surge or is_chaotic
+
+        reason = []
+        if is_dispersal:
+            reason.append("rapid_dispersal_divergence")
+        if is_surge:
+            reason.append("aggressive_kinetic_surge")
+        if is_chaotic:
+            reason.append("chaotic_erratic_motion")
+
+        metrics = {
+            "mean_speed": round(mean_speed, 2),
+            "mean_acceleration": round(mean_acc, 2),
+            "dispersal_rate": round(mean_dispersal, 2),
+            "direction_variance": round(dir_variance, 3),
+            "reasons": reason,
+        }
+
+        return is_disorder, metrics
+
+    def _create_event(
+        self,
+        taxonomy: str,
+        severity: str,
+        crowd_count: int,
+        anchor_time: float,
+        detection_time: float,
+        involved_track_ids: list[int | str],
+        confidence: float,
+        pedestrians: list[_PedestrianState],
+        extra_payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Construct, validate, and return a validated full-snapshot event contract dictionary."""
+        event_id = str(uuid4())
+        message_id = f"msg-{uuid4().hex[:12]}"
+        request_id = f"req-{uuid4().hex[:12]}"
+        now_iso = (
+            datetime.now(timezone.utc)
+            .isoformat(timespec="microseconds")
+            .replace("+00:00", "Z")
+        )
+
+        evidence_request = make_evidence_request(
+            request_id=request_id,
+            session_id=self.stream_session_id,
+            anchor_kind="alert_condition",
+            anchor_time=anchor_time,
+        )
+
+        detections: list[dict[str, Any]] = []
+        for p in pedestrians:
+            detections.extend(p.history_detections[-10:])
+        if len(detections) > 40:
+            detections = detections[-40:]
+
+        payload: dict[str, Any] = {
+            "quality": {
+                "state": self.quality_state,
+                "odd_supported": True if self.quality_state == "normal" else None,
+            },
+            "taxonomy": taxonomy,
+            "severity": severity,
+            "crowd_count": int(crowd_count),
+            "confidence": round(float(confidence), 3),
+            "track_id": involved_track_ids[0] if involved_track_ids else None,
+            "track_ids": involved_track_ids,
+            "anchor_time": float(anchor_time),
+            "detection_time": float(detection_time),
+            "detections": detections,
+            "evidence_requests": [evidence_request],
+        }
+        if extra_payload:
+            payload.update(extra_payload)
+
+        event_snapshot: dict[str, Any] = {
+            "schema_version": 1,
+            "message_id": message_id,
+            "event_id": event_id,
+            "revision": 1,
+            "device_id": self.device_id,
+            "camera_id": self.camera_id,
+            "stream_session_id": self.stream_session_id,
+            "pipeline_id": self.pipeline_id,
+            "pipeline_version": self.pipeline_version,
+            "origin": self.origin,
+            "event_time": now_iso,
+            "produced_at": now_iso,
+            "config_version": self.config_version,
+            "model_lineage": [
+                {"role": "crowd_detector", "version": "1.0.0"},
+                {"role": "crowd_incident", "version": "1.0.0"},
+            ],
+            "model_artifact_hash": self.model_artifact_hash,
+            "calibration_version": self.calibration_version,
+            "quality_state": self.quality_state,
+            "payload": payload,
+        }
+
+        return validate_event(event_snapshot)
+
+    def process_tracks(
+        self,
+        tracks: list[Track] | list[dict[str, Any]],
+        timestamp: float,
+    ) -> list[dict[str, Any]]:
+        """Evaluate pedestrian tracks at timestamp and return validated event snapshots for any triggered incidents."""
+        ts = float(timestamp)
+
+        # 0. Check observation gap / backwards jump
+        if self._last_timestamp is not None:
+            if ts < self._last_timestamp or (ts - self._last_timestamp) > self.max_observation_gap:
+                self.observation_gap()
+
+        self._last_timestamp = ts
+
+        # 1. Check schedule filter if provided
+        if not self._is_schedule_active(ts):
+            self._crowd_start_time = None
+            self._current_crowd_count = 0
+            return []
+
+        # 2. Filter pedestrian tracks in ROI
+        active_ids: set[int | str] = set()
+        pedestrians_in_roi: list[_PedestrianState] = []
+
+        for track in tracks:
+            tid, label, bbox, score, cx, cy = _extract_track_data(track)
+            if label not in PEDESTRIAN_LABELS:
+                continue
+
+            active_ids.add(tid)
+
+            if not self._in_roi(bbox, cx, cy):
+                continue
+
+            state = self._tracks.get(tid)
+            if state is None:
+                state = _PedestrianState(track_id=tid, label=label)
+                self._tracks[tid] = state
+
+            state.last_bbox = bbox
+            state.last_score = score
+            state.last_timestamp = ts
+            state.history_detections.append({
+                "bbox": bbox,
+                "score": score,
+                "timestamp": ts,
+                "label": state.label,
+            })
+            if len(state.history_detections) > 32:
+                state.history_detections[:] = state.history_detections[-20:]
+
+            self._update_kinematics(state, ts, cx, cy)
+            pedestrians_in_roi.append(state)
+
+        # Prune inactive tracks
+        for stale_id in [t for t in self._tracks if t not in active_ids]:
+            del self._tracks[stale_id]
+
+        count = len(pedestrians_in_roi)
+        self._current_crowd_count = count
+        involved_ids = [p.track_id for p in pedestrians_in_roi]
+        events: list[dict[str, Any]] = []
+
+        # 3. Layer 1: Crowd Concentration
+        if count >= self.min_crowd_count:
+            if self._crowd_start_time is None:
+                self._crowd_start_time = ts
+
+            persistence_duration = ts - self._crowd_start_time
+            if persistence_duration >= self.min_duration_seconds:
+                # Check cooldown
+                if self._last_crowd_alert_time is None or (ts - self._last_crowd_alert_time) >= self.cooldown_seconds:
+                    anchor = self._crowd_start_time + self.min_duration_seconds
+                    evt = self._create_event(
+                        taxonomy="crowd_concentration",
+                        severity=self.crowd_severity,
+                        crowd_count=count,
+                        anchor_time=anchor,
+                        detection_time=ts,
+                        involved_track_ids=involved_ids,
+                        confidence=0.95,
+                        pedestrians=pedestrians_in_roi,
+                        extra_payload={"persistence_seconds": round(persistence_duration, 2)},
+                    )
+                    events.append(evt)
+                    self._last_crowd_alert_time = ts
+        else:
+            # Drops below threshold: reset persistence timer
+            self._crowd_start_time = None
+
+        # 4. Layer 2: Suspected Public Disorder
+        is_disorder, metrics = self._evaluate_disorder(pedestrians_in_roi, ts)
+        if is_disorder:
+            if self._last_disorder_alert_time is None or (ts - self._last_disorder_alert_time) >= self.cooldown_seconds:
+                evt = self._create_event(
+                    taxonomy="suspected_disorder",
+                    severity=self.disorder_severity,
+                    crowd_count=count,
+                    anchor_time=ts,
+                    detection_time=ts,
+                    involved_track_ids=involved_ids,
+                    confidence=0.92,
+                    pedestrians=pedestrians_in_roi,
+                    extra_payload={"disorder_metrics": metrics},
+                )
+                events.append(evt)
+                self._last_disorder_alert_time = ts
+
+        return events
