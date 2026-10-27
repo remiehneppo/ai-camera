@@ -242,26 +242,20 @@ def main():
     if not targets:
         # Benchmark suite spanning different scenarios and ODDs
         targets = [
-            # 1. Fall Positive 1080p
+            # 1. Fall Positive 1080p (Fixed camera, UniDataPro)
             "data/benchmark/unidata/fall_0001.mp4",
-            # 2. Fall Negative / Normal ADL 1080p
+            # 2. Fall Negative / Normal ADL 1080p (Fixed camera, UniDataPro)
             "data/benchmark/unidata/fall_0003.mp4",
-            # 3. Dense pedestrian + vehicle crossing 1080p (Shibuya)
+            # 3. Dense pedestrian + vehicle crossing 1080p (Fixed camera, Shibuya)
             "data/benchmark/shibuya_crossing_1080p.mp4",
-            # 4. Normal vehicle intersection 1080p
+            # 4. Normal vehicle intersection 1080p (Fixed camera, Pie-IX)
             "data/benchmark/intersection_traffic_1080p.mp4",
-            # 5. UCF-Crime Accident Positive (320x240)
-            "data/benchmark/ucfcrime/RoadAccidents002_x264.mp4",
-            # 6. UCF-Crime Fighting (320x240)
-            "data/benchmark/ucfcrime/Fighting002_x264.mp4",
         ]
-        # 7-8. DAD_A3D Accident vs Normal (720p)
-        dad_pos = Path("/media/tieubaoca/HDD1/F/dataset/video/fall-accident/DAD_A3D/videos/testing/positive/000456.mp4")
-        dad_neg = Path("/media/tieubaoca/HDD1/F/dataset/video/fall-accident/DAD_A3D/videos/testing/negative/000830.mp4")
-        if dad_pos.exists():
-            targets.append(str(dad_pos))
-        if dad_neg.exists():
-            targets.append(str(dad_neg))
+        # 5-8. HD 720p Fixed CCTV traffic camera accidents (ODD compliant, AccidentBench)
+        cctv_hd_dir = ROOT / "data/benchmark/traffic_cctv_hd"
+        if cctv_hd_dir.exists():
+            for p in sorted(cctv_hd_dir.glob("*.mp4"))[:6]:
+                targets.append(str(p))
 
     all_results = []
     print(f"\n=======================================================")
