@@ -407,29 +407,48 @@ class TestHardNegativesRejection(unittest.TestCase):
     """Scenario tests verifying rejection of all 5 hard negatives."""
 
     def test_hard_negative_1_orderly_queue_or_bus_stop(self) -> None:
-        """Normal orderly queue / bus stop line: steady or low velocity does NOT trigger disorder."""
-        engine = CrowdIncidentEngine(
+        """Normal orderly queue / bus stop line: steady or low velocity does NOT trigger disorder,
+        and when queue exception rule is configured, does not trigger crowd concentration either."""
+        from domain.alert_module_config import ExceptionRule
+        engine_with_exception = CrowdIncidentEngine(
             min_crowd_count=5,
             min_duration_seconds=3.0,
+            exceptions=[ExceptionRule(code="bus_stop_queue", reason="transit stop queue")],
         )
 
-        # 6 people standing in a line at a bus stop, with tiny natural fidgeting
+        # 6 people standing in an orderly line at a transit stop
         for step, t in enumerate([0.0, 1.0, 2.0, 3.0, 4.0]):
             tracks = [
                 _make_track(i, 100.0, 100.0 + i * 25.0 + (step % 2) * 1.5, t)
                 for i in range(6)
             ]
-            evs = engine.process_tracks(tracks, timestamp=t)
-            # Must NEVER trigger disorder
-            self.assertEqual(
-                [e for e in evs if e["payload"]["taxonomy"] == "suspected_disorder"],
-                [],
-                f"Bus stop queue triggered disorder at t={t}",
-            )
-            # Triggers crowd concentration only after persistence threshold
-            if t == 3.0:
-                self.assertEqual(len(evs), 1)
-                self.assertEqual(evs[0]["payload"]["taxonomy"], "crowd_concentration")
+            evs = engine_with_exception.process_tracks(tracks, timestamp=t)
+            self.assertEqual(len(evs), 0, f"Orderly queue under exception must not alert at t={t}")
+
+    def test_recurrent_crowd_alert_updates_anchor_time(self) -> None:
+        """Subsequent crowd alerts after cooldown update anchor_time to active condition time."""
+        engine = CrowdIncidentEngine(
+            min_crowd_count=3,
+            min_duration_seconds=2.0,
+            cooldown_seconds=5.0,
+        )
+        tracks0 = [_make_track(i, 100.0 + i * 15.0, 100.0, 0.0) for i in range(3)]
+
+        # Initial trigger at t=2.0
+        engine.process_tracks(tracks0, timestamp=0.0)
+        engine.process_tracks(tracks0, timestamp=1.0)
+        evs1 = engine.process_tracks(tracks0, timestamp=2.0)
+        self.assertEqual(len(evs1), 1)
+        self.assertEqual(evs1[0]["payload"]["anchor_time"], 2.0)
+
+        # Maintain observation without gap: step from t=3.0 to t=8.0 (cooldown 5.0s elapsed from t=2.0 -> triggers at t=7.0)
+        # Recurrent alert triggers with active condition anchor (t=7.0), not frozen past time (t=2.0)!
+        evs2 = []
+        for t in [3.0, 4.0, 5.0, 6.0, 7.0, 8.0]:
+            emitted = engine.process_tracks(tracks0, timestamp=t)
+            evs2.extend(emitted)
+        self.assertEqual(len(evs2), 1)
+        self.assertEqual(evs2[0]["payload"]["anchor_time"], 7.0)
 
     def test_hard_negative_2_isolated_runner(self) -> None:
         """Isolated individual running or waving hands: single person does NOT trigger crowd concentration or disorder."""

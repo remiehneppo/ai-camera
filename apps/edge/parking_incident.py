@@ -37,36 +37,13 @@ import math
 from typing import Any, Sequence
 from uuid import uuid4
 
+from apps.edge.geometry import point_in_polygon
 from apps.edge.tracker import Track
 from domain.alert_module_config import ScheduleWindow, WEEKDAYS
 from domain.event_contract import validate_event
 from domain.evidence_contract import make_evidence_request
 
 DEFAULT_VEHICLE_LABELS: frozenset[str] = frozenset({"car", "truck", "bus", "motorcycle"})
-
-
-def point_in_polygon(
-    x: float,
-    y: float,
-    polygon: Sequence[Sequence[float]] | None,
-) -> bool:
-    """Ray casting algorithm for testing if a 2D point is inside a polygon."""
-    if not polygon or len(polygon) < 3:
-        return True
-    n = len(polygon)
-    inside = False
-    p1x, p1y = polygon[0]
-    for i in range(1, n + 1):
-        p2x, p2y = polygon[i % n]
-        if y > min(p1y, p2y):
-            if y <= max(p1y, p2y):
-                if x <= max(p1x, p2x):
-                    if p1y != p2y:
-                        xints = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
-                    if p1x == p2x or x <= xints:
-                        inside = not inside
-        p1x, p1y = p2x, p2y
-    return inside
 
 
 @dataclass
@@ -87,6 +64,7 @@ class _VehicleParkingState:
     dwell_seconds: float = 0.0
     triggered: bool = False
     last_alert_time: float | None = None
+    consecutive_stationary_frames: int = 0
     history_detections: list[dict[str, Any]] = field(default_factory=list)
 
     def reset_dwell(self) -> None:
@@ -97,6 +75,7 @@ class _VehicleParkingState:
         self.dwell_seconds = 0.0
         self.anchor_cx = None
         self.anchor_cy = None
+        self.consecutive_stationary_frames = 0
         self.triggered = False
 
 
@@ -116,7 +95,7 @@ class ParkingIncidentEngine:
         origin: str = "live",
         model_artifact_hash: str = "sha256-parking-incident-v1",
         calibration_version: str = "uncalibrated-image-v1",
-        quality_state: str = "nominal",
+        quality_state: str = "normal",
         roi_polygon: Sequence[Sequence[float]] | None = None,
         schedule: Sequence[ScheduleWindow] | Sequence[dict[str, Any]] | None = None,
         timezone_info: tzinfo | None = None,
@@ -345,25 +324,6 @@ class ParkingIncidentEngine:
                 if dt > 0.0 and state.last_cx is not None and state.last_cy is not None:
                     inst_speed = math.hypot(track.cx - state.last_cx, track.cy - state.last_cy) / dt
 
-            # Determine stationarity
-            if state.last_timestamp is None or gap_or_clock_jump:
-                # First frame of observation
-                is_stationary = True
-            elif state.anchor_cx is not None and state.anchor_cy is not None:
-                disp_from_anchor = math.hypot(track.cx - state.anchor_cx, track.cy - state.anchor_cy)
-                if disp_from_anchor > self.stationary_displacement_threshold:
-                    is_stationary = False
-                elif inst_speed <= self.stationary_speed_threshold:
-                    is_stationary = True
-                elif disp_from_anchor <= 3.0 and inst_speed <= self.stationary_speed_threshold * 1.5:
-                    # Micro-jitter within 3px
-                    is_stationary = True
-                else:
-                    is_stationary = False
-            else:
-                # No anchor set yet
-                is_stationary = inst_speed <= self.stationary_speed_threshold
-
             # Update history detections
             state.history_detections.append({
                 "bbox": list(track.bbox),
@@ -374,9 +334,50 @@ class ParkingIncidentEngine:
             if len(state.history_detections) > 32:
                 state.history_detections[:] = state.history_detections[-20:]
 
+            # Check exceptions: if vehicle matches permitted exception rules, skip dwell accumulation
+            is_excepted = False
+            if self.exceptions:
+                for exc in self.exceptions:
+                    code = str(getattr(exc, "code", exc)).lower()
+                    if (
+                        code in ("all", "permit_all", "all_vehicles")
+                        or code in (track.label.lower(), f"permit_{track.label.lower()}")
+                        or code == str(track.track_id)
+                    ):
+                        is_excepted = True
+                        break
+
+            # Handle zero-history: first frame of observation cannot establish stationarity alone
+            if state.last_timestamp is None or gap_or_clock_jump:
+                state.last_cx = track.cx
+                state.last_cy = track.cy
+                state.last_bbox = list(track.bbox)
+                state.last_timestamp = ts
+                state.anchor_cx = track.cx
+                state.anchor_cy = track.cy
+                state.dwell_start_time = None
+                state.dwell_seconds = 0.0
+                continue
+
+            prev_timestamp = state.last_timestamp
+
+            # Determine stationarity from at least two consecutive observations
+            if state.anchor_cx is not None and state.anchor_cy is not None:
+                disp_from_anchor = math.hypot(track.cx - state.anchor_cx, track.cy - state.anchor_cy)
+                if disp_from_anchor > self.stationary_displacement_threshold:
+                    is_stationary = False
+                elif inst_speed <= self.stationary_speed_threshold:
+                    is_stationary = True
+                elif disp_from_anchor <= self.stationary_displacement_threshold * 0.3 and inst_speed <= self.stationary_speed_threshold * 1.5:
+                    is_stationary = True
+                else:
+                    is_stationary = False
+            else:
+                is_stationary = inst_speed <= self.stationary_speed_threshold
+
             # State transitions:
-            if not is_stationary:
-                # Vehicle is moving: reset dwell timer (Hard negatives 1 & 2)
+            if not is_stationary or is_excepted:
+                # Vehicle is moving or excepted: reset dwell timer (Hard negatives 1 & 2)
                 state.reset_dwell()
                 state.last_cx = track.cx
                 state.last_cy = track.cy
@@ -405,8 +406,8 @@ class ParkingIncidentEngine:
 
             # In restricted schedule and stationary in restricted ROI
             if state.dwell_start_time is None:
-                state.dwell_start_time = ts
-                state.dwell_seconds = 0.0
+                state.dwell_start_time = prev_timestamp
+                state.dwell_seconds = ts - prev_timestamp
             else:
                 state.dwell_seconds = ts - state.dwell_start_time
 

@@ -1,7 +1,7 @@
 # 63: Đông người và nghi gây rối đến review
 
-Status: ready-for-agent
-Execution: done (software lab; CrowdIncidentEngine + Layer 1 crowd concentration + Layer 2 suspected disorder + 5 hard negatives pass)
+Status: needs-info
+Execution: partial (software lab; CrowdIncidentEngine + Layer 1 crowd concentration + Layer 2 suspected disorder + queue exceptions + 5 hard negatives pass; real video held-out open)
 Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
 
 **What to build:** Một lát cắt US06 tại một profile camera đã duyệt: video → capability đếm/mật độ người và capability quan sát chuỗi tương tác gây rối → suspected event → raw evidence → dashboard review thật. Đếm người hoặc pose đơn lẻ không chứng minh gây rối; không dựng framework rỗng hay coi synthetic event là tính năng nhận diện.
@@ -10,13 +10,13 @@ Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duy
 
 ## Acceptance criteria
 
-- [x] Nguồn capability phù hợp được chỉ rõ bằng manifest artifact/runtime/pre-postprocess, rights/data clearance và đầu vào quan sát; chưa có capability thì blocked, không thay bằng random/mock hoặc khẳng định RF-DETR + ViTPose tự đáp ứng.
+- [ ] Nguồn capability phù hợp được chỉ rõ bằng manifest artifact/runtime/pre-postprocess, rights/data clearance và đầu vào quan sát; chưa có capability thì blocked, không thay bằng random/mock hoặc khẳng định RF-DETR + ViTPose tự đáp ứng.
 - [x] Phân biệt đúng hai lớp độc lập: đông người theo số lượng/mật độ/thời gian và nghi gây rối có xô đẩy/đánh nhau, đập phá, ném vật vào người/tài sản hoặc cùng chiếm/chặn luồng; không ép crowd threshold là điều kiện đủ kết luận gây rối.
-- [x] E2E replay/video thật được cấp quyền: event có pipeline provenance, label, config version, quality/unknown tới detail; evidence được upload/phát lại và reviewer lưu quyết định có version.
+- [ ] E2E replay/video thật được cấp quyền: event có pipeline provenance, label, config version, quality/unknown tới detail; evidence được upload/phát lại và reviewer lưu quyết định có version.
 - [x] Per module × camera có ROI/lịch, count/density/persistence, chuỗi hành vi, vùng luồng và ngoại lệ; hai camera dùng config khác không rò state. Mặc định ưu tiên Thường cho đông người; Cao cho nghi gây rối, cấu hình được, severity độc lập confidence.
 - [x] Kiểm hard negatives: điểm chờ, hàng đợi, sự kiện hợp lệ, chạy/vung tay riêng lẻ; thiếu/mất continuity/ngoài ODD không tạo certainty hoặc negative giả.
-- [x] Dedup trong nhóm và link labels khi trùng bối cảnh; recorder/nhánh khác vẫn hoạt động khi module disabled/fault. Tái sử dụng seam đã tiêu thụ ở #57, không fork một framework mới cho mỗi nhóm.
-- [x] Real held-out positives từng nhánh + hard negatives + unknown có lineage/rights/ODD và report theo targets được ký; mock pass không đóng acceptance nhận diện. Kiểm source-time 10/20 và baseline anchor regression.
+- [ ] Dedup trong nhóm và link labels khi trùng bối cảnh; recorder/nhánh khác vẫn hoạt động khi module disabled/fault. Tái sử dụng seam đã tiêu thụ ở #57, không fork một framework mới cho mỗi nhóm.
+- [ ] Real held-out positives từng nhánh + hard negatives + unknown có lineage/rights/ODD và report theo targets được ký; mock pass không đóng acceptance nhận diện. Kiểm source-time 10/20 và baseline anchor regression.
 
 ## External inputs và chuyển ready
 

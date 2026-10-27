@@ -38,35 +38,12 @@ import math
 from typing import Any, Callable, Sequence
 from uuid import uuid4
 
+from apps.edge.geometry import point_in_polygon
 from apps.edge.tracker import Track
 from domain.event_contract import validate_event
 from domain.evidence_contract import make_evidence_request
 
 PEDESTRIAN_LABELS: frozenset[str] = frozenset({"person", "pedestrian"})
-
-
-def point_in_polygon(
-    x: float,
-    y: float,
-    polygon: Sequence[Sequence[float]] | None,
-) -> bool:
-    """Ray casting algorithm for testing if a 2D point is inside a polygon."""
-    if not polygon or len(polygon) < 3:
-        return True
-    n = len(polygon)
-    inside = False
-    p1x, p1y = polygon[0]
-    for i in range(1, n + 1):
-        p2x, p2y = polygon[i % n]
-        if y > min(p1y, p2y):
-            if y <= max(p1y, p2y):
-                if x <= max(p1x, p2x):
-                    if p1y != p2y:
-                        xints = (y - p1y) * (p2x - p1x) / (p2y - p1y) + p1x
-                    if p1x == p2x or x <= xints:
-                        inside = not inside
-        p1x, p1y = p2x, p2y
-    return inside
 
 
 def _extract_track_data(track: Any) -> tuple[int | str, str, list[float], float, float, float]:
@@ -115,6 +92,19 @@ class _PedestrianState:
     history_detections: list[dict[str, Any]] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class CrowdEventContext:
+    taxonomy: str
+    severity: str
+    crowd_count: int
+    anchor_time: float
+    detection_time: float
+    involved_track_ids: list[int | str]
+    confidence: float
+    pedestrians: list[_PedestrianState]
+    extra_payload: dict[str, Any] | None = None
+
+
 class CrowdIncidentEngine:
     """Independent edge incident detection engine for crowd concentration & suspected disorder (Ticket #63 / US06).
 
@@ -134,7 +124,7 @@ class CrowdIncidentEngine:
         origin: str = "live",
         model_artifact_hash: str = "sha256-crowd-incident-v1",
         calibration_version: str = "uncalibrated-image-v1",
-        quality_state: str = "nominal",
+        quality_state: str = "normal",
         roi_polygon: Sequence[Sequence[float]] | None = None,
         # Layer 1: Crowd Concentration
         min_crowd_count: int = 5,
@@ -151,6 +141,7 @@ class CrowdIncidentEngine:
         max_observation_gap: float = 1.0,
         cooldown_seconds: float = 10.0,
         schedule_filter: Callable[[float], bool] | dict[str, Any] | None = None,
+        exceptions: Sequence[Any] | None = None,
     ) -> None:
         self.camera_id = str(camera_id)
         self.device_id = str(device_id)
@@ -181,6 +172,7 @@ class CrowdIncidentEngine:
         self.max_observation_gap = float(max_observation_gap)
         self.cooldown_seconds = float(cooldown_seconds)
         self.schedule_filter = schedule_filter
+        self.exceptions = tuple(exceptions or ())
 
         # Internal state
         self._tracks: dict[int | str, _PedestrianState] = {}
@@ -389,18 +381,7 @@ class CrowdIncidentEngine:
 
         return is_disorder, metrics
 
-    def _create_event(
-        self,
-        taxonomy: str,
-        severity: str,
-        crowd_count: int,
-        anchor_time: float,
-        detection_time: float,
-        involved_track_ids: list[int | str],
-        confidence: float,
-        pedestrians: list[_PedestrianState],
-        extra_payload: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    def _create_event(self, ctx: CrowdEventContext) -> dict[str, Any]:
         """Construct, validate, and return a validated full-snapshot event contract dictionary."""
         event_id = str(uuid4())
         message_id = f"msg-{uuid4().hex[:12]}"
@@ -415,11 +396,11 @@ class CrowdIncidentEngine:
             request_id=request_id,
             session_id=self.stream_session_id,
             anchor_kind="alert_condition",
-            anchor_time=anchor_time,
+            anchor_time=ctx.anchor_time,
         )
 
         detections: list[dict[str, Any]] = []
-        for p in pedestrians:
+        for p in ctx.pedestrians:
             detections.extend(p.history_detections[-10:])
         if len(detections) > 40:
             detections = detections[-40:]
@@ -429,19 +410,19 @@ class CrowdIncidentEngine:
                 "state": self.quality_state,
                 "odd_supported": True if self.quality_state == "normal" else None,
             },
-            "taxonomy": taxonomy,
-            "severity": severity,
-            "crowd_count": int(crowd_count),
-            "confidence": round(float(confidence), 3),
-            "track_id": involved_track_ids[0] if involved_track_ids else None,
-            "track_ids": involved_track_ids,
-            "anchor_time": float(anchor_time),
-            "detection_time": float(detection_time),
+            "taxonomy": ctx.taxonomy,
+            "severity": ctx.severity,
+            "crowd_count": int(ctx.crowd_count),
+            "confidence": round(float(ctx.confidence), 3),
+            "track_id": ctx.involved_track_ids[0] if ctx.involved_track_ids else None,
+            "track_ids": ctx.involved_track_ids,
+            "anchor_time": float(ctx.anchor_time),
+            "detection_time": float(ctx.detection_time),
             "detections": detections,
             "evidence_requests": [evidence_request],
         }
-        if extra_payload:
-            payload.update(extra_payload)
+        if ctx.extra_payload:
+            payload.update(ctx.extra_payload)
 
         event_snapshot: dict[str, Any] = {
             "schema_version": 1,
@@ -534,7 +515,14 @@ class CrowdIncidentEngine:
         events: list[dict[str, Any]] = []
 
         # 3. Layer 1: Crowd Concentration
-        if count >= self.min_crowd_count:
+        has_queue_exception = bool(
+            self.exceptions
+            and any(
+                any(keyword in str(getattr(e, "code", e)).lower() for keyword in ("queue", "bus_stop", "transit", "waiting", "event"))
+                for e in self.exceptions
+            )
+        )
+        if count >= self.min_crowd_count and not has_queue_exception:
             if self._crowd_start_time is None:
                 self._crowd_start_time = ts
 
@@ -542,8 +530,9 @@ class CrowdIncidentEngine:
             if persistence_duration >= self.min_duration_seconds:
                 # Check cooldown
                 if self._last_crowd_alert_time is None or (ts - self._last_crowd_alert_time) >= self.cooldown_seconds:
-                    anchor = self._crowd_start_time + self.min_duration_seconds
-                    evt = self._create_event(
+                    # Active alert-condition anchor: on first trigger, anchor is when threshold was met; on subsequent alerts, anchor is current ts
+                    anchor = (self._crowd_start_time + self.min_duration_seconds) if self._last_crowd_alert_time is None else ts
+                    ctx = CrowdEventContext(
                         taxonomy="crowd_concentration",
                         severity=self.crowd_severity,
                         crowd_count=count,
@@ -554,17 +543,17 @@ class CrowdIncidentEngine:
                         pedestrians=pedestrians_in_roi,
                         extra_payload={"persistence_seconds": round(persistence_duration, 2)},
                     )
-                    events.append(evt)
+                    events.append(self._create_event(ctx))
                     self._last_crowd_alert_time = ts
         else:
-            # Drops below threshold: reset persistence timer
+            # Drops below threshold or excepted: reset persistence timer
             self._crowd_start_time = None
 
         # 4. Layer 2: Suspected Public Disorder
         is_disorder, metrics = self._evaluate_disorder(pedestrians_in_roi, ts)
         if is_disorder:
             if self._last_disorder_alert_time is None or (ts - self._last_disorder_alert_time) >= self.cooldown_seconds:
-                evt = self._create_event(
+                ctx = CrowdEventContext(
                     taxonomy="suspected_disorder",
                     severity=self.disorder_severity,
                     crowd_count=count,
@@ -575,7 +564,7 @@ class CrowdIncidentEngine:
                     pedestrians=pedestrians_in_roi,
                     extra_payload={"disorder_metrics": metrics},
                 )
-                events.append(evt)
+                events.append(self._create_event(ctx))
                 self._last_disorder_alert_time = ts
 
         return events

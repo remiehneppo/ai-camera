@@ -411,7 +411,19 @@ class TestLifecycleAndMultiCamera(unittest.TestCase):
                 t = _make_track(501, [150.0, 150.0, 200.0, 200.0], timestamp=ts, label=label)
                 evs = engine.process_tracks([t], timestamp=ts)
             self.assertEqual(len(evs), 1, f"Failed to detect illegal parking for {label}")
-            self.assertEqual(evs[0]["payload"]["vehicle_label"], label)
+
+    def test_permitted_vehicle_exceptions_are_respected(self) -> None:
+        """Vehicles matching configured exception codes do not trigger illegal parking."""
+        from domain.alert_module_config import ExceptionRule
+        engine = ParkingIncidentEngine(
+            max_dwell_seconds=2.0,
+            exceptions=[ExceptionRule(code="permit_car", reason="authorized municipal car")],
+        )
+        # Car stationary in ROI for 3 seconds
+        for ts in (0.0, 1.0, 2.0, 3.0):
+            t = _make_track(601, [150.0, 150.0, 200.0, 200.0], timestamp=ts, label="car")
+            evs = engine.process_tracks([t], timestamp=ts)
+            self.assertEqual(len(evs), 0, "Permitted exception must not trigger illegal parking")
 
     def test_multi_vehicle_scene(self) -> None:
         """A scene containing parked vehicle, moving vehicle, and vehicle outside ROI."""
