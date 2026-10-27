@@ -3,14 +3,16 @@
 Cập nhật: 2026-10-26. Mọi dòng dưới đây đều dựa trên **lần kiểm thật** (tải/ffprobe/chạy pipeline), không dựa trên
 mô tả của dataset. Media **không** vào repo (`data/` đã gitignore): chỉ lưu đường dẫn, kích thước, hash và kết quả.
 
-## 0. Quy tắc dùng chung
+## 0. Quy tắc dùng chung & Ràng buộc ODD (Cập nhật 2026-10-27)
 
-1. Chỉ lưu **tham chiếu** trong repo; không commit media, không redistribute.
-2. Luôn kiểm `ffprobe` + kích thước/hash trước khi đưa vào metric; file tải lỗi (0 hoặc vài chục byte) phải bị loại
-   và **không** được tính là "0 detection".
-3. Dataset công khai **không** dùng để ký nghiệm thu capability (G2/G4/G5); chỉ dùng để phát triển, regression và
-   phát hiện lỗi đường ống.
-4. Ghi rõ ODD: camera cố định (fixed) hay dashcam/UAV; ảnh hay video; có nhãn frame-level hay chỉ nhãn mức clip.
+1. **Ràng buộc ODD phần cứng (Bắt buộc)**:
+   - **TUYỆT ĐỐI KHÔNG DÙNG**:
+     * **Camera hành trình (dashcam)**: Camera gắn trên phương tiện di chuyển tạo luồng quang học biểu kiến (ego-motion), làm sai lệch toàn bộ vận tốc tương đối và gia tốc của vật thể tĩnh ven đường, vi phạm giả định camera tĩnh của Edge Pipeline hiện tại. (Loại bỏ các bộ dashcam như DAD_A3D khỏi benchmark đánh giá chính thức).
+     * **Camera độ phân giải thấp (< 720p)**: Như 240p/320×240 (UCF-Crime), 238×158 (UCSD). Độ phân giải thấp làm mờ nát bounding box, detector YOLOX bỏ lọt đối tượng hoặc nhảy kích thước frame-by-frame gây nhiễu gia tốc giả.
+   - **BẮT BUỘC DÙNG**: Camera giám sát giao thông **CỐ ĐỊNH (Fixed CCTV / Traffic Surveillance Cameras)** lắp trên cột/cầu vượt/ngã tư, độ nét từ **HD (720p / 1280×720)** đến **2MP (Full HD 1080p / 1920×1080)**.
+2. Chỉ lưu **tham chiếu** trong repo; không commit media, không redistribute.
+3. Luôn kiểm `ffprobe` + kích thước/hash trước khi đưa vào metric; file tải lỗi phải bị loại và **không** được tính là "0 detection".
+4. Dataset công khai **không** dùng để ký nghiệm thu capability (G2/G4/G5); chỉ dùng để phát triển, regression và phát hiện lỗi đường ống.
 
 ## 1. Bộ NÊN dùng (đã tải, đã chạy)
 
@@ -77,11 +79,17 @@ ffmpeg -y -framerate 10 -i Train001/%03d.tif -c:v libx264 -pix_fmt yuv420p Train
 | `data/benchmark/ucsd/` | 1,9 GB | tar gốc + `extracted/` + `clips/*.mp4` (238×158) |
 | `/media/tieubaoca/HDD1/F/dataset/video/fall-accident/DAD_A3D/videos/` | 2,7 GB | 1.750 clip dashcam 720p (đã giải nén) |
 
-## 6. Việc nên làm khi cần "dataset tốt hơn" lần tới
+## 6. Danh mục Dataset Thay thế Chuẩn ODD: Camera Giao thông Cố định (HD đến 2MP / 1080p)
 
-1. **Fall/person-down, 1080p, có nhãn frame**: ưu tiên mua/lấy **full UniDataPro 1.047 video kèm annotation**
-   (nguồn ngoài HF) — đây là bộ duy nhất đã chứng minh chạy đúng ODD.
-2. **Negatives/FP cho #28**: cần clip **1080p camera tĩnh, cảnh bình thường** (dùng phần không-fall của UniDataPro
-   hoặc field data); UCSD không đủ độ phân giải.
-3. **#47 vehicle**: DAD_A3D (nhãn mức clip) hoặc DoTA (nếu chấp nhận tải 55 GB).
-4. **#64/#68/#58**: UCF-Crime mirror (13 lớp) khi capability tương ứng được implement.
+Để phục vụ đúng ODD camera giám sát thông minh cố định, các bộ dataset dưới đây được tuyển chọn thay thế cho dashcam và video độ nét thấp:
+
+| Dataset | ODD & Góc quay | Độ phân giải | License & Truy cập | Mục đích sử dụng |
+|---|---|:---:|---|---|
+| ⭐ **NVIDIA AI City Challenge (Track 3 / Track 4 — TAR)** | **CCTV giao thông cố định** tại ngã tư & cao tốc của Sở GTVT (DOTs) | **1080p & 720p** | **CC BY 4.0** (HuggingFace `nvidia/PhysicalAI-Traffic-Anomaly-Reasoning`) | **Chuẩn vàng cho #47 (Tai nạn xe) & #62 (Dừng đỗ trái phép)**: Video camera tĩnh ghi nhận va chạm, xe chết máy, quay đầu trái phép, xe đỗ sai làn, có chuỗi suy luận thời gian. |
+| ⭐ **SO-TAD (Small-Object Traffic Anomaly)** | **CCTV camera tĩnh** góc cao giám sát nút giao thông đô thị | **1080p & 720p** | Research (`cccccxy/so-tad` trên HuggingFace, ~27 GB) | **#47 (Va chạm xe & xe lật) & #62 (Dừng đỗ)**: Phát hiện phương tiện nhỏ/từ xa va chạm, xe máy đổ ngã, chướng ngại vật lòng đường. |
+| ⭐ **TAD (Traffic Anomaly Dataset / TAD-bench)** | **CCTV camera tĩnh** giám sát đường cao tốc & giao lộ | **720p & 1080p** | Research (Kaggle `nikanvasei/traffic-anomaly-dataset-tad` hoặc Google Drive) | **#47**: Va chạm xe–xe, xe lật, xe đâm dải phân cách từ camera quan sát đường bộ cố định. |
+| ⭐ **CADP (Car Accident Detection and Prediction)** | **CCTV camera giao thông công cộng** (Police & DOT CCTV) | **720p, 1080p** (đến 2400×1200) | Research (Đã có sẵn trên máy: `CADP/annotations_CADP.json` 226 video, `keyframes.tar.gz` 1.5 GB) | **#47**: Đã có sẵn 226 video chú giải keyframe tai nạn xe từ camera giám sát giao thông thực tế. |
+| ⭐ **ACCIDENT Benchmark Dataset** | **CCTV giao thông cố định** (CVPRW 2024–2026) | **1080p & 720p** | Research (`accidentbench/ACCIDENT` trên GitHub) | **#47**: Bộ dữ liệu benchmark chuyên biệt cho tai nạn từ camera giám sát công cộng (loại trừ dashcam). |
+| ⭐ **UA-DETRAC (Univ. at Albany)** | **CCTV camera tĩnh** tại các cầu vượt, ngã tư (Bắc Kinh & Thiên Tân) | **960×540 & 720p** | Academic / Research (100 video sequences, 140.000 frame) | **Đối chứng âm (Negative Control) cực tốt cho #47 & #62**: Mật độ giao thông cao, dừng đèn đỏ, xếp hàng chờ luồng, kiểm tra thời gian dừng đỗ (dwell time). |
+| ⭐ **ShanghaiTech Campus Surveillance** | **CCTV camera tĩnh 1080p** ngoài trời | **1920×1080 @ 30fps** | Research (CUHK / Kaggle mirrors) | **#63 (Tụ tập đông người & gây rối) & #57 (Vùng nguy hiểm)**: Giám sát người đi bộ, đám đông tụ tập, người đạp xe bất thường từ camera tĩnh Full HD. |
+| ⭐ **UniDataPro Fall Detection** | **Camera tĩnh 1080p** trong nhà & ngoài trời | **1920×1080 @ 30fps** | CC BY-NC-ND 4.0 (Đang có sẵn tại `data/benchmark/unidata/`) | **#25 / #26 / #53 (Person-down)**: Bộ duy nhất đã chứng minh đạt chuẩn ODD 1080p cho người ngã/nằm đường. |
