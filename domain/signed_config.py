@@ -1,9 +1,10 @@
-"""Canonical signed configuration bundle contract (Ticket #34).
+"""Canonical signed configuration bundle contract (Tickets #34, #35).
 
 Pure domain module: pure Python stdlib, no I/O, no SQLite, no external crypto packages.
 Deterministic canonical JSON serialization, HMAC-SHA256 signature verification with
 pluggable custom signature verifier hook, trusted keyring with role authorization,
-target matching, and monotonic high-water mark sequence enforcement.
+target matching, monotonic high-water mark sequence enforcement, canary deployment,
+and authorized rollback verification.
 """
 
 from __future__ import annotations
@@ -21,15 +22,21 @@ from typing import (
     Mapping,
     Optional,
     Pattern,
+    Sequence,
     Tuple,
 )
 
 __all__ = [
     "CANONICAL_ENCODING",
+    "CanarySpec",
+    "CompatibilityPolicy",
+    "ERROR_CANARY_FAILURE",
     "ERROR_EXPIRED_BUNDLE",
     "ERROR_HASH_MISMATCH",
+    "ERROR_INCOMPATIBLE_LINEAGE",
     "ERROR_INVALID_BUNDLE",
     "ERROR_INVALID_KEY",
+    "ERROR_INVALID_ROLLBACK",
     "ERROR_INVALID_SIGNATURE",
     "ERROR_LENGTH_MISMATCH",
     "ERROR_REVOKED_KEY",
@@ -39,6 +46,7 @@ __all__ = [
     "ERROR_UNCERTAIN_CLOCK",
     "ERROR_UNKNOWN_KEY",
     "ERROR_UNAUTHORIZED_ROLE",
+    "ROLE_CONFIG_ROLLBACK",
     "ROLE_CONFIG_SIGNER",
     "SignedConfigBundle",
     "SignedConfigError",
@@ -47,11 +55,15 @@ __all__ = [
     "TrustedKeyRing",
     "canonical_bundle_bytes",
     "canonical_bundle_hash",
+    "create_canary_bundle",
+    "create_rollback_bundle",
+    "is_rollback_bundle",
     "verify_signed_bundle",
 ]
 
 CANONICAL_ENCODING: Final[str] = "canonical-json-python-v1"
 ROLE_CONFIG_SIGNER: Final[str] = "config_signer"
+ROLE_CONFIG_ROLLBACK: Final[str] = "config_rollback"
 
 ERROR_INVALID_BUNDLE: Final[str] = "invalid_bundle"
 ERROR_INVALID_KEY: Final[str] = "invalid_key"
@@ -66,6 +78,9 @@ ERROR_STALE_SEQUENCE: Final[str] = "stale_trust_sequence"
 ERROR_EXPIRED_BUNDLE: Final[str] = "expired_bundle"
 ERROR_UNCERTAIN_CLOCK: Final[str] = "uncertain_clock"
 ERROR_SECRET_FIELD: Final[str] = "secret_field_not_allowed"
+ERROR_INVALID_ROLLBACK: Final[str] = "invalid_rollback"
+ERROR_INCOMPATIBLE_LINEAGE: Final[str] = "incompatible_lineage"
+ERROR_CANARY_FAILURE: Final[str] = "canary_failure"
 
 _IDENTIFIER: Final[Pattern[str]] = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}\Z")
 _SECRET_KEY: Final[Pattern[str]] = re.compile(
@@ -146,6 +161,175 @@ def canonical_bundle_bytes(payload: Any) -> bytes:
 def canonical_bundle_hash(payload: Any) -> str:
     """Hex SHA-256 digest of canonical bundle payload bytes."""
     return hashlib.sha256(canonical_bundle_bytes(payload)).hexdigest()
+
+
+@dataclass(frozen=True)
+class CanarySpec:
+    """Specification for canary rollout and observation on a subset of cameras or modules."""
+
+    cameras: Tuple[str, ...] = ()
+    modules: Tuple[str, ...] = ()
+    max_error_rate: float = 0.05
+    observation_period_seconds: float = 60.0
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.cameras, (tuple, list)):
+            raise SignedConfigError(ERROR_INVALID_BUNDLE, "canary cameras must be a list or tuple of strings")
+        if not isinstance(self.modules, (tuple, list)):
+            raise SignedConfigError(ERROR_INVALID_BUNDLE, "canary modules must be a list or tuple of strings")
+        if type(self.max_error_rate) not in (int, float) or not (0.0 <= self.max_error_rate <= 1.0):
+            raise SignedConfigError(ERROR_INVALID_BUNDLE, "canary max_error_rate must be between 0.0 and 1.0")
+        if type(self.observation_period_seconds) not in (int, float) or self.observation_period_seconds < 0.0:
+            raise SignedConfigError(ERROR_INVALID_BUNDLE, "canary observation_period_seconds must be non-negative")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "cameras": list(self.cameras),
+            "modules": list(self.modules),
+            "max_error_rate": self.max_error_rate,
+            "observation_period_seconds": self.observation_period_seconds,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> CanarySpec:
+        return cls(
+            cameras=tuple(str(c) for c in data.get("cameras", ())),
+            modules=tuple(str(m) for m in data.get("modules", ())),
+            max_error_rate=float(data.get("max_error_rate", 0.05)),
+            observation_period_seconds=float(data.get("observation_period_seconds", 60.0)),
+        )
+
+
+@dataclass(frozen=True)
+class CompatibilityPolicy:
+    """Compatibility and lineage rules for safe activations and rollbacks.
+
+    Ensures no silent mixing of incompatible schema versions, unapproved factories,
+    or incompatible model/config lineages across rollbacks and deployments.
+    """
+
+    allowed_schema_versions: Tuple[str, ...] = ()
+    allowed_factories: Tuple[str, ...] = ()
+    allowed_lineages: Tuple[str, ...] = ()
+    lineage_compatibility_matrix: Optional[Mapping[str, Tuple[str, ...]]] = None
+
+    def validate_bundle(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        current_lkg: Optional[Mapping[str, Any]] = None,
+        is_rollback: bool = False,
+    ) -> None:
+        """Validate payload against schema versions, factory allowlist, and lineage continuity."""
+        # 1. Payload-level schema version check
+        payload_schema = payload.get("schema_version")
+        if payload_schema is not None and self.allowed_schema_versions:
+            if str(payload_schema) not in self.allowed_schema_versions:
+                raise SignedConfigError(
+                    ERROR_INCOMPATIBLE_LINEAGE,
+                    f"payload schema_version '{payload_schema}' not in allowed schema versions: {self.allowed_schema_versions}",
+                    field="schema_version",
+                )
+
+        # 2. Payload-level model lineage check
+        payload_lineage = payload.get("model_lineage") or payload.get("lineage")
+        if payload_lineage is not None and self.allowed_lineages:
+            if str(payload_lineage) not in self.allowed_lineages:
+                raise SignedConfigError(
+                    ERROR_INCOMPATIBLE_LINEAGE,
+                    f"payload lineage '{payload_lineage}' not in allowed lineages: {self.allowed_lineages}",
+                    field="model_lineage",
+                )
+
+        # 3. Extract config items
+        configs: list[Any] = []
+        if "configs" in payload and isinstance(payload["configs"], (list, tuple)):
+            configs = list(payload["configs"])
+        elif "target_lkg" in payload and isinstance(payload["target_lkg"], Mapping):
+            tl = payload["target_lkg"]
+            if "configs" in tl and isinstance(tl["configs"], (list, tuple)):
+                configs = list(tl["configs"])
+        elif "modules" in payload and isinstance(payload["modules"], (list, tuple)):
+            configs = list(payload["modules"])
+        elif "module" in payload and "camera_id" in payload:
+            configs = [payload]
+
+        lineages_in_bundle: set[str] = set()
+        if payload_lineage is not None:
+            lineages_in_bundle.add(str(payload_lineage))
+
+        for cfg in configs:
+            if not isinstance(cfg, Mapping):
+                continue
+            # Check config-level schema version
+            cfg_schema = cfg.get("schema_version") or cfg.get("config_version")
+            if cfg_schema is not None and self.allowed_schema_versions:
+                if str(cfg_schema) not in self.allowed_schema_versions:
+                    raise SignedConfigError(
+                        ERROR_INCOMPATIBLE_LINEAGE,
+                        f"config schema_version '{cfg_schema}' for module '{cfg.get('module')}' not in allowed schema versions: {self.allowed_schema_versions}",
+                        field="schema_version",
+                    )
+            # Check factory allowlist
+            factory = cfg.get("factory")
+            if factory is not None and self.allowed_factories:
+                if str(factory) not in self.allowed_factories:
+                    raise SignedConfigError(
+                        ERROR_INCOMPATIBLE_LINEAGE,
+                        f"factory '{factory}' for module '{cfg.get('module')}' not in factory allowlist: {self.allowed_factories}",
+                        field="factory",
+                    )
+            # Check config lineage
+            cfg_lineage = cfg.get("model_lineage") or cfg.get("lineage")
+            if cfg_lineage is not None:
+                str_lin = str(cfg_lineage)
+                lineages_in_bundle.add(str_lin)
+                if self.allowed_lineages and str_lin not in self.allowed_lineages:
+                    raise SignedConfigError(
+                        ERROR_INCOMPATIBLE_LINEAGE,
+                        f"config lineage '{str_lin}' for module '{cfg.get('module')}' not in allowed lineages: {self.allowed_lineages}",
+                        field="model_lineage",
+                    )
+
+        # 4. Prevent silent mixing of incompatible lineages within the same bundle
+        if len(lineages_in_bundle) > 1 and self.lineage_compatibility_matrix:
+            for l1 in lineages_in_bundle:
+                allowed_compat = self.lineage_compatibility_matrix.get(l1, (l1,))
+                for l2 in lineages_in_bundle:
+                    if l2 not in allowed_compat:
+                        raise SignedConfigError(
+                            ERROR_INCOMPATIBLE_LINEAGE,
+                            f"conflicting model lineages in bundle: '{l1}' and '{l2}' are incompatible",
+                            field="model_lineage",
+                        )
+
+        # 5. On rollback: verify lineage transition compatibility against current LKG
+        if is_rollback and current_lkg and self.lineage_compatibility_matrix:
+            current_lineage = current_lkg.get("model_lineage") or current_lkg.get("lineage")
+            if not current_lineage and "provenance" in current_lkg and isinstance(current_lkg["provenance"], Mapping):
+                for prov in current_lkg["provenance"].values():
+                    if isinstance(prov, Mapping) and "model_lineage" in prov:
+                        current_lineage = prov["model_lineage"]
+                        break
+            if current_lineage:
+                str_cur = str(current_lineage)
+                compat_targets = self.lineage_compatibility_matrix.get(str_cur, (str_cur,))
+                for target_lin in lineages_in_bundle:
+                    if target_lin not in compat_targets:
+                        raise SignedConfigError(
+                            ERROR_INCOMPATIBLE_LINEAGE,
+                            f"cannot rollback from lineage '{str_cur}' to incompatible target lineage '{target_lin}'",
+                            field="model_lineage",
+                        )
+
+
+def is_rollback_bundle(payload: Mapping[str, Any]) -> bool:
+    """Check if a bundle payload represents an authorized rollback."""
+    return (
+        payload.get("action") == "rollback"
+        or "rollback_for_sequence" in payload
+        or "target_lkg" in payload
+    )
 
 
 @dataclass(frozen=True)
@@ -248,7 +432,7 @@ class TrustedKeyRing:
     def verify(
         self,
         key_id: str,
-        required_role: str,
+        required_role: str | Iterable[str],
         payload_bytes: bytes,
         signature: str,
         current_time: Optional[float] = None,
@@ -263,10 +447,18 @@ class TrustedKeyRing:
             raise SignedConfigError(
                 ERROR_REVOKED_KEY, f"key '{key_id}' expired at {key.expires_at}", key_id=key_id
             )
-        if key.role != required_role:
+
+        allowed_roles: Tuple[str, ...]
+        if isinstance(required_role, str):
+            allowed_roles = (required_role,)
+        else:
+            allowed_roles = tuple(required_role)
+
+        if key.role not in allowed_roles:
+            role_desc = f"'{required_role}'" if isinstance(required_role, str) else ", ".join(f"'{r}'" for r in allowed_roles)
             raise SignedConfigError(
                 ERROR_UNAUTHORIZED_ROLE,
-                f"key '{key_id}' role '{key.role}' is not authorized for '{required_role}'",
+                f"key '{key_id}' role '{key.role}' is not authorized for {role_desc}",
                 key_id=key_id,
             )
         if not key.verify_signature(payload_bytes, signature):
@@ -291,6 +483,7 @@ class SignedConfigBundle:
     target_site_id: Optional[str] = None
     target_profile: Optional[str] = None
     bundle_id: Optional[str] = None
+    canary_spec: Optional[CanarySpec] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.payload, Mapping):
@@ -320,8 +513,13 @@ class SignedConfigBundle:
         target_site_id: Optional[str] = None,
         target_profile: Optional[str] = None,
         bundle_id: Optional[str] = None,
+        canary_spec: Optional[CanarySpec] = None,
     ) -> SignedConfigBundle:
         """Create and sign a SignedConfigBundle from raw payload mapping."""
+        # Auto-detect canary_spec if not explicitly passed
+        if canary_spec is None and "canary" in payload and isinstance(payload["canary"], Mapping):
+            canary_spec = CanarySpec.from_dict(payload["canary"])
+
         canonical = canonical_bundle_bytes(payload)
         length = len(canonical)
         digest = hashlib.sha256(canonical).hexdigest()
@@ -338,6 +536,7 @@ class SignedConfigBundle:
             target_site_id=target_site_id,
             target_profile=target_profile,
             bundle_id=bundle_id,
+            canary_spec=canary_spec,
         )
 
     def describe(self) -> dict[str, Any]:
@@ -353,7 +552,101 @@ class SignedConfigBundle:
             "target_site_id": self.target_site_id,
             "target_profile": self.target_profile,
             "bundle_id": self.bundle_id,
+            "canary_spec": self.canary_spec.to_dict() if self.canary_spec else None,
         }
+
+
+def create_rollback_bundle(
+    *,
+    configs: Sequence[Mapping[str, Any]],
+    key: TrustedKey,
+    trust_sequence: int,
+    expires_at: float,
+    rollback_for_sequence: Optional[int] = None,
+    target_device_id: Optional[str] = None,
+    target_site_id: Optional[str] = None,
+    target_profile: Optional[str] = None,
+    bundle_id: Optional[str] = None,
+    schema_version: Optional[str] = None,
+    model_lineage: Optional[str] = None,
+    extra_payload: Optional[Mapping[str, Any]] = None,
+) -> SignedConfigBundle:
+    """Create a signed bundle specifically formatted for authorized rollback."""
+    payload: dict[str, Any] = {
+        "action": "rollback",
+        "configs": list(configs),
+    }
+    if rollback_for_sequence is not None:
+        payload["rollback_for_sequence"] = rollback_for_sequence
+    if schema_version is not None:
+        payload["schema_version"] = schema_version
+    if model_lineage is not None:
+        payload["model_lineage"] = model_lineage
+    if extra_payload:
+        for k, v in extra_payload.items():
+            if k not in payload:
+                payload[k] = v
+
+    return SignedConfigBundle.create(
+        payload=payload,
+        key=key,
+        trust_sequence=trust_sequence,
+        expires_at=expires_at,
+        target_device_id=target_device_id,
+        target_site_id=target_site_id,
+        target_profile=target_profile,
+        bundle_id=bundle_id,
+    )
+
+
+def create_canary_bundle(
+    *,
+    configs: Sequence[Mapping[str, Any]],
+    key: TrustedKey,
+    trust_sequence: int,
+    expires_at: float,
+    canary_cameras: Sequence[str] = (),
+    canary_modules: Sequence[str] = (),
+    max_error_rate: float = 0.05,
+    observation_period_seconds: float = 60.0,
+    target_device_id: Optional[str] = None,
+    target_site_id: Optional[str] = None,
+    target_profile: Optional[str] = None,
+    bundle_id: Optional[str] = None,
+    schema_version: Optional[str] = None,
+    model_lineage: Optional[str] = None,
+    extra_payload: Optional[Mapping[str, Any]] = None,
+) -> SignedConfigBundle:
+    """Create a signed bundle configured for canary deployment."""
+    canary_dict = {
+        "cameras": list(canary_cameras),
+        "modules": list(canary_modules),
+        "max_error_rate": max_error_rate,
+        "observation_period_seconds": observation_period_seconds,
+    }
+    payload: dict[str, Any] = {
+        "canary": canary_dict,
+        "configs": list(configs),
+    }
+    if schema_version is not None:
+        payload["schema_version"] = schema_version
+    if model_lineage is not None:
+        payload["model_lineage"] = model_lineage
+    if extra_payload:
+        for k, v in extra_payload.items():
+            if k not in payload:
+                payload[k] = v
+
+    return SignedConfigBundle.create(
+        payload=payload,
+        key=key,
+        trust_sequence=trust_sequence,
+        expires_at=expires_at,
+        target_device_id=target_device_id,
+        target_site_id=target_site_id,
+        target_profile=target_profile,
+        bundle_id=bundle_id,
+    )
 
 
 def verify_signed_bundle(
@@ -364,7 +657,9 @@ def verify_signed_bundle(
     expected_target: Optional[TargetSpec] = None,
     current_time: Optional[float] = None,
     clock_synchronized: bool = True,
-    required_role: str = ROLE_CONFIG_SIGNER,
+    required_role: str | Iterable[str] = ROLE_CONFIG_SIGNER,
+    compatibility_policy: Optional[CompatibilityPolicy] = None,
+    current_lkg: Optional[Mapping[str, Any]] = None,
 ) -> SignedConfigBundle:
     """Verify signed config bundle against target, crypto, high-water mark, and clock certainty.
 
@@ -374,9 +669,16 @@ def verify_signed_bundle(
       3. Trusted key lookup, role authorization, and cryptographic signature.
       4. Monotonic sequence > durable high-water mark.
       5. Clock certainty and expiry check.
+      6. Compatibility policy verification (if configured).
     """
     if isinstance(bundle, Mapping):
         try:
+            canary_spec = None
+            if "canary_spec" in bundle and isinstance(bundle["canary_spec"], Mapping):
+                canary_spec = CanarySpec.from_dict(bundle["canary_spec"])
+            elif "payload" in bundle and isinstance(bundle["payload"], Mapping) and "canary" in bundle["payload"] and isinstance(bundle["payload"]["canary"], Mapping):
+                canary_spec = CanarySpec.from_dict(bundle["payload"]["canary"])
+
             parsed_bundle = SignedConfigBundle(
                 payload=bundle["payload"],
                 length=bundle["length"],
@@ -389,6 +691,7 @@ def verify_signed_bundle(
                 target_site_id=bundle.get("target_site_id"),
                 target_profile=bundle.get("target_profile"),
                 bundle_id=bundle.get("bundle_id"),
+                canary_spec=canary_spec,
             )
         except (KeyError, TypeError) as err:
             raise SignedConfigError(ERROR_INVALID_BUNDLE, f"missing required bundle field: {err}") from err
@@ -457,6 +760,14 @@ def verify_signed_bundle(
         raise SignedConfigError(
             ERROR_EXPIRED_BUNDLE,
             f"bundle expired at {parsed_bundle.expires_at}, current time is {current_time}",
+        )
+
+    # Step 6: Compatibility and Lineage Policy validation
+    if compatibility_policy is not None:
+        compatibility_policy.validate_bundle(
+            parsed_bundle.payload,
+            current_lkg=current_lkg,
+            is_rollback=is_rollback_bundle(parsed_bundle.payload),
         )
 
     return parsed_bundle

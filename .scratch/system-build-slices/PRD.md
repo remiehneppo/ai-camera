@@ -60,8 +60,8 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [32: Retained evidence truy hồi có authorization](issues/32-retained-evidence-truy-hoi-co-authorization.md) | ready-for-agent | #08, #18 | — | done (software lab; device channel + server settle tested) |
 | [33: Device lifecycle và site access được enforce](issues/33-device-lifecycle-va-site-access-duoc-enforce.md) | ready-for-agent | #05, #08, #17 | — | done (software lab; device lifecycle, quarantine/revoke, site scoping, cross-site deny) |
 | [34: Config local và signed activation giữ LKG](issues/34-config-local-va-signed-activation-giu-lkg.md) | ready-for-agent | #03, #16, #33 | — | done (software lab; local & signed config activation + durable SQLite HWM/LKG + recorder isolation pass) |
-| [35: Canary và rollback có authorization mới](issues/35-canary-va-rollback-co-authorization-moi.md) | ready-for-agent | #34, #28 | #30 nếu RKNN | not-started |
-| [36: WAN outage giữ event/evidence rồi resume](issues/36-wan-outage-giu-event-evidence-roi-resume.md) | ready-for-agent | #18, #32 | — | not-started |
+| [35: Canary và rollback có authorization mới](issues/35-canary-va-rollback-co-authorization-moi.md) | ready-for-agent | #34, #28 | #30 nếu RKNN | done (software lab; canary lifecycle + rollback fresh sequence + SQLite reboot survival pass) |
+| [36: WAN outage giữ event/evidence rồi resume](issues/36-wan-outage-giu-event-evidence-roi-resume.md) | ready-for-agent | #18, #32 | — | done (software lab; 24h autonomy + no-TTL on unACKed + metadata priority + B/(U-G) drain pass) |
 | [37: Power-cut kiểm chứng local durability](issues/37-power-cut-kiem-chung-local-durability.md) | ready-for-human | #09, #18, #02 | — | not-started |
 | [38: Native crash recovery đạt RTO](issues/38-native-crash-recovery-dat-rto.md) | ready-for-agent | #16, #17, #31 | — | not-started |
 | [39: Provisioning và watchdog tái tạo được](issues/39-provisioning-va-watchdog-tai-tao-duoc.md) | ready-for-agent | #35, #38 | — | not-started |
