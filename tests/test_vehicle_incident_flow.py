@@ -497,6 +497,24 @@ class TestVehicleIncidentHardNegatives(unittest.TestCase):
 
         self.assertEqual(len(events), 0, "Parked vehicle without prior motion must NOT trigger crash")
 
+    def test_negative_5_pre_existing_lying_person_near_passing_vehicle(self) -> None:
+        """A person already lying on the ground near passing vehicle does NOT trigger collision."""
+        # Person already lying down: w=100, h=40 -> AR=2.5 >= 1.2
+        lying_person = _make_track(450, [200.0, 200.0, 300.0, 240.0], 0.0, label="person")
+        # Car passes by smoothly without deceleration
+        car = _make_track(451, [180.0, 50.0, 260.0, 120.0], 0.0, label="car")
+
+        events = []
+        for i in range(1, 15):
+            t = round(i * 0.1, 2)
+            lying_person.update([200.0, 200.0, 300.0, 240.0], score=0.9, timestamp=t)
+            # Car moves downwards past the person
+            car.update([180.0, 50.0 + i * 20.0, 260.0, 120.0 + i * 20.0], score=0.95, timestamp=t)
+            evs = self.engine.process_tracks([lying_person, car], timestamp=t)
+            events.extend(evs)
+
+        self.assertEqual(len(events), 0, "Pre-existing lying person without vehicle impact decel must NOT trigger crash")
+
 
 class TestVehicleIncidentROIAndLifecycle(unittest.TestCase):
     """ROI filtering, cooldown, and lifecycle operations."""
@@ -533,6 +551,21 @@ class TestVehicleIncidentROIAndLifecycle(unittest.TestCase):
         self.assertIsNotNone(state)
         assert state is not None
         self.assertIsNone(state.last_kinematics)
+
+    def test_stale_pairs_are_pruned_when_track_leaves(self) -> None:
+        """Pruning stale pairs prevents memory leaks on long streams."""
+        engine = VehicleIncidentEngine()
+        c1 = _make_track(701, [100.0, 100.0, 180.0, 160.0], 0.0, label="car")
+        c2 = _make_track(702, [200.0, 100.0, 280.0, 160.0], 0.0, label="car")
+        engine.process_tracks([c1, c2], timestamp=0.1)
+        self.assertEqual(len(engine._tracks), 2)
+        # Pair 701-702 exists
+        self.assertEqual(len(engine._pairs), 1)
+
+        # On next frame, track 702 leaves (only 701 active)
+        engine.process_tracks([c1], timestamp=0.2)
+        self.assertEqual(len(engine._tracks), 1)
+        self.assertEqual(len(engine._pairs), 0, "Stale pairs must be pruned to bound memory")
 
     def test_reset_clears_all_tracks_and_pairs(self) -> None:
         engine = VehicleIncidentEngine()

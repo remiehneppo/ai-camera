@@ -49,54 +49,55 @@ def evaluate_clip(
     det_count = 0
     classes: dict[str, int] = {}
 
-    while True:
-        ok, frame_bgr = cap.read()
-        if not ok:
-            break
-        if frame_idx % step != 0:
-            frame_idx += 1
-            continue
-        if max_frames and processed >= max_frames:
-            break
+    try:
+        while True:
+            ok, frame_bgr = cap.read()
+            if not ok:
+                break
+            if frame_idx % step != 0:
+                frame_idx += 1
+                continue
+            if max_frames and processed >= max_frames:
+                break
 
-        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        ts = round(frame_idx / native_fps, 4)
-        obs = detector.detect(rgb, {
-            "camera_id": "eval-cam",
-            "stream_session_id": "eval-sess",
-            "core_epoch": 1,
-            "origin": "replay",
-            "frame_id": frame_idx,
-            "pts": frame_idx,
-            "time_base": f"1/{int(round(native_fps))}",
-            "event_time": ts,
-        })
-        dets = obs.get("detections", [])
-        for d in dets:
-            if "bbox" not in d and "bbox_xyxy" in d:
-                d["bbox"] = d["bbox_xyxy"]
-        det_count += len(dets)
-        for d in dets:
-            lbl = d["label"]
-            classes[lbl] = classes.get(lbl, 0) + 1
-
-        tracks = tracker.update(dets, timestamp=ts)
-        emitted = engine.process_tracks(tracks, timestamp=ts)
-        for ev in emitted:
-            p = ev["payload"]
-            events.append({
-                "frame": frame_idx,
-                "timestamp": round(ts, 2),
-                "interaction_type": p.get("interaction_type"),
-                "severity": p.get("severity"),
-                "confidence": p.get("confidence"),
-                "primary_track": p.get("track_id"),
-                "involved_tracks": p.get("track_ids"),
+            rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            ts = round(frame_idx / native_fps, 4)
+            obs = detector.detect(rgb, {
+                "camera_id": "eval-cam",
+                "stream_session_id": "eval-sess",
+                "core_epoch": 1,
+                "origin": "replay",
+                "frame_id": frame_idx,
+                "pts": frame_idx,
+                "time_base": f"1/{int(round(native_fps))}",
+                "event_time": ts,
             })
-        processed += 1
-        frame_idx += 1
+            dets = obs.get("detections", [])
+            for d in dets:
+                if "bbox" not in d and "bbox_xyxy" in d:
+                    d["bbox"] = d["bbox_xyxy"]
+            det_count += len(dets)
+            for d in dets:
+                lbl = d["label"]
+                classes[lbl] = classes.get(lbl, 0) + 1
 
-    cap.release()
+            tracks = tracker.update(dets, timestamp=ts)
+            emitted = engine.process_tracks(tracks, timestamp=ts)
+            for ev in emitted:
+                p = ev["payload"]
+                events.append({
+                    "frame": frame_idx,
+                    "timestamp": round(ts, 2),
+                    "interaction_type": p.get("interaction_type"),
+                    "severity": p.get("severity"),
+                    "confidence": p.get("confidence"),
+                    "primary_track": p.get("track_id"),
+                    "involved_tracks": p.get("track_ids"),
+                })
+            processed += 1
+            frame_idx += 1
+    finally:
+        cap.release()
     return {
         "video": Path(video_path).name,
         "frames_processed": processed,

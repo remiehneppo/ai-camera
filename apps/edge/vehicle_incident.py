@@ -195,11 +195,12 @@ class VehicleIncidentEngine:
         state = self._tracks.get(tid)
         if state is None:
             ar = float(track.aspect_ratio)
-            is_upright = (
-                ar < self.two_wheeler_upright_ar
-                if track.label in TWO_WHEELER_LABELS
-                else True
-            )
+            if track.label in TWO_WHEELER_LABELS:
+                is_upright = ar < self.two_wheeler_upright_ar
+            elif track.label in PEDESTRIAN_LABELS:
+                is_upright = ar < self.pedestrian_lying_ar
+            else:
+                is_upright = True
             state = _TrackState(
                 track_id=tid,
                 label=track.label,
@@ -349,6 +350,9 @@ class VehicleIncidentEngine:
         # Clean up stale tracks outside current frame
         for stale_id in [tid for tid in self._tracks if tid not in active_track_ids]:
             del self._tracks[stale_id]
+        # Clean up stale pairs whose tracks are no longer active (bounded memory)
+        for pair_key in [k for k in self._pairs if k[0] not in active_track_ids or k[1] not in active_track_ids]:
+            del self._pairs[pair_key]
 
         # 2. Branch 1: vehicle_vehicle (pairwise vehicle interaction) evaluated first
         vehicle_states = [s for s in self._tracks.values() if s.label in VEHICLE_LABELS and s.last_kinematics is not None]
@@ -558,10 +562,14 @@ class VehicleIncidentEngine:
                     and (ts - v.last_deceleration_spike_time) <= 1.5
                 )
 
-                # Evidence 2: Pedestrian down / impact (lying aspect ratio >= 1.2 or sudden AR change)
-                p_down = (p.last_aspect_ratio or 0.0) >= self.pedestrian_lying_ar
+                # Evidence 2: Pedestrian down / impact (was upright and fell down during interaction)
+                p_fell_during_interaction = (
+                    p.initial_is_upright
+                    and (p.last_aspect_ratio or 0.0) >= self.pedestrian_lying_ar
+                )
 
-                if (p_down and in_proximity) or (v_decel and iou > 0.15 and dist <= self.proximity_distance * 0.8):
+                # Pre-existing lying person near vehicle without deceleration is NOT a crash confirmation
+                if (p_fell_during_interaction and in_proximity) or (v_decel and iou > 0.15 and dist <= self.proximity_distance * 0.8):
                     pair.last_alert_time = ts
                     v.last_alert_time = ts
                     p.last_alert_time = ts
