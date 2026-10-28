@@ -617,6 +617,66 @@ class TestMultiModuleCarrierPipelineE2E(unittest.TestCase):
         module_roles = [m["role"] for m in event["model_lineage"]]
         self.assertIn("danger_zone_incident", module_roles)
 
+    def test_all_five_configured_factories_startup_and_frame_processing(self) -> None:
+        """All 5 allowlisted factories can be configured via AlertModuleRegistry and process frames cleanly."""
+        registry = AlertModuleRegistry()
+        factories = [
+            ("mod_person_down", "person_down", "pd-v1"),
+            ("mod_danger_zone", "danger_zone", "dz-v1"),
+            ("mod_parking", "illegal_parking", "ip-v1"),
+            ("mod_crowd", "crowd_incident", "ci-v1"),
+            ("mod_vehicle", "vehicle_incident", "vi-v1"),
+        ]
+        for mod, fact, ver in factories:
+            registry.register(
+                AlertModuleDefinition(
+                    module=mod,
+                    config_version=ver,
+                    factory=fact,
+                )
+            )
+
+        norm_roi = RegionOfInterest(points=((0.1, 0.1), (0.9, 0.1), (0.9, 0.9)))
+        configs = [
+            CameraModuleConfig(
+                module=mod,
+                camera_id="cam-01",
+                version=1,
+                enabled=True,
+                roi=(norm_roi,),
+            )
+            for mod, _, _ in factories
+        ]
+
+        pipeline = PerceptionPipeline(
+            recorder=self.recorder,
+            outbox=self.outbox,
+            camera_id="cam-01",
+            device_id="edge-01",
+            module_configs=configs,
+            alert_registry=registry,
+        )
+
+        self.assertEqual(len(pipeline.incident_engines), 5)
+        for mod, fact, ver in factories:
+            eng = pipeline.get_engine(mod)
+            self.assertIsNotNone(eng)
+            assert eng is not None
+            self.assertEqual(eng.module, mod)
+            self.assertEqual(eng.factory, fact)
+            self.assertEqual(eng.config_version, ver)
+
+        # Frame processing with mixed detections runs cleanly across all 5 engines
+        rgb = np.zeros((720, 1280, 3), dtype=np.uint8)
+        mixed_dets = [
+            {"bbox": [200.0, 200.0, 260.0, 320.0], "score": 0.9, "label": "person"},
+            {"bbox": [400.0, 300.0, 550.0, 450.0], "score": 0.88, "label": "car"},
+        ]
+        events = pipeline.process_frame(rgb, timestamp=1.0, frame_id=1, detections=mixed_dets)
+        self.assertIsInstance(events, list)
+        status = pipeline.status()
+        self.assertEqual(status["camera_id"], "cam-01")
+
 
 if __name__ == "__main__":
     unittest.main()

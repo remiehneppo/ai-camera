@@ -200,9 +200,14 @@ def create_incident_engine(
     if cfg_version is not None:
         params["config_version"] = cfg_version
 
-    if factory == "person_down":
+    if actual_factory == "person_down":
         return IncidentEngine(
+            camera_id=camera_id,
+            device_id=device_id,
+            stream_session_id=stream_session_id,
+            module_name=mod_name,
             roi_polygon=roi_poly,
+            frame_dimensions=frame_dimensions,
             **params,
         )
     elif actual_factory == "danger_zone":
@@ -227,7 +232,7 @@ def create_incident_engine(
             exceptions=exceptions,
             **params,
         )
-    elif factory == "crowd_incident":
+    elif actual_factory == "crowd_incident":
         raw_schedule = schedule if schedule is not None else params.pop("schedule_filter", None)
         schedule_filter: Any = None
         if callable(raw_schedule) or isinstance(raw_schedule, dict):

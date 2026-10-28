@@ -95,6 +95,13 @@ class IncidentEngine:
         vehicle_overlap_iou: float = 0.1,
         on_vehicle_severity: str = "low",
         frame_dimensions: tuple[float, float] | None = None,
+        camera_id: str | None = None,
+        device_id: str | None = None,
+        stream_session_id: str | None = None,
+        origin: str | None = None,
+        config_version: str | None = None,
+        module_name: str | None = None,
+        **kwargs: Any,
     ) -> None:
         self.max_observation_gap: float = float(max_observation_gap)
         self.standing_aspect_ratio: float = float(standing_aspect_ratio)
@@ -117,6 +124,13 @@ class IncidentEngine:
         self.vehicle_overlap_iou: float = float(vehicle_overlap_iou)
         self.on_vehicle_severity: str = str(on_vehicle_severity)
         self.frame_dimensions = frame_dimensions
+        self.camera_id = str(camera_id) if camera_id is not None else "camera-001"
+        self.device_id = str(device_id) if device_id is not None else "device-edge-001"
+        self.stream_session_id = str(stream_session_id) if stream_session_id is not None else ""
+        self.origin = str(origin) if origin is not None else "live"
+        self.config_version = str(config_version) if config_version is not None else ""
+        self.module = str(module_name) if module_name is not None else "person_down"
+        self.factory = "person_down"
         self._states: dict[int | str, _TrackIncidentState] = {}
         self._vehicle_states: dict[int, _VehicleState] = {}
 

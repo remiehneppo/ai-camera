@@ -1,7 +1,7 @@
 # 57: Vùng nguy hiểm: module × camera E2E
 
 Status: needs-info
-Execution: done (software lab; DangerZoneIncidentEngine + AlertModuleRegistry carrier E2E + linked labels + normalized ROI scaling pass; held-out field pending)
+Execution: partial (software lab; DangerZoneIncidentEngine + AlertModuleRegistry carrier E2E + linked labels + normalized ROI scaling pass; real video held-out open)
 Owner: Edge/Domain/ML + QA/Backend/UI theo lát cắt; chưa claim.
 
 **What to build:** Carrier vertical US10: một người vào ROI nguy hiểm theo lịch từ nguồn person tracks thực đã được chấp nhận → module register độc lập → suspected event và raw evidence → detail/review. Registry/config/label-link/dedup/anchor là seam được tính năng này tiêu thụ thật, không dựng framework trống hoặc yêu cầu mọi module phải dùng model/hardware mới.
