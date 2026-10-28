@@ -37,7 +37,7 @@ import math
 from typing import Any, Sequence
 from uuid import uuid4
 
-from apps.edge.geometry import point_in_polygon
+from apps.edge.geometry import is_normalized_polygon, point_in_polygon
 from apps.edge.tracker import Track
 from domain.alert_module_config import ScheduleWindow, WEEKDAYS
 from domain.event_contract import validate_event
@@ -108,6 +108,8 @@ class ParkingIncidentEngine:
         vehicle_labels: Sequence[str] | frozenset[str] | None = None,
         min_score: float = 0.3,
         exceptions: Sequence[Any] | None = None,
+        frame_dimensions: tuple[float, float] | None = None,
+        module_name: str | None = None,
     ) -> None:
         self.camera_id = str(camera_id)
         self.device_id = str(device_id)
@@ -117,6 +119,7 @@ class ParkingIncidentEngine:
         self.config_version = str(config_version)
         self.origin = str(origin)
         self.model_artifact_hash = str(model_artifact_hash)
+        self.module = str(module_name) if module_name is not None else self.factory
         self.calibration_version = str(calibration_version)
         self.quality_state = str(quality_state)
         self.roi_polygon = roi_polygon
@@ -133,7 +136,7 @@ class ParkingIncidentEngine:
         )
         self.min_score = float(min_score)
         self.exceptions = tuple(exceptions or ())
-
+        self.frame_dimensions = frame_dimensions
         self._tracks: dict[int | str, _VehicleParkingState] = {}
 
     def reset(self) -> None:
@@ -145,17 +148,23 @@ class ParkingIncidentEngine:
         for state in self._tracks.values():
             state.reset_dwell()
 
-    def in_roi(self, track: Track) -> bool:
+    def in_roi(self, track: Track, frame_dimensions: tuple[float, float] | None = None) -> bool:
         """Check if track foot or center is inside the restricted ROI polygon."""
         if self.roi_polygon is None:
             return True
         foot_x = (track.bbox[0] + track.bbox[2]) / 2.0
         foot_y = float(track.bbox[3])
+        dims = frame_dimensions or self.frame_dimensions
+        if is_normalized_polygon(self.roi_polygon) and dims is not None and dims[0] > 1.0 and dims[1] > 1.0:
+            w, h = float(dims[0]), float(dims[1])
+            return (
+                point_in_polygon(foot_x / w, foot_y / h, self.roi_polygon)
+                or point_in_polygon(track.cx / w, track.cy / h, self.roi_polygon)
+            )
         return (
             point_in_polygon(foot_x, foot_y, self.roi_polygon)
             or point_in_polygon(track.cx, track.cy, self.roi_polygon)
         )
-
     def is_in_schedule(self, timestamp: float | datetime) -> bool:
         """Evaluate if timestamp falls within the restricted schedule windows.
 
@@ -275,8 +284,10 @@ class ParkingIncidentEngine:
         self,
         tracks: list[Track],
         timestamp: float | datetime,
+        frame_dimensions: tuple[float, float] | None = None,
     ) -> list[dict[str, Any]]:
         """Evaluate tracks at timestamp and return validated event snapshots for any triggered illegal parking incidents."""
+        dims = frame_dimensions or self.frame_dimensions
         if isinstance(timestamp, datetime):
             ts = float(timestamp.timestamp())
         else:
@@ -295,7 +306,7 @@ class ParkingIncidentEngine:
                 continue
 
             # Hard negative 4: Vehicle parked outside restricted ROI does NOT trigger
-            if not self.in_roi(track):
+            if not self.in_roi(track, frame_dimensions=dims):
                 # If previously tracked inside ROI, reset its dwell state
                 existing = self._tracks.get(tid)
                 if existing is not None:

@@ -9,15 +9,29 @@ import math
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
 import numpy as np
 
+from apps.edge.crowd_incident import CrowdIncidentEngine
+from apps.edge.danger_zone import DangerZoneIncidentEngine
 from apps.edge.evidence import EvidenceLifecycle
+from apps.edge.geometry import is_normalized_polygon, scale_roi_to_pixels
 from apps.edge.health import EdgeHealthMonitor
 from apps.edge.incident import IncidentEngine, point_in_polygon
 from apps.edge.oracle_detector import OnnxDetector
+from apps.edge.parking_incident import ParkingIncidentEngine
+from apps.edge.vehicle_incident import VehicleIncidentEngine
+from domain.alert_module_config import (
+    ALLOWLISTED_FACTORIES,
+    AlertModuleDefinition,
+    AlertModuleRegistry,
+    CameraModuleConfig,
+    ConfigError,
+    ERROR_FACTORY_NOT_ALLOWED,
+    WEEKDAYS,
+)
 from apps.edge.perception import PerceptionExecution
 from apps.edge.outbox import EventOutbox
 from apps.edge.pose import PoseManager, PoseOutcome, PoseRequest, PoseScheduler
@@ -147,6 +161,112 @@ def evaluate_odd(rgb: np.ndarray) -> str:
     return "invalid_frame" if q["state"] == "unknown" else q["state"]
 
 
+def create_incident_engine(
+    factory: str | None = None,
+    *,
+    camera_id: str,
+    device_id: str = "lab-edge-01",
+    stream_session_id: str | None = None,
+    config: CameraModuleConfig | None = None,
+    definition: AlertModuleDefinition | None = None,
+    module_name: str | None = None,
+    config_version: str | None = None,
+    frame_dimensions: tuple[int, int] | tuple[float, float] | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Instantiate an incident engine from an allowlisted factory, definition, and module config."""
+    actual_factory = (
+        definition.factory
+        if definition is not None
+        else (factory or (config.module if config is not None and config.module in ALLOWLISTED_FACTORIES else None))
+    )
+    if not actual_factory or actual_factory not in ALLOWLISTED_FACTORIES:
+        raise ConfigError(
+            ERROR_FACTORY_NOT_ALLOWED,
+            f"module factory '{actual_factory}' is not in the registered allowlist",
+            field="factory",
+        )
+    mod_name = module_name or (definition.module if definition is not None else (config.module if config is not None else actual_factory))
+    cfg_version = config_version or (definition.config_version if definition is not None else kwargs.pop("config_version", None))
+
+    roi_poly = config.roi_polygon() if config is not None else kwargs.pop("roi_polygon", None)
+    if frame_dimensions is not None and roi_poly is not None:
+        roi_poly = scale_roi_to_pixels(roi_poly, frame_dimensions[0], frame_dimensions[1])
+    schedule = config.schedule if config is not None else kwargs.pop("schedule", None)
+    exceptions = config.exceptions if config is not None else kwargs.pop("exceptions", None)
+
+    thresholds: dict[str, Any] = dict(config.thresholds) if config is not None else {}
+    params = {**thresholds, **kwargs}
+    if cfg_version is not None:
+        params["config_version"] = cfg_version
+
+    if factory == "person_down":
+        return IncidentEngine(
+            roi_polygon=roi_poly,
+            **params,
+        )
+    elif actual_factory == "danger_zone":
+        return DangerZoneIncidentEngine(
+            camera_id=camera_id,
+            device_id=device_id,
+            stream_session_id=stream_session_id,
+            module_name=mod_name,
+            roi_polygon=roi_poly,
+            schedule=schedule,
+            exceptions=exceptions,
+            **params,
+        )
+    elif actual_factory == "illegal_parking":
+        return ParkingIncidentEngine(
+            camera_id=camera_id,
+            device_id=device_id,
+            stream_session_id=stream_session_id,
+            module_name=mod_name,
+            roi_polygon=roi_poly,
+            schedule=schedule,
+            exceptions=exceptions,
+            **params,
+        )
+    elif factory == "crowd_incident":
+        raw_schedule = schedule if schedule is not None else params.pop("schedule_filter", None)
+        schedule_filter: Any = None
+        if callable(raw_schedule) or isinstance(raw_schedule, dict):
+            schedule_filter = raw_schedule
+        elif raw_schedule is not None:
+            windows = tuple(raw_schedule)
+            def _filter(ts: float) -> bool:
+                dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+                day_name = WEEKDAYS[dt.weekday()]
+                sec = dt.hour * 3600 + dt.minute * 60 + dt.second + dt.microsecond / 1_000_000
+                for w in windows:
+                    w_days = getattr(w, "days", ()) if not isinstance(w, dict) else w.get("days", ())
+                    w_start = getattr(w, "start_second", 0) if not isinstance(w, dict) else w.get("start_second", 0)
+                    w_end = getattr(w, "end_second", 86400) if not isinstance(w, dict) else w.get("end_second", 86400)
+                    if day_name in w_days and w_start <= sec <= w_end:
+                        return True
+                return False
+            schedule_filter = _filter
+        return CrowdIncidentEngine(
+            camera_id=camera_id,
+            device_id=device_id,
+            stream_session_id=stream_session_id,
+            module_name=mod_name,
+            roi_polygon=roi_poly,
+            schedule_filter=schedule_filter,
+            exceptions=exceptions,
+            **params,
+        )
+    elif actual_factory == "vehicle_incident":
+        return VehicleIncidentEngine(
+            camera_id=camera_id,
+            device_id=device_id,
+            stream_session_id=stream_session_id,
+            module_name=mod_name,
+            roi_polygon=roi_poly,
+            **params,
+        )
+    raise ConfigError(ERROR_FACTORY_NOT_ALLOWED, f"unsupported factory '{actual_factory}'", field="factory")
+
 class PerceptionPipeline:
     """Perception pipeline composing detection, ByteTrack, fall incident engine, and evidence upload."""
 
@@ -177,7 +297,13 @@ class PerceptionPipeline:
         pose_scheduler: PoseScheduler | None = None,
         health: EdgeHealthMonitor | None = None,
         quota_manager: StorageQuotaManager | None = None,
+        site_id: str | None = None,
+        incident_engines: Sequence[Any] | Mapping[str, Any] | None = None,
+        module_configs: Sequence[CameraModuleConfig] | None = None,
+        alert_registry: AlertModuleRegistry | None = None,
+        capability_policies: Mapping[str, dict[str, Any]] | None = None,
     ) -> None:
+        self.alert_registry = alert_registry
         self.recorder = recorder
         self.outbox = outbox
         self.uploader = uploader
@@ -225,22 +351,81 @@ class PerceptionPipeline:
         self._lineage = (self.camera_id, self.stream_session_id, self.core_epoch, self.origin, self.config_version)
 
         # Tracking and incident engines
+        self.site_id = site_id
+        self.capability_policies = dict(capability_policies or {})
         self.tracker = tracker or ByteTracker(
             high_threshold=0.5,
             low_threshold=0.1,
             match_threshold=0.2,
         )
-        self.incident_engine = incident_engine or IncidentEngine(
-            standing_aspect_ratio=0.85,
-            lying_aspect_ratio=1.2,
-            min_drop_velocity=15.0,
-            min_lying_duration=3.0,
-            cooldown_seconds=30.0,
-            roi_polygon=self.roi_polygon,
-        )
-        if incident_engine is not None and getattr(self.incident_engine, "roi_polygon", None) is None:
+
+        engines_list: list[Any] = []
+        if incident_engines is not None:
+            if isinstance(incident_engines, Mapping):
+                engines_list.extend(incident_engines.values())
+            else:
+                engines_list.extend(incident_engines)
+
+        if module_configs is not None:
+            for mod_cfg in module_configs:
+                if not mod_cfg.enabled or mod_cfg.camera_id != self.camera_id:
+                    continue
+                defn: AlertModuleDefinition | None = None
+                if alert_registry is not None:
+                    try:
+                        defn = alert_registry.definition(mod_cfg.module)
+                    except Exception:
+                        defn = None
+                factory_name = defn.factory if defn is not None else (mod_cfg.module if mod_cfg.module in ALLOWLISTED_FACTORIES else None)
+                if not factory_name or factory_name not in ALLOWLISTED_FACTORIES:
+                    raise ConfigError(
+                        ERROR_FACTORY_NOT_ALLOWED,
+                        f"module '{mod_cfg.module}' has no allowlisted factory",
+                        field="factory",
+                    )
+                eng = create_incident_engine(
+                    factory=factory_name,
+                    camera_id=self.camera_id,
+                    device_id=self.device_id,
+                    stream_session_id=self.stream_session_id,
+                    config=mod_cfg,
+                    definition=defn,
+                    module_name=mod_cfg.module,
+                    origin=self.origin,
+                )
+                engines_list.append(eng)
+        no_selection = (incident_engines is None and module_configs is None and incident_engine is None)
+        if incident_engine is not None:
+            if incident_engine not in engines_list:
+                engines_list.insert(0, incident_engine)
+        elif no_selection:
+            engines_list.append(
+                IncidentEngine(
+                    standing_aspect_ratio=0.85,
+                    lying_aspect_ratio=1.2,
+                    min_drop_velocity=15.0,
+                    min_lying_duration=3.0,
+                    cooldown_seconds=30.0,
+                    roi_polygon=self.roi_polygon,
+                )
+            )
+
+        self.incident_engines: list[Any] = engines_list
+        self.incident_engine: IncidentEngine | None = self.incident_engines[0] if self.incident_engines else None
+        if self.incident_engine is not None and getattr(self.incident_engine, "roi_polygon", None) is None:
             self.incident_engine.roi_polygon = self.roi_polygon
 
+        for engine in self.incident_engines:
+            if hasattr(engine, "camera_id"):
+                engine.camera_id = self.camera_id
+            if hasattr(engine, "device_id"):
+                engine.device_id = self.device_id
+            if hasattr(engine, "stream_session_id"):
+                engine.stream_session_id = self.stream_session_id
+            if hasattr(engine, "origin"):
+                engine.origin = self.origin
+            if hasattr(engine, "config_version") and not getattr(engine, "config_version", None):
+                engine.config_version = self.config_version
         provenance = self.execution.provenance
         self.model_lineage = [{"role": "detector", "version": provenance.get("model_id", "unknown")}]
         self.model_artifact_hash = provenance.get("model_sha256", "unknown_artifact")
@@ -253,6 +438,13 @@ class PerceptionPipeline:
             quota_manager=self.quota_manager,
         )
         self.health.quota_manager = self.quota_manager
+    def get_engine(self, name_or_factory: str) -> Any | None:
+        """Find an active incident engine by module name or factory."""
+        for engine in self.incident_engines:
+            if getattr(engine, "factory", None) == name_or_factory or getattr(engine, "module", None) == name_or_factory:
+                return engine
+        return None
+
 
     def process_frame(self, rgb, timestamp, frame_id, *, detections=None, observation_status=None):
         with self._processing_lock:
@@ -275,7 +467,18 @@ class PerceptionPipeline:
         lineage = (self.camera_id, self.stream_session_id, self.core_epoch, self.origin, self.config_version)
         if lineage != self._lineage:
             self.tracker.reset()
-            self.incident_engine.reset()
+            for engine in self.incident_engines:
+                if hasattr(engine, "camera_id"):
+                    engine.camera_id = self.camera_id
+                if hasattr(engine, "device_id"):
+                    engine.device_id = self.device_id
+                if hasattr(engine, "stream_session_id"):
+                    engine.stream_session_id = self.stream_session_id
+                if hasattr(engine, "origin"):
+                    engine.origin = self.origin
+                if hasattr(engine, "config_version"):
+                    engine.config_version = self.config_version
+                engine.reset()
             if self.pose_manager is not None:
                 self.pose_manager.set_epoch(self.core_epoch)
             self._last_frame_id = -1
@@ -325,12 +528,15 @@ class PerceptionPipeline:
         observation["quality"] = dict(self.quality)
 
         if self.roi_polygon is not None:
+            roi_to_check = scale_roi_to_pixels(
+                self.roi_polygon, float(rgb.shape[1]), float(rgb.shape[0])
+            ) or self.roi_polygon
             formatted_dets = [
                 d for d in formatted_dets
                 if len(d.get("bbox", [])) >= 4 and point_in_polygon(
                     (d["bbox"][0] + d["bbox"][2]) / 2.0,
                     float(d["bbox"][3]),
-                    self.roi_polygon,
+                    roi_to_check,
                 )
             ]
 
@@ -370,25 +576,78 @@ class PerceptionPipeline:
             observation["pose_status"] = "ok" if any(o.status == "ok" for o in pose_outcomes) else pose_outcomes[0].status
             observation["pose_reason"] = None if any(o.status == "ok" for o in pose_outcomes) else pose_outcomes[0].reason
 
-        # 3. Assess incident engine
-        try:
-            incidents = self.incident_engine.process_tracks(
-                tracks, timestamp=ts, pose_outcomes=pose_outcomes
-            )
-        except TypeError:
-            # Fallback for custom/mock engines that accept (tracks, timestamp) only
-            incidents = self.incident_engine.process_tracks(tracks, timestamp=ts)
-
-        # 4. Handle emitted incidents
+        # 3. Assess incident engines
         emitted_events: list[dict[str, Any]] = []
-        for incident in incidents:
-            if incident.get("taxonomy") in {
-                "person_fall",
-                "person_lying_persistent",
-                "person_on_stationary_vehicle",
-            }:
-                event = self._handle_incident(incident, ts)
-                emitted_events.append(event)
+        frame_dims = (float(rgb.shape[1]), float(rgb.shape[0]))
+        for engine in self.incident_engines:
+            try:
+                incidents = engine.process_tracks(
+                    tracks, timestamp=ts, pose_outcomes=pose_outcomes, frame_dimensions=frame_dims
+                )
+            except TypeError:
+                try:
+                    incidents = engine.process_tracks(
+                        tracks, timestamp=ts, pose_outcomes=pose_outcomes
+                    )
+                except TypeError:
+                    try:
+                        incidents = engine.process_tracks(tracks, timestamp=ts, frame_dimensions=frame_dims)
+                    except TypeError:
+                        incidents = engine.process_tracks(tracks, timestamp=ts)
+
+            for item in (incidents or ()):
+                if not isinstance(item, dict):
+                    continue
+                if "schema_version" in item and "payload" in item:
+                    item["camera_id"] = self.camera_id
+                    item["device_id"] = self.device_id
+                    item["stream_session_id"] = self.stream_session_id
+                    item["origin"] = self.origin
+                    item["config_version"] = getattr(engine, "config_version", self.config_version)
+                    item["calibration_version"] = self.calibration_version
+
+                    # Propagate real detector provenance while retaining module rule lineage
+                    real_detector_entry = {
+                        "role": "detector",
+                        "version": self.model_lineage[0].get("version", "unknown") if self.model_lineage else "unknown",
+                    }
+                    existing_lineage = item.get("model_lineage", [])
+                    module_entries = [
+                        entry for entry in existing_lineage
+                        if entry.get("role") not in {"detector", "person_detector", "vehicle_detector", "crowd_detector"}
+                    ]
+                    item["model_lineage"] = [real_detector_entry] + module_entries
+                    item["model_artifact_hash"] = self.model_artifact_hash
+
+                    for req in item.get("payload", {}).get("evidence_requests", []):
+                        req["session_id"] = self.stream_session_id
+                    cap_name = str(getattr(engine, "factory", getattr(engine, "module", "unknown")))
+                    if self.capability_policies and cap_name in self.capability_policies:
+                        scoped = assess_capability_quality(
+                            rgb,
+                            capability=cap_name,
+                            camera_id=self.camera_id,
+                            site_id=self.site_id,
+                            policy=self.capability_policies[cap_name],
+                        )
+                        item["payload"]["quality"] = scoped["quality"]
+                        item["payload"]["capability_scope"] = scoped["scope"]
+                        item["quality_state"] = scoped["quality"]["state"]
+                    else:
+                        if "quality" not in item["payload"]:
+                            item["payload"]["quality"] = dict(self.quality)
+                        if "quality_state" not in item:
+                            item["quality_state"] = self.quality_state
+                    validated_item = validate_event(item)
+                    self.evidence.persist(validated_item)
+                    emitted_events.append(validated_item)
+                elif item.get("taxonomy") in {
+                    "person_fall",
+                    "person_lying_persistent",
+                    "person_on_stationary_vehicle",
+                }:
+                    event = self._handle_incident(item, ts, rgb=rgb)
+                    emitted_events.append(event)
 
         return emitted_events
 
@@ -424,7 +683,8 @@ class PerceptionPipeline:
             self._observation_gap()
 
     def _observation_gap(self):
-        self.incident_engine.observation_gap()
+        for engine in self.incident_engines:
+            engine.observation_gap()
         # Retain track IDs/cooldown, discard pre-gap motion and standing evidence.
         for track in self.tracker.get_all_tracks():
             track.history.clear()
@@ -443,7 +703,7 @@ class PerceptionPipeline:
             })
         return lineage
 
-    def _handle_incident(self, incident: dict[str, Any], timestamp: float) -> dict[str, Any]:
+    def _handle_incident(self, incident: dict[str, Any], timestamp: float, *, rgb: Any = None) -> dict[str, Any]:
         """Construct validated Event snapshot, pin ring buffer, and atomically enqueue to outbox."""
         event_id = str(uuid4())
         message_id = f"msg-{uuid4().hex[:12]}"
@@ -463,8 +723,24 @@ class PerceptionPipeline:
             anchor_time=anchor_time,
         )
 
+        if self.capability_policies and "person_down" in self.capability_policies:
+            scoped = assess_capability_quality(
+                rgb,
+                capability="person_down",
+                camera_id=self.camera_id,
+                site_id=self.site_id,
+                policy=self.capability_policies["person_down"],
+            )
+            quality_info = scoped["quality"]
+            cap_scope: dict[str, Any] | None = scoped["scope"]
+            quality_state = scoped["quality"]["state"]
+        else:
+            quality_info = dict(self.quality)
+            cap_scope = None
+            quality_state = self.quality_state
+
         payload: dict[str, Any] = {
-            "quality": dict(self.quality),
+            "quality": quality_info,
             "taxonomy": taxonomy,
             "lifecycle": "candidate",
             "severity": severity,
@@ -475,6 +751,8 @@ class PerceptionPipeline:
             "detections": incident.get("detections", []),
             "evidence_requests": [evidence_request],
         }
+        if cap_scope is not None:
+            payload["capability_scope"] = cap_scope
         pose_evidence = incident.get("pose_evidence")
         if pose_evidence is not None:
             payload["pose_evidence"] = pose_evidence
@@ -502,7 +780,7 @@ class PerceptionPipeline:
             "model_lineage": self._event_model_lineage(),
             "model_artifact_hash": self.model_artifact_hash,
             "calibration_version": self.calibration_version,
-            "quality_state": self.quality_state,
+            "quality_state": quality_state,
             "payload": payload,
         }
 

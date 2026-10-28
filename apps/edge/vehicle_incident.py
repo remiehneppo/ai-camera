@@ -35,6 +35,7 @@ import math
 from typing import Any, Sequence
 from uuid import uuid4
 
+from apps.edge.geometry import is_normalized_polygon, point_in_polygon
 from apps.edge.tracker import Track
 from domain.event_contract import validate_event
 from domain.evidence_contract import make_evidence_request
@@ -115,6 +116,8 @@ class VehicleIncidentEngine:
         pedestrian_drop_velocity: float = 15.0,
         pedestrian_lying_ar: float = 1.2,
         proximity_distance: float = 80.0,
+        frame_dimensions: tuple[float, float] | None = None,
+        module_name: str | None = None,
     ) -> None:
         self.camera_id = str(camera_id)
         self.device_id = str(device_id)
@@ -124,9 +127,11 @@ class VehicleIncidentEngine:
         self.config_version = str(config_version)
         self.origin = str(origin)
         self.model_artifact_hash = str(model_artifact_hash)
+        self.module = str(module_name) if module_name is not None else self.factory
         self.calibration_version = str(calibration_version)
         self.quality_state = str(quality_state)
         self.roi_polygon = roi_polygon
+        self.frame_dimensions = frame_dimensions
         self.max_observation_gap = float(max_observation_gap)
         self.cooldown_seconds = float(cooldown_seconds)
         self.min_moving_speed = float(min_moving_speed)
@@ -157,11 +162,18 @@ class VehicleIncidentEngine:
             state.last_deceleration_spike_time = None
         self._pairs.clear()
 
-    def _in_roi(self, track: Track) -> bool:
+    def _in_roi(self, track: Track, frame_dimensions: tuple[float, float] | None = None) -> bool:
         if self.roi_polygon is None:
             return True
         foot_x = (track.bbox[0] + track.bbox[2]) / 2.0
         foot_y = float(track.bbox[3])
+        dims = frame_dimensions or self.frame_dimensions
+        if is_normalized_polygon(self.roi_polygon) and dims is not None and dims[0] > 1.0 and dims[1] > 1.0:
+            w, h = float(dims[0]), float(dims[1])
+            return (
+                point_in_polygon(foot_x / w, foot_y / h, self.roi_polygon)
+                or point_in_polygon(track.cx / w, track.cy / h, self.roi_polygon)
+            )
         return (
             point_in_polygon(foot_x, foot_y, self.roi_polygon)
             or point_in_polygon(track.cx, track.cy, self.roi_polygon)
@@ -276,9 +288,11 @@ class VehicleIncidentEngine:
         self,
         tracks: list[Track],
         timestamp: float,
+        frame_dimensions: tuple[float, float] | None = None,
     ) -> list[dict[str, Any]]:
         """Evaluate tracks at timestamp and return validated event snapshots for any triggered incidents."""
         ts = float(timestamp)
+        dims = frame_dimensions or self.frame_dimensions
         events: list[dict[str, Any]] = []
 
         # 1. Update kinematics and track state for tracks in ROI
@@ -286,7 +300,7 @@ class VehicleIncidentEngine:
         for track in tracks:
             tid = track.track_id
             active_track_ids.add(tid)
-            if not self._in_roi(track):
+            if not self._in_roi(track, frame_dimensions=dims):
                 continue
 
             state = self._get_or_create_track(track, ts)

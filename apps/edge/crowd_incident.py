@@ -38,7 +38,7 @@ import math
 from typing import Any, Callable, Sequence
 from uuid import uuid4
 
-from apps.edge.geometry import point_in_polygon
+from apps.edge.geometry import is_normalized_polygon, point_in_polygon
 from apps.edge.tracker import Track
 from domain.event_contract import validate_event
 from domain.evidence_contract import make_evidence_request
@@ -142,6 +142,8 @@ class CrowdIncidentEngine:
         cooldown_seconds: float = 10.0,
         schedule_filter: Callable[[float], bool] | dict[str, Any] | None = None,
         exceptions: Sequence[Any] | None = None,
+        frame_dimensions: tuple[float, float] | None = None,
+        module_name: str | None = None,
     ) -> None:
         self.camera_id = str(camera_id)
         self.device_id = str(device_id)
@@ -151,8 +153,10 @@ class CrowdIncidentEngine:
         self.config_version = str(config_version)
         self.origin = str(origin)
         self.model_artifact_hash = str(model_artifact_hash)
+        self.module = str(module_name) if module_name is not None else self.factory
         self.calibration_version = str(calibration_version)
         self.quality_state = str(quality_state)
+        self.frame_dimensions = frame_dimensions
         self.roi_polygon = roi_polygon
 
         # Layer 1 parameters
@@ -230,17 +234,23 @@ class CrowdIncidentEngine:
                 return any(start <= hour <= end for start, end in active_hours)
         return True
 
-    def _in_roi(self, bbox: list[float], cx: float, cy: float) -> bool:
+    def _in_roi(self, bbox: list[float], cx: float, cy: float, frame_dimensions: tuple[float, float] | None = None) -> bool:
         """Check if track center or bottom-center is within configured ROI."""
         if self.roi_polygon is None:
             return True
         foot_x = (bbox[0] + bbox[2]) / 2.0
         foot_y = float(bbox[3])
+        dims = frame_dimensions or self.frame_dimensions
+        if is_normalized_polygon(self.roi_polygon) and dims is not None and dims[0] > 1.0 and dims[1] > 1.0:
+            w, h = float(dims[0]), float(dims[1])
+            return (
+                point_in_polygon(foot_x / w, foot_y / h, self.roi_polygon)
+                or point_in_polygon(cx / w, cy / h, self.roi_polygon)
+            )
         return (
             point_in_polygon(foot_x, foot_y, self.roi_polygon)
             or point_in_polygon(cx, cy, self.roi_polygon)
         )
-
     def _update_kinematics(self, state: _PedestrianState, ts: float, cx: float, cy: float) -> _PedestrianKinematics:
         prev = state.kinematics
         if prev is None or (ts - prev.timestamp) <= 0.0 or (ts - prev.timestamp) > self.max_observation_gap:
@@ -455,8 +465,10 @@ class CrowdIncidentEngine:
         self,
         tracks: list[Track] | list[dict[str, Any]],
         timestamp: float,
+        frame_dimensions: tuple[float, float] | None = None,
     ) -> list[dict[str, Any]]:
         """Evaluate pedestrian tracks at timestamp and return validated event snapshots for any triggered incidents."""
+        dims = frame_dimensions or self.frame_dimensions
         ts = float(timestamp)
 
         # 0. Check observation gap / backwards jump
@@ -483,7 +495,8 @@ class CrowdIncidentEngine:
 
             active_ids.add(tid)
 
-            if not self._in_roi(bbox, cx, cy):
+            # Check if in ROI
+            if not self._in_roi(bbox, cx, cy, frame_dimensions=dims):
                 continue
 
             state = self._tracks.get(tid)

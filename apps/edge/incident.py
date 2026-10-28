@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import math
 from typing import Any
 
-from apps.edge.geometry import point_in_polygon
+from apps.edge.geometry import is_normalized_polygon, point_in_polygon
 from apps.edge.tracker import Track, bbox_iou
 
 _VEHICLE_LABELS = {"motorcycle", "bicycle"}
@@ -94,6 +94,7 @@ class IncidentEngine:
         vehicle_min_stable_frames: int = 2,
         vehicle_overlap_iou: float = 0.1,
         on_vehicle_severity: str = "low",
+        frame_dimensions: tuple[float, float] | None = None,
     ) -> None:
         self.max_observation_gap: float = float(max_observation_gap)
         self.standing_aspect_ratio: float = float(standing_aspect_ratio)
@@ -115,6 +116,7 @@ class IncidentEngine:
         self.vehicle_min_stable_frames: int = int(vehicle_min_stable_frames)
         self.vehicle_overlap_iou: float = float(vehicle_overlap_iou)
         self.on_vehicle_severity: str = str(on_vehicle_severity)
+        self.frame_dimensions = frame_dimensions
         self._states: dict[int | str, _TrackIncidentState] = {}
         self._vehicle_states: dict[int, _VehicleState] = {}
 
@@ -352,18 +354,24 @@ class IncidentEngine:
             return all(vehicle.track_id != qualifying_id for _, vehicle in associated)
         return False
 
-    def _in_roi(self, track: Track) -> bool:
+    def _in_roi(self, track: Track, frame_dimensions: tuple[float, float] | None = None) -> bool:
         if self.roi_polygon is None:
             return True
         foot_x = (track.bbox[0] + track.bbox[2]) / 2.0
-        return point_in_polygon(foot_x, float(track.bbox[3]), self.roi_polygon)
+        foot_y = float(track.bbox[3])
+        dims = frame_dimensions or self.frame_dimensions
+        if is_normalized_polygon(self.roi_polygon) and dims is not None and dims[0] > 1.0 and dims[1] > 1.0:
+            return point_in_polygon(foot_x / float(dims[0]), foot_y / float(dims[1]), self.roi_polygon)
+        return point_in_polygon(foot_x, foot_y, self.roi_polygon)
 
     def process_tracks(
         self,
         tracks: list[Track],
         timestamp: float,
         pose_outcomes: list[Any] | None = None,
+        frame_dimensions: tuple[float, float] | None = None,
     ) -> list[dict[str, Any]]:
+        dims = frame_dimensions or self.frame_dimensions
         ts = float(timestamp)
         incidents: list[dict[str, Any]] = []
         self._update_vehicle_states(tracks, ts)
@@ -379,7 +387,7 @@ class IncidentEngine:
         observed_ids = {
             track.track_id
             for track in tracks
-            if getattr(track, "label", None) == "person" and self._in_roi(track)
+            if getattr(track, "label", None) == "person" and self._in_roi(track, frame_dimensions=dims)
         }
         for tid, state in list(self._states.items()):
             if tid not in observed_ids:
@@ -392,7 +400,7 @@ class IncidentEngine:
         for track in tracks:
             if getattr(track, "label", None) != "person":
                 continue
-            if not self._in_roi(track):
+            if not self._in_roi(track, frame_dimensions=dims):
                 continue
             tid = track.track_id
             if tid not in self._states:
