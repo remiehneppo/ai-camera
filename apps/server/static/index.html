@@ -167,6 +167,12 @@
             add(card, "p", `Event ${event.event_id}`, "muted");
             const review = row.review;
             add(card, "p", `Review: ${review.decision} · version ${review.review_version}${review.needs_re_review ? " · needs re-review" : ""}`);
+            if (review.needs_re_review) {
+              const reasons = Array.isArray(review.re_review_reasons) ? review.re_review_reasons : [];
+              add(card, "p", reasons.length
+                ? `Re-review required: ${reasons.join(", ")}`
+                : "Re-review required; reason unavailable.", "badge badge-pending");
+            }
             if (data.review_enabled) {
               const controls = document.createElement("p");
               const addReviewButton = (action, label) => {
