@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from apps.edge.outbox import EventOutbox
-from apps.edge.pipeline import PerceptionPipeline, assess_quality
+from apps.edge.pipeline import PerceptionPipeline, assess_capability_quality, assess_quality
 from apps.edge.recorder import FileRecorder
 from domain.event_contract import EventValidationError, validate_event
 
@@ -51,6 +51,84 @@ class TestAssessQuality(unittest.TestCase):
     def test_missing_frame_is_unknown_not_normal(self):
         q = assess_quality(None, POLICY, reason="detection_stale")
         self.assertEqual((q["state"], q["odd_supported"], q["reason"]), ("unknown", None, "detection_stale"))
+
+
+class TestCapabilityQualityScope(unittest.TestCase):
+    def test_each_capability_camera_scope_uses_its_own_versioned_policy(self):
+        frame = noisy(17)
+        person_down = assess_capability_quality(
+            frame, capability="person_down", camera_id="cam-01", site_id="site-a", policy=POLICY
+        )
+        vehicle = assess_capability_quality(
+            frame, capability="vehicle_incident", camera_id="cam-01", site_id="site-a",
+            policy={**POLICY, "version": "vehicle-v3", "low_light_mean": 250.0},
+        )
+        self.assertEqual(person_down["scope"], {"capability": "person_down", "camera_id": "cam-01", "site_id": "site-a"})
+        self.assertEqual(person_down["quality"]["policy_version"], "site-a-v2")
+        self.assertTrue(person_down["quality"]["odd_supported"])
+        self.assertEqual(vehicle["quality"]["policy_version"], "vehicle-v3")
+        self.assertEqual(vehicle["quality"]["state"], "low_light")
+
+    def test_missing_policy_is_unknown_not_default_supported(self):
+        result = assess_capability_quality(
+            noisy(18), capability="person_down", camera_id="cam-01"
+        )
+        self.assertEqual(result["quality"], {"state": "unknown", "odd_supported": None, "reason": "policy_unconfigured", "policy_version": None})
+
+    def test_policy_without_explicit_thresholds_is_rejected(self):
+        # A version alone must not inherit DEFAULT_ODD_POLICY thresholds silently.
+        with self.assertRaises(ValueError):
+            assess_capability_quality(noisy(19), capability="person_down", camera_id="cam-01",
+                                      policy={"version": "only-version-v1"})
+
+    def test_non_numeric_or_non_finite_threshold_is_rejected(self):
+        for bad in (float("nan"), float("inf"), True, "12.0"):
+            with self.assertRaises(ValueError):
+                assess_capability_quality(noisy(22), capability="person_down", camera_id="cam-01",
+                                          policy={**POLICY, "glare_mean": bad})
+
+    def test_invalid_scope_or_version_fails_fast(self):
+        for kwargs in (
+            {"capability": "", "camera_id": "cam-01"},
+            {"capability": "person_down", "camera_id": "  "},
+            {"capability": "person_down", "camera_id": "cam-01", "site_id": ""},
+            {"capability": "person_down", "camera_id": "cam-01", "policy": {"low_light_mean": 15.0}},
+        ):
+            with self.assertRaises(ValueError):
+                assess_capability_quality(noisy(20), **kwargs)
+
+    def test_unconfigured_policy_keeps_both_signals(self):
+        # Never-measured quality must stay distinguishable from an observation gap,
+        # and the caller's observation reason must not be discarded.
+        result = assess_capability_quality(
+            noisy(21), capability="person_down", camera_id="cam-01", reason="detection_stale"
+        )
+        self.assertEqual(result["quality"]["reason"], "policy_unconfigured")
+        self.assertEqual(result["quality"]["observation_reason"], "detection_stale")
+        self.assertIsNone(result["quality"]["policy_version"])
+
+    def test_optional_blur_threshold_is_validated(self):
+        # An unvalidated value would surface as TypeError inside assess_quality.
+        for bad in ("4.0", float("nan"), True):
+            with self.assertRaises(ValueError):
+                assess_capability_quality(noisy(23), capability="person_down", camera_id="cam-01",
+                                          policy={**POLICY, "blur_laplacian_var": bad})
+
+    def test_freeze_frames_does_not_change_capability_quality(self):
+        # Freeze detection is stateful and lives on the pipeline, not in this stateless helper.
+        without = assess_capability_quality(noisy(24), capability="person_down", camera_id="cam-01", policy={**POLICY, "freeze_frames": None})
+        with_freeze = assess_capability_quality(noisy(24), capability="person_down", camera_id="cam-01", policy={**POLICY, "freeze_frames": 2})
+        self.assertEqual(without["quality"], with_freeze["quality"])
+        self.assertNotEqual(without["quality"]["state"], "frozen")
+
+    def test_missing_frame_with_policy_is_unknown_invalid_frame(self):
+        result = assess_capability_quality(
+            None, capability="person_down", camera_id="cam-01", policy=POLICY
+        )
+        self.assertEqual(result["scope"]["site_id"], None)
+        self.assertEqual(result["quality"]["state"], "unknown")
+        self.assertIsNone(result["quality"]["odd_supported"])
+        self.assertEqual(result["quality"]["reason"], "invalid_frame")
 
 
 class TestPipelineQuality(unittest.TestCase):

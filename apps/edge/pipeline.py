@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
 import logging
+import math
 import threading
 import time
 from pathlib import Path
@@ -61,6 +62,83 @@ def assess_quality(rgb: Any, policy: dict[str, Any] | None = None, *, reason: st
         if float(lap.var()) < pol["blur_laplacian_var"]:
             state = "blur"
     return {**base, "state": state, "odd_supported": state == "normal"}
+
+
+#: Thresholds a capability policy must declare itself; they are never inherited.
+_CAPABILITY_REQUIRED_THRESHOLDS: tuple[str, ...] = ("low_light_mean", "glare_mean", "low_contrast_std")
+#: Optional threshold that disables the corresponding check when undeclared or None.
+#: Freeze detection is deliberately absent: it needs frame-to-frame state, which stays on
+#: PerceptionPipeline, so a stateless helper must not imply that freeze was assessed.
+_CAPABILITY_OPTIONAL_THRESHOLDS: tuple[str, ...] = ("blur_laplacian_var",)
+
+
+def _validated_policy(policy: dict[str, Any]) -> dict[str, Any]:
+    """Validate a capability policy and return only the keys it declares itself.
+
+    A capability must not inherit DEFAULT_ODD_POLICY thresholds: a version alone would
+    otherwise report ODD support measured with numbers the capability never supplied.
+    """
+    version = policy.get("version")
+    if not isinstance(version, str) or not version.strip():
+        raise ValueError("quality policy requires a non-empty version")
+    missing = [name for name in _CAPABILITY_REQUIRED_THRESHOLDS if name not in policy]
+    if missing:
+        raise ValueError("quality policy must declare thresholds explicitly: " + ", ".join(missing))
+    effective: dict[str, Any] = {"version": version}
+    for name in _CAPABILITY_REQUIRED_THRESHOLDS:
+        value = policy[name]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError(f"quality policy threshold {name} must be a finite number")
+        effective[name] = float(value)
+    for name in _CAPABILITY_OPTIONAL_THRESHOLDS:
+        value = policy.get(name)
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
+        ):
+            raise ValueError(f"quality policy threshold {name} must be a finite number or None")
+        effective[name] = float(value) if value is not None else None
+    return effective
+
+
+def assess_capability_quality(
+    rgb: Any,
+    *,
+    capability: str,
+    camera_id: str,
+    site_id: str | None = None,
+    policy: dict[str, Any] | None = None,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """Assess one alert capability's quality within its own camera/site ODD scope.
+
+    The result is {"scope": {capability, camera_id, site_id}, "quality": quality}. Scope
+    identity is echoed, never inferred: a missing site_id stays None rather than being
+    derived from the camera or device name.
+
+    A capability is only assessed against a policy it supplies itself. With no policy the
+    result is unknown / odd_supported=None / reason "policy_unconfigured", so quality that
+    was never measured cannot be mistaken for supported ODD or for an observation gap.
+    A supplied policy must carry "version" plus the thresholds it is measured with, or a
+    ValueError is raised instead of silently inheriting global defaults.
+    """
+    for name, value in (("capability", capability), ("camera_id", camera_id)):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a non-empty string")
+    if site_id is not None and (not isinstance(site_id, str) or not site_id.strip()):
+        raise ValueError("site_id must be a non-empty string when provided")
+
+    scope = {"capability": capability, "camera_id": camera_id, "site_id": site_id}
+    if policy is None:
+        # odd_supported stays None: nothing was measured, so it is not "supported" or "degraded".
+        # The caller's observation reason is preserved rather than dropped, so a configuration
+        # gap and a lost observation stay distinguishable instead of overwriting each other.
+        quality: dict[str, Any] = {"state": "unknown", "odd_supported": None,
+                                   "reason": "policy_unconfigured", "policy_version": None}
+        if reason is not None:
+            quality["observation_reason"] = reason
+        return {"scope": scope, "quality": quality}
+    quality = assess_quality(rgb, _validated_policy(policy), reason=reason)
+    return {"scope": scope, "quality": quality}
 
 
 def evaluate_odd(rgb: np.ndarray) -> str:
