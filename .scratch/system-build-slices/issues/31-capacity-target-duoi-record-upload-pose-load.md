@@ -1,7 +1,7 @@
 # 31: Capacity target dưới record/upload/pose load
 
 Status: ready-for-agent
-Execution: not-started
+Execution: partial (exploratory harness implemented; no measured workload, no capacity sign-off)
 Owner: Gán theo ownership Edge/Domain/ML/Backend/UI/QA trong checklist đã duyệt; chưa claim.
 
 **What to build:** Profile rồi soak workload thực trên BOM để ký camera/FPS/pose envelope và headroom.
@@ -46,3 +46,9 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 - 2026-10-11: Đồng bộ contract sau review; acceptance bổ sung chưa chạy, Execution vẫn not-started.
 
 - 2026-10-20: Đồng bộ breakdown T3 theo [requirement tình huống/Q36](../../../docs/requirements/urban-safety-scenarios.md) và [ứng viên công nghệ](../../../docs/requirements/technology-candidates.md). Chỉ bổ sung phạm vi/acceptance/gates và dependency được duyệt; giữ Status/Execution, checked criteria, evidence và lịch sử cũ. Không có evidence implementation/benchmark/nghiệm thu mới; mọi acceptance bổ sung còn unchecked.
+
+- 2026-10-27: Lát cắt **exploratory capacity harness** theo delta "exploratory profiling trước signed G2". Thêm `apps/edge/capacity_lab.py` (percentiles có p99, gap_totals, upload drainer trên thread riêng, `run_lab` đo per-camera latency/dropped/queue.max_pending_events/coverage/pose) và dùng chung percentile trong `tools/run_benchmark.py`.
+  Mọi report mang `accepted_capacity=False`, `disclaimer` và `missing_gates` để không số nào bị đọc thành accepted capacity.
+  Mỗi trục chỉ báo cáo khi có nguồn thật (fsync đếm bằng wrapper, WAL qua `PRAGMA journal_mode`, headroom qua `get_storage_breakdown`, coverage qua `actual_range`); trục không đo được ghi `unmeasured` + reason thay vì 0, và `queue.drops` để `None` vì EventOutbox không có counter.
+  `pytest tests/test_capacity_lab.py` ⇒ 12 passed; full suite ⇒ **843 passed, 126 subtests**; mypy 2 files sạch.
+  **Chưa đóng acceptance**: chưa chạy profile với workload manifest, chưa có số đo, chưa soak 24–72h, chưa có target SKU/thermal/power/WAL endurance, chưa multi-camera fairness. Không ký capacity. Chi tiết: [log](../../../docs/logs/2026-10-27-ticket-31-exploratory-capacity-harness.md).

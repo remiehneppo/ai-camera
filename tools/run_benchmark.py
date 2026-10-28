@@ -17,11 +17,11 @@ import time
 from typing import Any
 
 import cv2
-import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from apps.edge.capacity_lab import percentiles
 from apps.edge.outbox import EventOutbox
 from apps.edge.pipeline import PerceptionPipeline
 from apps.edge.pose import PoseManager, PoseScheduler, RtmposeEstimator
@@ -40,18 +40,8 @@ def get_process_rss_mb() -> float:
     return 0.0
 
 
-def calculate_percentiles(values: list[float]) -> dict[str, float]:
-    """Calculate mean, p50, p90, p95, and max for a list of latency numbers in ms."""
-    if not values:
-        return {"mean": 0.0, "p50": 0.0, "p90": 0.0, "p95": 0.0, "max": 0.0}
-    arr = np.array(values, dtype=np.float64)
-    return {
-        "mean": round(float(np.mean(arr)), 2),
-        "p50": round(float(np.percentile(arr, 50)), 2),
-        "p90": round(float(np.percentile(arr, 90)), 2),
-        "p95": round(float(np.percentile(arr, 95)), 2),
-        "max": round(float(np.max(arr)), 2),
-    }
+#: Shared percentile helper; keeps p99 visible so tail latency is not hidden by the mean.
+calculate_percentiles = percentiles
 
 
 def run_single_benchmark(
@@ -241,21 +231,21 @@ def format_markdown_report(results: list[dict[str, Any]]) -> str:
         "",
         "## 2. Chi tiết độ trễ từng công đoạn (Latency Breakdown in ms)",
         "",
-        "| Kịch bản & Cấu hình | Công đoạn | P50 (Median) | P90 | P95 | Max | Mean |",
-        "| :--- | :--- | :---: | :---: | :---: | :---: | :---: |",
+        "| Kịch bản & Cấu hình | Công đoạn | P50 (Median) | P90 | P95 | P99 | Max | Mean |",
+        "| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |",
     ])
 
     for r in results:
         v_name = f"{r['video']} ({'Pose' if r['with_pose'] else 'Base'})"
         lats = r["latencies"]
-        lines.append(f"| **{v_name}** | **Tổng Pipeline** | **{lats['pipeline_ms']['p50']}** | **{lats['pipeline_ms']['p90']}** | **{lats['pipeline_ms']['p95']}** | {lats['pipeline_ms']['max']} | {lats['pipeline_ms']['mean']} |")
-        lines.append(f"| {v_name} | Decode & RGB | {lats['decode_ms']['p50']} | {lats['decode_ms']['p90']} | {lats['decode_ms']['p95']} | {lats['decode_ms']['max']} | {lats['decode_ms']['mean']} |")
-        lines.append(f"| {v_name} | YOLOX Preprocess | {lats['detector_preprocess_ms']['p50']} | {lats['detector_preprocess_ms']['p90']} | {lats['detector_preprocess_ms']['p95']} | {lats['detector_preprocess_ms']['max']} | {lats['detector_preprocess_ms']['mean']} |")
-        lines.append(f"| {v_name} | YOLOX Inference | {lats['detector_inference_ms']['p50']} | {lats['detector_inference_ms']['p90']} | {lats['detector_inference_ms']['p95']} | {lats['detector_inference_ms']['max']} | {lats['detector_inference_ms']['mean']} |")
-        lines.append(f"| {v_name} | YOLOX Postprocess | {lats['detector_postprocess_ms']['p50']} | {lats['detector_postprocess_ms']['p90']} | {lats['detector_postprocess_ms']['p95']} | {lats['detector_postprocess_ms']['max']} | {lats['detector_postprocess_ms']['mean']} |")
+        lines.append(f"| **{v_name}** | **Tổng Pipeline** | **{lats['pipeline_ms']['p50']}** | **{lats['pipeline_ms']['p90']}** | **{lats['pipeline_ms']['p95']}** | **{lats['pipeline_ms']['p99']}** | {lats['pipeline_ms']['max']} | {lats['pipeline_ms']['mean']} |")
+        lines.append(f"| {v_name} | Decode & RGB | {lats['decode_ms']['p50']} | {lats['decode_ms']['p90']} | {lats['decode_ms']['p95']} | {lats['decode_ms']['p99']} | {lats['decode_ms']['max']} | {lats['decode_ms']['mean']} |")
+        lines.append(f"| {v_name} | YOLOX Preprocess | {lats['detector_preprocess_ms']['p50']} | {lats['detector_preprocess_ms']['p90']} | {lats['detector_preprocess_ms']['p95']} | {lats['detector_preprocess_ms']['p99']} | {lats['detector_preprocess_ms']['max']} | {lats['detector_preprocess_ms']['mean']} |")
+        lines.append(f"| {v_name} | YOLOX Inference | {lats['detector_inference_ms']['p50']} | {lats['detector_inference_ms']['p90']} | {lats['detector_inference_ms']['p95']} | {lats['detector_inference_ms']['p99']} | {lats['detector_inference_ms']['max']} | {lats['detector_inference_ms']['mean']} |")
+        lines.append(f"| {v_name} | YOLOX Postprocess | {lats['detector_postprocess_ms']['p50']} | {lats['detector_postprocess_ms']['p90']} | {lats['detector_postprocess_ms']['p95']} | {lats['detector_postprocess_ms']['p99']} | {lats['detector_postprocess_ms']['max']} | {lats['detector_postprocess_ms']['mean']} |")
         if r["with_pose"] and lats.get("person_pose_ms"):
             p_lat = lats["person_pose_ms"]
-            lines.append(f"| {v_name} | **RTMPose / người** | **{p_lat['p50']}** | **{p_lat['p90']}** | **{p_lat['p95']}** | {p_lat['max']} | {p_lat['mean']} |")
+            lines.append(f"| {v_name} | **RTMPose / người** | **{p_lat['p50']}** | **{p_lat['p90']}** | **{p_lat['p95']}** | **{p_lat['p99']}** | {p_lat['max']} | {p_lat['mean']} |")
 
     lines.extend([
         "",
