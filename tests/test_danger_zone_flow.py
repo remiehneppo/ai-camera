@@ -677,6 +677,110 @@ class TestMultiModuleCarrierPipelineE2E(unittest.TestCase):
         status = pipeline.status()
         self.assertEqual(status["camera_id"], "cam-01")
 
+    def test_stream_session_reset_preserves_distinct_module_config_version(self) -> None:
+        """Lineage/session reset does NOT clobber per-module config_version with pipeline global config_version."""
+        registry = AlertModuleRegistry()
+        registry.register(AlertModuleDefinition(module="zone_north", config_version="north-v2.1", factory="danger_zone"))
+        config = CameraModuleConfig(module="zone_north", camera_id="cam-01", version=1, enabled=True)
+        pipeline = PerceptionPipeline(
+            recorder=self.recorder,
+            outbox=self.outbox,
+            camera_id="cam-01",
+            device_id="edge-01",
+            config_version="pipeline-global-v1",
+            module_configs=[config],
+            alert_registry=registry,
+        )
+        eng = pipeline.get_engine("zone_north")
+        assert eng is not None
+        self.assertEqual(eng.config_version, "north-v2.1")
+
+        # Frame 1 under initial session
+        rgb = np.zeros((720, 1280, 3), dtype=np.uint8)
+        pipeline.process_frame(rgb, timestamp=1.0, frame_id=1, detections=[])
+
+        # Simulate RTSP reconnection / stream session reset
+        pipeline.stream_session_id = "session-reconnect-999"
+        pipeline.process_frame(rgb, timestamp=2.0, frame_id=2, detections=[])
+
+        # eng.config_version MUST NOT be overwritten to "pipeline-global-v1"
+        self.assertEqual(eng.config_version, "north-v2.1")
+
+    def test_multi_module_engine_inherits_pipeline_degraded_quality_state(self) -> None:
+        """Multi-module engine alert events inherit pipeline degraded quality state when no per-capability policy is configured."""
+        danger_engine = DangerZoneIncidentEngine(
+            camera_id="cam-01",
+            device_id="edge-01",
+            roi_polygon=[[0.0, 0.0], [500.0, 0.0], [500.0, 500.0], [0.0, 500.0]],
+            min_dwell_seconds=0.0,
+            consecutive_hits=1,
+        )
+        pipeline = PerceptionPipeline(
+            recorder=self.recorder,
+            outbox=self.outbox,
+            tracker=ByteTracker(activate_after=1),
+            camera_id="cam-01",
+            device_id="edge-01",
+            incident_engines=[danger_engine],
+        )
+        # Black image -> evaluate_odd sets quality_state to "low_light"
+        rgb_black = np.zeros((720, 1280, 3), dtype=np.uint8)
+        det = [{"bbox": [100.0, 100.0, 200.0, 250.0], "score": 0.95, "label": "person"}]
+        events = pipeline.process_frame(rgb_black, timestamp=1.0, frame_id=1, detections=det)
+        self.assertEqual(len(events), 1)
+        ev = events[0]
+        self.assertEqual(ev["quality_state"], "low_light")
+        self.assertEqual(ev["payload"]["quality"]["state"], "low_light")
+
+    def test_roi_pixel_caching_performance(self) -> None:
+        """Pipeline caches scaled pixel ROI across frames of identical resolution."""
+        pipeline = PerceptionPipeline(
+            recorder=self.recorder,
+            outbox=self.outbox,
+            camera_id="cam-01",
+            device_id="edge-01",
+            roi_polygon=[[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]],
+        )
+        roi1 = pipeline._get_pixel_roi(1280, 720)
+        roi2 = pipeline._get_pixel_roi(1280, 720)
+        self.assertIs(roi1, roi2)
+        self.assertEqual(roi1, [[128.0, 72.0], [1152.0, 72.0], [1152.0, 648.0], [128.0, 648.0]])
+
+    def test_dispatch_engine_process_tracks_signature_tolerance_and_error_propagation(self) -> None:
+        """Engine dispatch supports custom 2-arg signatures and propagates internal exceptions without swallowing."""
+        class MinimalEngine:
+            def process_tracks(self, tracks: Any, timestamp: float) -> list[dict[str, Any]]:
+                return []
+
+        class BuggyEngine:
+            def process_tracks(self, tracks: Any, timestamp: float) -> list[dict[str, Any]]:
+                raise TypeError("internal engine failure: unsupported operand")
+
+        pipeline = PerceptionPipeline(
+            recorder=self.recorder,
+            outbox=self.outbox,
+            camera_id="cam-01",
+            device_id="edge-01",
+            incident_engines=[MinimalEngine()],
+        )
+        # MinimalEngine runs cleanly
+        rgb = np.zeros((720, 1280, 3), dtype=np.uint8)
+        events = pipeline.process_frame(rgb, timestamp=1.0, frame_id=1, detections=[])
+        self.assertEqual(events, [])
+
+        # BuggyEngine raises TypeError which MUST bubble up, not get swallowed
+        pipeline.incident_engines = [BuggyEngine()]
+        with self.assertRaises(TypeError) as ctx:
+            pipeline.process_frame(rgb, timestamp=2.0, frame_id=2, detections=[])
+        self.assertIn("internal engine failure", str(ctx.exception))
+
+    def test_incident_engine_in_roi_center_point_fallback(self) -> None:
+        """IncidentEngine._in_roi accepts track when center is inside ROI polygon even if foot is outside."""
+        engine = IncidentEngine(roi_polygon=[[100.0, 100.0], [300.0, 100.0], [300.0, 300.0], [100.0, 300.0]])
+        # Center: (200, 200) inside ROI. Foot: (200, 350) outside ROI.
+        track = Track(track_id=1, bbox=[150.0, 50.0, 250.0, 350.0], score=0.9, label="person", timestamp=1.0)
+        self.assertTrue(engine._in_roi(track))
+
 
 if __name__ == "__main__":
     unittest.main()

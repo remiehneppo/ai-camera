@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import inspect
 import logging
 import math
 import threading
@@ -443,6 +444,52 @@ class PerceptionPipeline:
             quota_manager=self.quota_manager,
         )
         self.health.quota_manager = self.quota_manager
+        self._cached_roi_key: tuple[Any, int, int] | None = None
+        self._cached_pixel_roi: list[list[float]] | None = None
+        self._engine_param_cache: dict[int, tuple[bool, bool]] = {}
+    def _get_pixel_roi(self, width: int, height: int) -> list[list[float]] | None:
+        """Retrieve or compute cached pixel-scaled ROI polygon for current frame dimensions."""
+        if self.roi_polygon is None:
+            return None
+        cache_key = (id(self.roi_polygon), int(width), int(height))
+        if self._cached_roi_key == cache_key and self._cached_pixel_roi is not None:
+            return self._cached_pixel_roi
+        scaled = scale_roi_to_pixels(self.roi_polygon, float(width), float(height))
+        self._cached_pixel_roi = scaled or [[float(p[0]), float(p[1])] for p in self.roi_polygon if len(p) >= 2]
+        self._cached_roi_key = cache_key
+        return self._cached_pixel_roi
+
+    def _dispatch_engine_process_tracks(
+        self,
+        engine: Any,
+        tracks: list[Any],
+        timestamp: float,
+        pose_outcomes: list[Any],
+        frame_dimensions: tuple[float, float],
+    ) -> list[dict[str, Any]]:
+        """Dispatch track evaluation to an incident engine matching its supported signature."""
+        engine_id = id(engine)
+        params_info = self._engine_param_cache.get(engine_id)
+        if params_info is None:
+            try:
+                sig = inspect.signature(engine.process_tracks)
+                params = sig.parameters
+                has_varkw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+                has_pose = has_varkw or ("pose_outcomes" in params)
+                has_dims = has_varkw or ("frame_dimensions" in params)
+                params_info = (has_pose, has_dims)
+            except Exception:
+                params_info = (True, True)
+            self._engine_param_cache[engine_id] = params_info
+
+        has_pose, has_dims = params_info
+        kwargs: dict[str, Any] = {}
+        if has_pose:
+            kwargs["pose_outcomes"] = pose_outcomes
+        if has_dims:
+            kwargs["frame_dimensions"] = frame_dimensions
+
+        return engine.process_tracks(tracks, timestamp=timestamp, **kwargs)
     def get_engine(self, name_or_factory: str) -> Any | None:
         """Find an active incident engine by module name or factory."""
         for engine in self.incident_engines:
@@ -481,7 +528,7 @@ class PerceptionPipeline:
                     engine.stream_session_id = self.stream_session_id
                 if hasattr(engine, "origin"):
                     engine.origin = self.origin
-                if hasattr(engine, "config_version"):
+                if hasattr(engine, "config_version") and not getattr(engine, "config_version", None):
                     engine.config_version = self.config_version
                 engine.reset()
             if self.pose_manager is not None:
@@ -533,9 +580,7 @@ class PerceptionPipeline:
         observation["quality"] = dict(self.quality)
 
         if self.roi_polygon is not None:
-            roi_to_check = scale_roi_to_pixels(
-                self.roi_polygon, float(rgb.shape[1]), float(rgb.shape[0])
-            ) or self.roi_polygon
+            roi_to_check = self._get_pixel_roi(rgb.shape[1], rgb.shape[0]) or self.roi_polygon
             formatted_dets = [
                 d for d in formatted_dets
                 if len(d.get("bbox", [])) >= 4 and point_in_polygon(
@@ -585,21 +630,13 @@ class PerceptionPipeline:
         emitted_events: list[dict[str, Any]] = []
         frame_dims = (float(rgb.shape[1]), float(rgb.shape[0]))
         for engine in self.incident_engines:
-            try:
-                incidents = engine.process_tracks(
-                    tracks, timestamp=ts, pose_outcomes=pose_outcomes, frame_dimensions=frame_dims
-                )
-            except TypeError:
-                try:
-                    incidents = engine.process_tracks(
-                        tracks, timestamp=ts, pose_outcomes=pose_outcomes
-                    )
-                except TypeError:
-                    try:
-                        incidents = engine.process_tracks(tracks, timestamp=ts, frame_dimensions=frame_dims)
-                    except TypeError:
-                        incidents = engine.process_tracks(tracks, timestamp=ts)
-
+            incidents = self._dispatch_engine_process_tracks(
+                engine,
+                tracks=tracks,
+                timestamp=ts,
+                pose_outcomes=pose_outcomes,
+                frame_dimensions=frame_dims,
+            )
             for item in (incidents or ()):
                 if not isinstance(item, dict):
                     continue
@@ -639,10 +676,8 @@ class PerceptionPipeline:
                         item["payload"]["capability_scope"] = scoped["scope"]
                         item["quality_state"] = scoped["quality"]["state"]
                     else:
-                        if "quality" not in item["payload"]:
-                            item["payload"]["quality"] = dict(self.quality)
-                        if "quality_state" not in item:
-                            item["quality_state"] = self.quality_state
+                        item["payload"]["quality"] = dict(self.quality)
+                        item["quality_state"] = self.quality_state
                     validated_item = validate_event(item)
                     self.evidence.persist(validated_item)
                     emitted_events.append(validated_item)

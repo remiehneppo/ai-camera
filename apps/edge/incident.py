@@ -375,8 +375,15 @@ class IncidentEngine:
         foot_y = float(track.bbox[3])
         dims = frame_dimensions or self.frame_dimensions
         if is_normalized_polygon(self.roi_polygon) and dims is not None and dims[0] > 1.0 and dims[1] > 1.0:
-            return point_in_polygon(foot_x / float(dims[0]), foot_y / float(dims[1]), self.roi_polygon)
-        return point_in_polygon(foot_x, foot_y, self.roi_polygon)
+            w, h = float(dims[0]), float(dims[1])
+            return (
+                point_in_polygon(foot_x / w, foot_y / h, self.roi_polygon)
+                or point_in_polygon(track.cx / w, track.cy / h, self.roi_polygon)
+            )
+        return (
+            point_in_polygon(foot_x, foot_y, self.roi_polygon)
+            or point_in_polygon(track.cx, track.cy, self.roi_polygon)
+        )
 
     def process_tracks(
         self,
