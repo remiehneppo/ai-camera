@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import cv2
+from fractions import Fraction
 import json
 from pathlib import Path
 import sys
@@ -61,17 +62,26 @@ def evaluate_clip(
                 break
 
             rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            ts = round(frame_idx / native_fps, 4)
+            raw_ts = frame_idx / native_fps
+            pts = round(raw_ts * 1_000_000)
+            time_base = "1/1000000"
+            ts = float(pts * Fraction(time_base))
             obs = detector.detect(rgb, {
                 "camera_id": "eval-cam",
                 "stream_session_id": "eval-sess",
                 "core_epoch": 1,
                 "origin": "replay",
                 "frame_id": frame_idx,
-                "pts": frame_idx,
-                "time_base": f"1/{int(round(native_fps))}",
+                "pts": pts,
+                "time_base": time_base,
                 "event_time": ts,
             })
+            detection_status = obs.get("detection_status")
+            if detection_status not in {"ok", "ok_empty"}:
+                raise RuntimeError(
+                    f"Detection failed on frame {frame_idx} of {Path(video_path).name}: "
+                    f"status={detection_status}, error={obs.get('error')}"
+                )
             dets = obs.get("detections", [])
             for d in dets:
                 if "bbox" not in d and "bbox_xyxy" in d:
