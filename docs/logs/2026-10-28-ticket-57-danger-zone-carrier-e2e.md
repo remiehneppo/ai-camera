@@ -1,5 +1,7 @@
 # Ticket #57 — Carrier Vertical: Vùng nguy hiểm & Hợp nhất Đa Module E2E — 2026-10-28
 
+> Đây là snapshot triển khai ban đầu tại `fefeeba`: 15 tests chuyên biệt, 859 tests toàn bộ. Các mốc sau là 16/860 tại `f44a442` và 21/865 tại `b66e78c`; không dùng số 859 làm trạng thái mới nhất. Xem [log bổ sung ngày 2026-10-29](2026-10-29-review-fixes-dataset-evaluation-and-label-gates.md) cho sửa review, sửa timestamp evaluator, kết quả dataset đã đính chính và quyết định chờ nhãn đối chứng. Ticket #57 vẫn `partial`, chưa nghiệm thu held-out video.
+
 ## 1. Mục tiêu & Phạm vi
 - Triển khai **Ticket #57 (US10 — Carrier vertical: module × camera E2E)** để thiết lập seam hợp nhất đa tính năng chuẩn cho toàn bộ các module nhận diện an toàn đô thị (#57–#68).
 - Cài đặt `DangerZoneIncidentEngine` (`apps/edge/danger_zone.py`) theo allowlisted factory `"danger_zone"`.
