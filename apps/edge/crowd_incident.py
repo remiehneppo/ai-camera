@@ -100,6 +100,45 @@ class CrowdEventContext:
     extra_payload: dict[str, Any] | None = None
 
 
+def _pedestrian_scale(p: _PedestrianState) -> float:
+    if len(p.last_bbox) == 4:
+        return max(1.0, abs(p.last_bbox[2] - p.last_bbox[0]), abs(p.last_bbox[3] - p.last_bbox[1]))
+    return 100.0
+
+
+def _spatial_clusters(pedestrians: list[_PedestrianState]) -> list[list[_PedestrianState]]:
+    """Group pedestrians into perspective-aware spatial connected components."""
+    valid = [p for p in pedestrians if p.kinematics is not None]
+    scales = [_pedestrian_scale(p) for p in valid]
+    visited = [False] * len(valid)
+    clusters: list[list[_PedestrianState]] = []
+    for idx in range(len(valid)):
+        if visited[idx]:
+            continue
+        visited[idx] = True
+        queue = [idx]
+        comp = [valid[idx]]
+        while queue:
+            cur = queue.pop()
+            k_cur = valid[cur].kinematics
+            if k_cur is None:
+                continue
+            for nxt in range(len(valid)):
+                if visited[nxt]:
+                    continue
+                k_nxt = valid[nxt].kinematics
+                if k_nxt is None:
+                    continue
+                # Link radius scales with the smaller bbox to prevent foreground actors from swallowing distant background
+                max_dist = max(120.0, 2.5 * min(scales[cur], scales[nxt]))
+                if math.hypot(k_cur.cx - k_nxt.cx, k_cur.cy - k_nxt.cy) <= max_dist:
+                    visited[nxt] = True
+                    queue.append(nxt)
+                    comp.append(valid[nxt])
+        clusters.append(comp)
+    return clusters
+
+
 class CrowdIncidentEngine:
     """Independent edge incident detection engine for crowd concentration & suspected disorder (Ticket #63 / US06).
 
@@ -293,24 +332,11 @@ class CrowdIncidentEngine:
         state.kinematics = k
         return k
 
-    def _evaluate_disorder(
+    def _evaluate_cluster_disorder(
         self,
-        pedestrians_in_roi: list[_PedestrianState],
-        ts: float,
+        cluster: list[_PedestrianState],
     ) -> tuple[bool, dict[str, Any]]:
-        """Evaluate Layer 2: Suspected Public Disorder kinematic indicators.
-
-        Requires at least min_disorder_count pedestrians clustered in ROI.
-        Checks for:
-        1) Rapid dispersal divergence (scattering away from cluster center of mass).
-        2) Aggressive kinetic surging (high collective speed & acceleration).
-        3) Chaotic / erratic conflicting directions among moving crowd.
-        """
-        n = len(pedestrians_in_roi)
-        if n < self.min_disorder_count:
-            return False, {}
-
-        kin_list = [p.kinematics for p in pedestrians_in_roi if p.kinematics is not None]
+        kin_list = [p.kinematics for p in cluster if p.kinematics is not None]
         if len(kin_list) < self.min_disorder_count:
             return False, {}
 
@@ -329,13 +355,13 @@ class CrowdIncidentEngine:
             dy = k.cy - cm_y
             dist = math.hypot(dx, dy)
             if dist > 1e-3:
-                # Dot product of velocity with outward radial unit vector
                 v_radial = (k.vx * dx + k.vy * dy) / dist
                 radial_velocities.append(v_radial)
             else:
                 radial_velocities.append(0.0)
 
         mean_dispersal = sum(radial_velocities) / len(radial_velocities) if radial_velocities else 0.0
+        dispersing_count = sum(1 for v in radial_velocities if v >= 15.0)
 
         # 2. Direction variance (circular variance = 1 - R)
         moving_kin = [k for k in kin_list if k.speed >= 10.0]
@@ -347,14 +373,17 @@ class CrowdIncidentEngine:
         else:
             dir_variance = 0.0
 
-        # Check conditions
+        # Dispersal requires >= 2 people scattering outward so 1 fast individual cannot trigger a crowd alert
         is_dispersal = (
             mean_dispersal >= self.disorder_dispersal_threshold
             and mean_speed >= 25.0
+            and dispersing_count >= 2
             and any(s >= 30.0 for s in speeds)
         )
 
-        surging_count = sum(1 for k in kin_list if k.speed >= self.disorder_speed_threshold and abs(k.acceleration) >= 40.0)
+        surging_count = sum(
+            1 for k in kin_list if k.speed >= self.disorder_speed_threshold and abs(k.acceleration) >= 40.0
+        )
         is_surge = (
             mean_speed >= self.disorder_speed_threshold
             and mean_acc >= self.disorder_acceleration_threshold
@@ -385,7 +414,31 @@ class CrowdIncidentEngine:
             "direction_variance": round(dir_variance, 3),
             "reasons": reason,
         }
+        return is_disorder, metrics
 
+    def _find_disorder_cluster(
+        self,
+        pedestrians_in_roi: list[_PedestrianState],
+    ) -> tuple[bool, dict[str, Any], list[_PedestrianState]]:
+        if len(pedestrians_in_roi) < self.min_disorder_count:
+            return False, {}, []
+        last_metrics: dict[str, Any] = {}
+        for cluster in _spatial_clusters(pedestrians_in_roi):
+            if len(cluster) < self.min_disorder_count:
+                continue
+            is_disorder, metrics = self._evaluate_cluster_disorder(cluster)
+            if is_disorder:
+                return True, metrics, cluster
+            last_metrics = metrics
+        return False, last_metrics, []
+
+    def _evaluate_disorder(
+        self,
+        pedestrians_in_roi: list[_PedestrianState],
+        ts: float,
+    ) -> tuple[bool, dict[str, Any]]:
+        """Evaluate Layer 2: Suspected Public Disorder across local spatial clusters."""
+        is_disorder, metrics, _ = self._find_disorder_cluster(pedestrians_in_roi)
         return is_disorder, metrics
 
     def _create_facts(self, ctx: CrowdEventContext) -> dict[str, Any]:
@@ -518,18 +571,18 @@ class CrowdIncidentEngine:
             self._crowd_start_time = None
 
         # 4. Layer 2: Suspected Public Disorder
-        is_disorder, metrics = self._evaluate_disorder(pedestrians_in_roi, ts)
+        is_disorder, metrics, disorder_cluster = self._find_disorder_cluster(pedestrians_in_roi)
         if is_disorder:
             if self._last_disorder_alert_time is None or (ts - self._last_disorder_alert_time) >= self.cooldown_seconds:
                 ctx = CrowdEventContext(
                     taxonomy="suspected_disorder",
                     severity=self.disorder_severity,
-                    crowd_count=count,
+                    crowd_count=len(disorder_cluster),
                     anchor_time=ts,
                     detection_time=ts,
-                    involved_track_ids=involved_ids,
+                    involved_track_ids=[p.track_id for p in disorder_cluster],
                     confidence=0.92,
-                    pedestrians=pedestrians_in_roi,
+                    pedestrians=disorder_cluster,
                     extra_payload={"disorder_metrics": metrics},
                 )
                 events.append(self._create_facts(ctx))

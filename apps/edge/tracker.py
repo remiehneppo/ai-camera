@@ -181,6 +181,16 @@ class Track:
         return latest.aspect_ratio - earliest_in_window.aspect_ratio
 
 
+def _coarse_label_group(label: str) -> str:
+    if label in ("person", "pedestrian"):
+        return "person"
+    if label in ("bicycle", "motorcycle"):
+        return "two_wheeler"
+    if label in ("car", "bus", "truck"):
+        return "motor_vehicle"
+    return label
+
+
 class ByteTracker:
     """ByteTrack two-stage association multi-object tracker."""
 
@@ -220,12 +230,14 @@ class ByteTracker:
 
         candidates: list[tuple[float, int, int]] = []
         for t_idx, t in enumerate(tracks):
+            t_group = _coarse_label_group(t.label)
             box = t.predict_bbox(timestamp) if timestamp is not None else t.bbox
             for d_idx, d in enumerate(detections):
+                if _coarse_label_group(str(d.get("label", "unknown"))) != t_group:
+                    continue
                 iou = bbox_iou(box, d["bbox"])
                 if iou >= threshold:
                     candidates.append((iou, t_idx, d_idx))
-
         candidates.sort(key=lambda x: x[0], reverse=True)
 
         matched_tracks: set[int] = set()

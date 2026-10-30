@@ -141,3 +141,26 @@ class TestTrackerLifecycle(unittest.TestCase):
         self.assertEqual(tracker.get_all_tracks()[0].state, "tentative")
         self.assertEqual(len(tracker.update(det, timestamp=1.2)), 1)
         self.assertEqual(tracker.get_all_tracks()[0].state, "active")
+
+    def test_incompatible_class_does_not_hijack_person_track(self) -> None:
+        """Misclassified non-person boxes (e.g. 'bird') must not swallow overlapping 'person' detections, while coarse vehicle groups stay continuous."""
+        tracker = ByteTracker(high_threshold=0.3, low_threshold=0.1, match_threshold=0.2, max_lost_time=2.0)
+        box = [1100.0, 640.0, 1380.0, 815.0]
+
+        # Active 'bird' track established at same location
+        tracker.update([{"bbox": box, "score": 0.5, "label": "bird"}], timestamp=16.0)
+        active_bird = tracker.update([{"bbox": box, "score": 0.5, "label": "bird"}], timestamp=16.1)
+        self.assertEqual([t.label for t in active_bird], ["bird"])
+
+        # Detector recovers 'person' label at identical bbox -> must start a distinct 'person' track, not stay 'bird'
+        tracker.update([{"bbox": box, "score": 0.36, "label": "person"}], timestamp=18.1)
+        active_person = tracker.update([{"bbox": box, "score": 0.42, "label": "person"}], timestamp=18.2)
+        person_tracks = [t for t in active_person if t.label == "person"]
+        self.assertEqual(len(person_tracks), 1)
+
+        # Coarse motor-vehicle labels ('truck' <-> 'bus') continue to associate onto the same track
+        v_box = [200.0, 200.0, 360.0, 320.0]
+        tracker.update([{"bbox": v_box, "score": 0.8, "label": "truck"}], timestamp=20.0)
+        v_active = tracker.update([{"bbox": v_box, "score": 0.8, "label": "bus"}], timestamp=20.1)
+        motor_tracks = [t for t in v_active if t.label == "truck"]
+        self.assertEqual(len(motor_tracks), 1)

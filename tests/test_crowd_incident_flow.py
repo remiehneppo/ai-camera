@@ -446,6 +446,48 @@ class TestHardNegativesRejection(unittest.TestCase):
             self.assertEqual(engine.current_crowd_count, 1)
             self.assertFalse(engine.is_crowd_persisting)
 
+
+    def test_single_mover_among_stationary_bystanders_does_not_trigger_dispersal(self) -> None:
+        """One fast-moving person next to two stationary bystanders is not a crowd dispersal."""
+        engine = CrowdIncidentEngine(min_crowd_count=5, min_disorder_count=3)
+        engine.process_tracks(
+            [
+                _make_track(1, 200.0, 200.0, 0.0),
+                _make_track(2, 220.0, 200.0, 0.0),
+                _make_track(3, 240.0, 220.0, 0.0),
+            ],
+            timestamp=0.0,
+        )
+        evs = engine.process_tracks(
+            [
+                _make_track(1, 200.0, 200.0, 0.2),
+                _make_track(2, 220.0, 200.0, 0.2),
+                _make_track(3, 262.0, 242.0, 0.2),  # ~155 px/s outward alone
+            ],
+            timestamp=0.2,
+        )
+        self.assertEqual(evs, [])
+
+    def test_distant_background_bystanders_do_not_form_disorder_cluster(self) -> None:
+        """Distant background pedestrians (park bench) must not cluster with foreground actors."""
+        engine = CrowdIncidentEngine(min_crowd_count=5, min_disorder_count=3)
+        engine.process_tracks(
+            [
+                _make_track(2, 1410.0, 137.0, 12.6, half_width=48.0, height=142.0),
+                _make_track(26, 1619.0, 103.0, 12.6, half_width=48.0, height=205.0),
+                _make_track(9, 1262.0, 591.0, 12.6, half_width=185.0, height=540.0),
+            ],
+            timestamp=12.6,
+        )
+        evs = engine.process_tracks(
+            [
+                _make_track(2, 1410.0, 139.0, 12.8, half_width=48.0, height=142.0),
+                _make_track(26, 1619.0, 103.0, 12.8, half_width=48.0, height=205.0),
+                _make_track(9, 1240.0, 615.0, 12.8, half_width=185.0, height=540.0),
+            ],
+            timestamp=12.8,
+        )
+        self.assertEqual(evs, [])
     def test_hard_negative_3_transient_crossing(self) -> None:
         """Transient pedestrian crossing / walking past: brief crossing (T < min_duration_seconds) does NOT trigger crowd concentration."""
         engine = CrowdIncidentEngine(
