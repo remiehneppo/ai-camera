@@ -269,18 +269,18 @@ def main():
 
     targets = args.videos
     if not targets:
-        # Benchmark suite spanning different scenarios and ODDs
+        # Diagnostic benchmark suite (supplemental Person-down + diagnostic traffic clips; not certified fixed-CCTV ODD)
         targets = [
-            # 1. Fall Positive 1080p (Fixed camera, UniDataPro)
+            # 1. Supplemental Person-down positive 1080p (staged, UniDataPro)
             "data/benchmark/unidata/fall_0001.mp4",
-            # 2. Fall Negative / Normal ADL 1080p (Fixed camera, UniDataPro)
+            # 2. Supplemental Person-down ADL 1080p (staged, UniDataPro)
             "data/benchmark/unidata/fall_0003.mp4",
-            # 3. Dense pedestrian + vehicle crossing 1080p (Fixed camera, Shibuya)
+            # 3. Diagnostic dense urban crossing 1080p (retracted fixed-CCTV ODD: zoom/reframing, Shibuya)
             "data/benchmark/shibuya_crossing_1080p.mp4",
-            # 4. Normal vehicle intersection 1080p (Fixed camera, Pie-IX)
+            # 4. Diagnostic urban intersection 1080p (retracted fixed-CCTV ODD: background reframing, Pie-IX)
             "data/benchmark/intersection_traffic_1080p.mp4",
         ]
-        # 5-8. HD 720p Fixed CCTV traffic camera accidents (ODD compliant, AccidentBench)
+        # 5-8. Diagnostic 720p traffic accident clips (retracted fixed-CCTV ODD: dashcam ego-motion, AccidentBench)
         cctv_hd_dir = ROOT / "data/benchmark/traffic_cctv_hd"
         if cctv_hd_dir.exists():
             for p in sorted(cctv_hd_dir.glob("*.mp4"))[:6]:

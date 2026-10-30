@@ -1,6 +1,6 @@
 # Hợp đồng tích hợp hệ thống
 
-Đặc tả cập nhật 2026-10-11; ghi chú implementation đồng bộ 2026-10-12. Một số schema/runtime/tests đã được nghiệm thu theo slices #01/#05/#06/#07/#11; không có nghĩa toàn bộ hợp đồng hoặc release gates đã đạt. [Kiến trúc](system-architecture.md) xác định module và fault boundary; tài liệu này xác định semantics tại các ranh giới. [Plan](implementation-plan.md) và [tracker](../../.scratch/system-build-slices/PRD.md) giao việc thực hiện.
+Đặc tả cập nhật 2026-10-30. Toàn bộ hợp đồng ngữ nghĩa dưới đây đã được cài đặt và kiểm chứng trên bản tham chiếu Python software-lab (`domain/`, `apps/edge/`, `apps/server/`, `tools/`); các cổng target hardware (`G3`) và nghiệm thu thực địa (`G4–G5`) vẫn mở theo [tracker](../../.scratch/system-build-slices/PRD.md). [Kiến trúc hệ thống](system-architecture.md) xác định module và fault boundary; tài liệu này quy định hợp đồng dữ liệu và bất biến tại các ranh giới tích hợp.
 
 ## 1. PerceptionPipeline
 
@@ -42,14 +42,14 @@ Lab dùng event ring 10 phút, pre10/post20 giây, server clips 7 ngày; outage2
 |---|---|---|---|
 | Person fall có onset quan sát | onset estimate có provenance | anchor − 10s đến anchor + 20s | Đang hoạt động |
 | Persistent lying/on-vehicle thiếu onset | first qualifying observation của chuỗi persistence đang dùng | anchor − 10s đến anchor + 20s; không gọi anchor này là onset | Đang hoạt động |
-| Alert-condition incidents (Tai nạn xe US08, Đỗ xe US05, Đông người US06) | mốc thời gian nguồn khi thỏa mãn điều kiện tạo cảnh báo theo vùng/ngưỡng | anchor − 10s đến anchor + 20s; evidence_anchor_kind="alert_condition" | Đang hoạt động |
+| Alert-condition incidents (Vùng nguy hiểm US10, Tai nạn xe US08, Đỗ xe US05, Đông người US06) | mốc thời gian nguồn khi thỏa mãn điều kiện tạo cảnh báo theo vùng/lịch/ngưỡng | anchor − 10s đến anchor + 20s; `evidence_anchor_kind="alert_condition"` | Đang hoạt động |
 | Synthetic fixture | thời điểm anchor khai báo trong fixture | cùng policy pre/post | Đang hoạt động |
 
 Manifest/request mang `evidence_anchor_kind`, `evidence_anchor_time`, `requested_start/end`, mapping uncertainty, policy version và actual ranges/gaps. Complete được tính trên requested interval với gap tolerance đã ký. Trigger muộn tại t=15 với onset t=0 vẫn yêu cầu [-10,20], không lấy [5,35]. Khi onset/interval thay đổi tạo request mới có `supersedes_request_id`; không sửa requested range của ID đã ACK. Event revision mới liên kết request mới, artifact cũ vẫn giữ lineage/audit.
 
 MVP pin khi event cần evidence được persist; **không tạo candidate pins mặc định**. F03 phải chứng minh ring 10 phút bao phủ maximum anchor-to-pin delay (verification + scheduling/handoff + recovery), pre-roll và mapping/keyframe margin. Nếu không đủ, báo partial/missing; không ký completeness cho profile đó. Tăng ring hoặc thêm candidate hold chỉ qua policy/budget được duyệt, không pin vô hạn hoặc làm yếu bảo vệ unACK.
 
-**Chuẩn hóa chính sách neo Q36:** Bảng baseline person-down phía trên giữ nguyên: fall dùng onset estimate, persistent lying/on-vehicle thiếu onset dùng first qualifying observation của chuỗi persistence. Các nhóm sự cố mới (US08 tai nạn xe, US05 đỗ xe sai vùng/giờ, US06 đông người & gây rối) sử dụng source-time tại **mốc đủ điều kiện tạo cảnh báo (`evidence_anchor_kind = "alert_condition"`)** theo rule/ROI/lịch/ngưỡng đã phê duyệt. Cả hai policy giữ requested interval cố định anchor − 10s đến anchor + 20s; `evidence_anchor_kind` và policy version được phân biệt rạch ròi theo loại, không đồng nhất onset với alert-condition anchor.
+**Phân tách chính sách neo (Onset vs Alert-condition):** Baseline `person_down` dùng `onset` khi quan sát được diễn biến hạ thấp, hoặc `first_qualifying_observation` cho chuỗi `person_lying_persistent` / `person_on_stationary_vehicle` thiếu onset. Bốn module cảnh báo theo điều kiện (`danger_zone` US10, `vehicle_incident` US08, `illegal_parking` US05, `crowd_incident` US06) dùng thời gian nguồn tại **mốc thỏa mãn điều kiện phát cảnh báo (`evidence_anchor_kind = "alert_condition"`)** theo ROI/lịch/ngưỡng đã cấu hình. Mọi nhóm giữ chung requested interval `anchor − 10s` đến `anchor + 20s`, nhưng phân biệt tường minh `evidence_anchor_kind` và `policy_version`, tuyệt đối không đồng nhất onset với alert-condition anchor.
 
 Với sự kiện kéo dài, complete chỉ xác nhận coverage requested interval, không có nghĩa full episode. Mốc bắt đầu quan sát/duration/vùng/config phải có provenance; metadata không thay video hoặc chứng minh toàn bộ thời gian tồn tại. Onset ngoài clip/không quan sát được phải thể hiện rõ; không tự thêm nhiều clip hoặc NVR dài ngày.
 
@@ -167,7 +167,7 @@ chạy lại probe và `record_probe_faults(snapshot["faults"])` — danh sách 
 **Recovery hợp lệ:** fault biến mất chỉ khi stage có checkpoint mới trong budget; không tắt probe để "hết" fault, và
 không đổi origin của event để đưa probe vào notification.
 
-## 8. Cấu hình có chữ ký và rollback có thẩm quyền (Signed Configuration & Rollback — #34, #35)
+## 9. Cấu hình có chữ ký và rollback có thẩm quyền (Signed Configuration & Rollback — #34, #35)
 
 Hệ thống quản lý cấu hình biên hỗ trợ hai luồng riêng biệt: local staging và remote signed bundle. Toàn bộ trạng thái và lịch sử kích hoạt được lưu trữ bền vững tại edge thông qua SQLite WAL mode (`synchronous=FULL`).
 
@@ -181,7 +181,7 @@ Hệ thống quản lý cấu hình biên hỗ trợ hai luồng riêng biệt: 
   - Giữ nguyên LKG khi lỗi: Mọi nỗ lực kích hoạt thất bại (sai chữ ký, sai mục tiêu, cấu hình module không hợp lệ, hoặc đồng hồ chưa đồng bộ `clock_synchronized=False`) đều giữ nguyên cấu hình Last-Known-Good (LKG) hiện hành và không làm gián đoạn tiến trình ghi video độc lập của recorder.
 - **Vòng đời Canary Rollout:** Cho phép kích hoạt thử nghiệm trên một tập camera/module con, theo dõi tỷ lệ lỗi (`error_rate`) và tự động phục hồi LKG cơ sở nếu phát hiện bất thường trước khi quyết định mở rộng toàn hạm đội (`promote_canary`).
 
-## 9. Tự chủ mạng WAN và giải tỏa backlog (WAN Outage Autonomy & Backlog Drain — #36)
+## 10. Tự chủ mạng WAN và giải tỏa backlog (WAN Outage Autonomy & Backlog Drain — #36)
 
 Edge analytics được thiết kế để tự chủ hoàn toàn khi mất kết nối mạng WAN tới máy chủ trung tâm:
 

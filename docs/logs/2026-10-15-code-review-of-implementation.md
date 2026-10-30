@@ -21,7 +21,7 @@ Công cụ: 2 reviewer song song (Standards, Spec) trên onechain/GPT 6 Luna + `
 - `oracle_detector.py`: không đổi so với HEAD.
 
 ## open-code-review (ocr review) — chạy sau khi người dùng cấu hình provider
-Provider oc / Gemini 3.8 Flash (High), 19 file, 11 phát hiện, 26m55s. Raw: `docs/logs/2026-10-15-ocr-review-raw.json`.
+Provider oc / Gemini 3.8 Flash (High), 19 file, 11 phát hiện, 26m55s (đã tổng hợp vào bảng dưới; bản dump JSON thô đã dọn).
 Dispatcher đã đọc mã để kiểm chứng. Ký hiệu: XÁC NHẬN / ĐÚNG-NHẸ / SAI-KHÔNG CHẮC.
 
 | # | Vị trí | Kết luận | Ghi chú |
@@ -57,7 +57,7 @@ Ghi chú: run_edge.py/run_server.py vốn untracked, nằm ngoài phạm vi tri�
 Chưa sửa (chờ quyết định chủ dự án): trần upload 100 MiB; quy ước parity detector (P2-09/P2-10 đã hoàn tác).
 
 ## ocr review vòng 2 (sau sửa): 11 -> 2 phát hiện, 16m37s
-Raw: `docs/logs/2026-10-15-ocr-review-raw-round2.json`. Không còn phát hiện nào thuộc nhóm đã sửa.
+Không còn phát hiện nào thuộc nhóm đã sửa (bản dump JSON thô đã dọn).
 - run_edge.py:46-50 (thấp) — XÁC NHẬN: sau khi SIGINT đã có handler, `except KeyboardInterrupt` không thể xảy ra. Đã sửa: vòng `while not stop_event.wait(1.0)`, bỏ `import time`.
 - store.py:130-133 (trung bình) — BÁC BỎ: ocr cho rằng `except AutoReconnect` bỏ lọt `ServerSelectionTimeoutError`. Kiểm bằng pymongo cài đặt: `ServerSelectionTimeoutError` và `NetworkTimeout` đều là lớp con của `AutoReconnect` (MRO: SSTE -> AutoReconnect -> ConnectionFailure). Không đổi mã.
 Full suite cuối: xem kết quả chạy ngay trước mục này.

@@ -1,8 +1,56 @@
-<?xml version="1.0" encoding="UTF-8"?><mxfile host="app.diagrams.net"><diagram id="semantic-replay" name="Proposed semantic replay reuse"><mxGraphModel adaptiveColors="auto" page="1" pageWidth="1260" pageHeight="760"><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="title" value="H02 · Approved design: runtime-path semantic replay" style="text;html=1;fontSize=22;fontStyle=1;fontFamily=Helvetica;align=left;" vertex="1" parent="1"><mxGeometry x="40" y="20" width="1160" height="56" as="geometry"/></mxCell><mxCell id="input" value="Local cleared video
-Explicit sampling / configuration" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1"><mxGeometry x="40" y="240" width="180" height="76" as="geometry"/></mxCell><mxCell id="commands" value="Replay commands
-Decode / sample / summarize" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1"><mxGeometry x="280" y="240" width="180" height="76" as="geometry"/></mxCell><mxCell id="pipeline" value="Alert feature pipeline module
-PerceptionPipeline" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e9f2eb;strokeColor=#176345;strokeWidth=3;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1"><mxGeometry x="520" y="240" width="180" height="76" as="geometry"/></mxCell><mxCell id="execution" value="PerceptionExecution
-Replay detector / status / clock" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1"><mxGeometry x="520" y="100" width="180" height="76" as="geometry"/></mxCell><mxCell id="features" value="Independent feature modules
-Rules / temporal state" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1"><mxGeometry x="760" y="240" width="180" height="76" as="geometry"/></mxCell><mxCell id="local" value="Snapshot + EvidenceLifecycle
-Temporary local outbox / recorder" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1"><mxGeometry x="1000" y="240" width="180" height="76" as="geometry"/></mxCell><mxCell id="result" value="Observed replay result
-Status / snapshots / timing scope" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1"><mxGeometry x="520" y="520" width="180" height="76" as="geometry"/></mxCell><mxCell id="e1" value="sampled frames" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="input" target="commands"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="e2" value="process frame" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="commands" target="pipeline"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="e3" value="execute observation" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="pipeline" target="execution"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="e4" value="Track / pose context" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="pipeline" target="features"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="e5" value="facts through snapshot seam" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="features" target="local"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="e6" value="observed outputs" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="pipeline" target="result"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="legend" value="Approved design; not implemented. Solid box = module; green outline = deep module. No runtime implementation or readiness claim." style="text;html=1;fontSize=13;fontFamily=Helvetica;align=left;whiteSpace=wrap;" vertex="1" parent="1"><mxGeometry x="40" y="680" width="1160" height="48" as="geometry"/></mxCell></root></mxGraphModel></diagram></mxfile>
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net">
+  <diagram id="semantic-replay" name="Accepted semantic replay reuse">
+    <mxGraphModel adaptiveColors="auto" page="1" pageWidth="1260" pageHeight="760">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="H02 · Accepted architecture: runtime-path semantic replay" style="text;html=1;fontSize=22;fontStyle=1;fontFamily=Helvetica;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="1160" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="input" value="Local cleared video&#10;Explicit sampling / configuration" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="240" width="180" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="commands" value="Replay commands&#10;Decode / sample / summarize" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="280" y="240" width="180" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="execution" value="PerceptionExecution&#10;Replay detector / status / clock" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="520" y="100" width="180" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="pipeline" value="Alert feature pipeline module&#10;PerceptionPipeline" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e9f2eb;strokeColor=#176345;strokeWidth=3;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="520" y="240" width="180" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="features" value="Independent feature modules&#10;Rules / temporal state" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="800" y="100" width="200" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="local" value="Snapshot + EvidenceLifecycle&#10;Temporary local outbox / recorder" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="800" y="240" width="200" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="result" value="Observed replay result&#10;Status / snapshots / timing scope" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="520" y="420" width="180" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="sampled frames" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="input" target="commands">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" value="process_frame" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="commands" target="pipeline">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" value="execute observation" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="pipeline" target="execution">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" value="Track / pose -&gt; scenario facts" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;startArrow=classic;startFill=1;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="pipeline" target="features">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" value="facts + context -&gt; persist" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="pipeline" target="local">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" value="observed outputs" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="pipeline" target="result">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="legend" value="Accepted architecture (Python reference implemented; native target conformance pending per G3-G5). Solid box = module; green outline = deep module." style="text;html=1;fontSize=13;fontFamily=Helvetica;align=left;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="40" y="680" width="1160" height="48" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

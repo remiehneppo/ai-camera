@@ -1,6 +1,6 @@
 # Checklist tích hợp, kiểm lỗi và release gates
 
-Ngày: 2026-10-11. Execution: not-started. Owner điều phối: QA/operations; cần gán người cụ thể. [Mục lục](README.md) · [Phân tích kiến trúc](architecture-analysis.md) · [Readiness](../architecture/deployment-readiness.md).
+Cập nhật: 2026-10-30 · Trạng thái cổng phần cứng/thực địa (`G1–G5`): đang mở (`G0` đã đạt cho phạm vi software-lab). Owner điều phối: QA/operations; bắt buộc gán định danh người ký trước khi chạy nghiệm thu site. [Mục lục](README.md) · [Ranh giới kiến trúc](architecture-analysis.md) · [Readiness](../architecture/deployment-readiness.md).
 
 ## 1. Điều kiện chạy và cách ghi bằng chứng
 
@@ -11,7 +11,7 @@ Ngày: 2026-10-11. Execution: not-started. Owner điều phối: QA/operations; 
 - [ ] **INT-PRE05** — Chạy unit/contract trước, sau đó integration bằng adapter thực; dùng fakes để chẩn đoán, không để fake thay proof DB/RTSP/hardware.
 - [ ] **INT-PRE06** — Mỗi case lưu expected/actual, command thật, timestamps, correlation IDs, protected data IDs/hashes, log/report và người kiểm. `not-run`, `blocked`, `fail` khác `pass`.
 
-Các lệnh test/build cụ thể chưa tồn tại. Khi implement, owner phải ghi lệnh thực trong issue và manifest; không copy command giả làm bằng chứng đã chạy. CI baseline chọn theo tooling được tạo, cần các entrypoint unit/contract/integration/native, schema generation/compatibility và docs validation; hardware/soak dùng marker/job riêng.
+Các lệnh kiểm chứng phần mềm chuẩn đang hoạt động trong repository: kiểm tra kiểu tĩnh `.venv-oracle/bin/python -m mypy domain/ apps/ tools/`, bộ kiểm thử tự động `.venv-oracle/bin/python -m pytest -q` (`896` tests / `188` subtests), conformance `.venv-oracle/bin/python tools/oracle_conformance.py` và bộ đánh giá semantic replay `tools/eval_{clip,vehicle,all_scenarios}.py`. Khi chạy nghiệm thu cổng `G1–G5` trên camera RTSP, Docker/MongoDB thực và thiết bị nhúng đích, owner bắt buộc lưu lệnh thực tế cùng manifest đầu ra vào hồ sơ gate; không lấy kết quả unit test/fake làm bằng chứng vượt cổng phần cứng.
 
 ## 2. Ma trận kiểm lỗi xuyên module
 

@@ -66,7 +66,7 @@ Camera cố định ngoài trời đường phố/vỉa hè; vùng/lịch/ngoạ
 | Tái sử dụng Pipeline cho Semantic Replay ([ADR-0006](../adr/0006-semantic-replay-pipeline-reuse.md)) | Các evaluator (`eval_clip`, `eval_vehicle`, `eval_all_scenarios`) gọi chung `PerceptionPipeline.process_frame` với `origin="replay"` và storage tạm độc lập, loại bỏ vòng điều phối trùng lặp |
 | Ghép nối Track theo Nhóm Nhãn Thô (`ByteTracker`) | Liên kết IoU chỉ thực hiện trong cùng nhóm ngữ nghĩa thô (`person`, `two_wheeler`, `motor_vehicle`), chặn nhãn nhiễu (`bird`, `cat`, `bench`) nuốt track người mà vẫn giữ liên tục khi xe nháy `bus`/`truck` |
 
-**Công nghệ:** Python orchestration/reference pipeline, FastAPI/Python + MongoDB cho server; ONNX Runtime baseline inference; RKNN/MPP/RGA khi chọn target, alternative backends chỉ khi có yêu cầu. C++17 cho perception core (§6.7a), bindings pybind11/nanobind dự kiến; Python reference giữ làm oracle. Q19 chỉ yêu cầu dev demo UI đơn giản; chọn HTML/JS do FastAPI phục vụ để test qua API, không bắt buộc React app. Đội giao diện riêng ghép UI sản phẩm qua API/schema sau.
+**Công nghệ:** Python orchestration/reference pipeline (`apps/edge/`), FastAPI/Python + MongoDB replica set cho server (`apps/server/`, [ADR-0003](../adr/0003-fastapi-mongodb-backend.md)); ONNX Runtime baseline inference; RKNN/TensorRT khi chọn phần cứng nhúng đích. C++17 dự kiến cho native perception core (§6.7a) qua pybind11/nanobind, giữ Python reference làm oracle đối chiếu. Giao diện lab dùng HTML/JS tối giản do FastAPI phục vụ trực tiếp qua API chuẩn để đội giao diện sản phẩm tách biệt tích hợp sau.
 
 ## 3. Bối cảnh và topology triển khai
 
@@ -139,7 +139,7 @@ Tách hai phần vì có lifecycle khác nhau:
 - **`FrameMetadata` (domain, immutable, không I/O):** `camera_id`, session/frame ID, timestamps, width/height, pixel format, color space/range, plane layout/stride, geometry reference và quality flags. Chưa mặc định BGR cho mọi adapter.
 - **`FrameBuffer` (port/adapter, có lifecycle):** tham chiếu dữ liệu điểm ảnh, gắn với một `FrameMetadata`. Domain chỉ thấy metadata.
 
-Theo quyết định Q1 ngày 2026-10-11, Slice 1 dùng ONNX và software decode khi chưa chọn board; contract phải có fixtures stride ≠ width, format/color và buffer lifetime ngay từ đầu. Đường hardware decode/native buffer thật (NV12/MPP khi phù hợp) được kiểm khi chọn target, trước nghiệm thu capacity/pilot; CPU-copy tests không thay thế bằng chứng hardware.
+Giai đoạn software-lab dùng ONNX Runtime và software decode khi chưa khóa SKU phần cứng đích; hợp đồng bộ đệm bắt buộc kiểm thử `stride ≠ width`, định dạng màu và vòng đời giải phóng buffer ngay từ đầu. Đường giải mã phần cứng / native buffer thật (`NV12`, `NVDEC`/`MPP`) bắt buộc kiểm chứng trên thiết bị đích trước cổng `G3`; bài test sao chép bộ nhớ trên CPU không thay thế bằng chứng phần cứng.
 
 **Buffer contract:** loại CPU/native handle; read/write permission; ownership; acquire/release hoặc context lifecycle; synchronization; validity. Native handles opaque với application/domain. Không giữ frame vô hạn trong track/event history. Scheduler phải release frame khi drop/cancel/fail.
 
@@ -182,7 +182,7 @@ Mỗi AI revision là full snapshot; identity/origin bất biến, current lấy
 **Giao tiếp:** tạo các port implementations, cung cấp immutable config snapshot/version.  
 **Chú ý:** fail fast khi model/runtime/device không tương thích; không dynamic import tùy ý từ config không tin cậy; config update phải stage/validate/activate/rollback. Không tạo universal plugin system trước có nhu cầu.
 
-Q13 ngày 2026-10-11: pipeline enabled mà thiếu/sai config phải panic/fail-fast toàn bộ analytics startup (exit nonzero, nêu pipeline/field và mask secrets), không tự bỏ pipeline hoặc báo unavailable rồi tiếp tục. Validate mọi enabled pipeline trước start analytics. Pipeline disabled được phép thiếu config nghiệp vụ và hiển thị unavailable với reason=disabled. Config activation lỗi bị reject và giữ last-known-good; recorder độc lập vẫn tiếp tục. Lỗi runtime sau startup được quy định riêng.
+Mọi feature pipeline được bật (`enabled=True`) nhưng thiếu hoặc sai cấu hình bắt buộc phải `fail-fast` ngay khi khởi động analytics (thoát mã khác 0, chỉ rõ tên module/trường lỗi và che thông tin nhạy cảm), tuyệt đối không âm thầm bỏ qua module lỗi. Các module tắt (`enabled=False`) được phép thiếu cấu hình nghiệp vụ và báo trạng thái `disabled` tường minh. Kích hoạt cấu hình mới thất bại phải bị từ chối và giữ nguyên cấu hình Last-Known-Good (LKG); tiến trình `FileRecorder` độc lập vẫn ghi hình bình thường.
 
 ### 6.2 VideoSource
 
@@ -322,7 +322,7 @@ Contract phải khóa reconnect owner, session/discontinuity IDs, PTS/time mappi
 
 ### 6.15 IncidentEngine
 
-Quyết định Q5/Q9 ngày 2026-10-11: IncidentEngine nằm trong từng pipeline tính năng cảnh báo đăng ký riêng; lifecycle/config/state tách theo pipeline và camera/session. Pipeline dùng chung semantic event contract có producer pipeline provenance, chia sẻ source/detector/tracker/pose khi tương thích. Chỉ tách process khi cần fault/resource isolation; tách logic không ngăn native crash hoặc quá tải shared resource. Xem [ADR-0001](../adr/0001-feature-pipeline-boundaries.md) và [plan triển khai](implementation-plan.md).
+Mỗi nhóm cảnh báo sở hữu một `IncidentEngine` đăng ký độc lập qua allowlist; vòng đời, cấu hình và trạng thái thời gian cô lập theo `module × camera × session` ([ADR-0001](../adr/0001-feature-pipeline-boundaries.md)). Các module chia sẻ kết quả nguồn video/detector/tracker/pose tương thích và trao `SnapshotFacts` cho module lắp ghép snapshot tập trung `apps/edge/snapshot.py` ([ADR-0005](../adr/0005-incident-snapshot-ownership.md)). Chỉ tách tiến trình riêng khi bài đo soak chứng minh cần cô lập lỗi native hoặc tài nguyên.
 
 **Port:** evaluate observations/features/time→event transitions; reset/restore policy explicit.  
 **Nhiệm vụ:** rule tình huống theo module × camera, bắt đầu person-down rồi tai nạn có xe; các nhóm mở rộng theo requirement và gate riêng. Temporal verification, hysteresis, cooldown, dedup nội bộ; attach supporting evidence/uncertainty. Module enabled thiếu/sai config bắt buộc phải fail-fast; state/config độc lập không chứng minh đủ tài nguyên bật mọi nhóm đồng thời.
@@ -346,7 +346,7 @@ Quyết định Q5/Q9 ngày 2026-10-11: IncidentEngine nằm trong từng pipeli
 **Nhiệm vụ:** ring buffer segments, pre/post clip, keyframe-aware boundaries, manifests, quota, retention, crash recovery.  
 **Dự kiến:** FFmpeg/GStreamer segment/remux hoặc MediaMTX, chạy **process riêng** (xem §2); filesystem + SQLite metadata.  
 **Phạm vi hiện hành:** event ring 10 phút + clip sự kiện, không có continuous-NVR backlog. Pre10/post20 theo anchor trong contracts §3; retention/quota phải được sizing trước chọn SKU. Ví dụ 4 Mbps liên tục ≈ 43,2 GB/ngày/camera (GB thập phân, chưa overhead; `GB/day ≈ 10.8 × Mbps`). Ring ngắn giảm dung lượng chiếm dụng nhưng không giảm lượng ghi liên tục. Không chọn microSD thường làm evidence media production; endurance SKU/TBW, write amplification, nhiệt và tuổi thọ phải theo BOM/workload đã đo.
-**Sự kiện kéo dài và policy anchor (Q34/Q36):** raw clip cố định pre10/post20 theo loại. Giữ baseline person-down onset/first qualifying observation trong contracts §3; nhóm mới dùng mốc đủ điều kiện tạo cảnh báo. Metadata mốc quan sát/duration/vùng/config không thay video. Complete clip không nghĩa full episode; onset ngoài clip/không quan sát được phải thể hiện rõ. Không tự thêm nhiều clip/NVR dài ngày. Nhóm mới cần policy version/fixtures/regression trước triển khai (requirement §4); không đổi code hoặc âm thầm dịch request đã có.
+**Sự kiện kéo dài và chính sách neo (`contracts.md §3`):** Raw clip giữ cửa sổ cố định `pre-roll 10s / post-roll 20s` quanh mốc neo theo loại sự kiện: `person_down` dùng `onset` (khi thấy diễn biến ngã) hoặc `first_qualifying_observation` (cho chuỗi nằm bền vững thiếu onset); các module cảnh báo theo điều kiện (`danger_zone`, `vehicle_incident`, `illegal_parking`, `crowd_incident`) dùng thời gian nguồn tại mốc thỏa mãn điều kiện phát cảnh báo (`alert_condition`). `completeness="complete"` chỉ xác nhận phủ đủ cửa sổ `[-10s, +20s]`, không đồng nghĩa chứa toàn bộ sự kiện kéo dài.
 **Phát lại:** H.265 không phát ổn định trên mọi trình duyệt. H.264 thuận lợi cho browser nhưng Pi 5 phải software decode; chọn codec theo decode budget và playback đã đo. Nếu dùng H.265, có thể tạo proxy H.264 như derived artifact có chủ đích (transcode ở server, hoặc ở edge nếu còn encode budget).  
 **Giao tiếp:** encoded stream→segments; event→pin/finalize; uploader→ACK; control→query.  
 **Chú ý:** pre-event segments phải tồn tại trước trigger; pin atomically để cleanup không xóa. Reconnect/PTS discontinuity có thể tạo clip gaps, ghi rõ. Nếu source raw phải encode budget; Orin Nano không NVENC. Overlay/redacted video là derived artifact, raw không overwrite. Retention ưu tiên/capacity failures có cảnh báo; giới hạn admission/budget cho pin mới khi WAN mất lâu; không tự TTL xóa pinned/unACK đã nhận giữ.
@@ -393,9 +393,9 @@ Quyết định Q5/Q9 ngày 2026-10-11: IncidentEngine nằm trong từng pipeli
 
 | Module | Nhiệm vụ / giao tiếp | Công nghệ dự kiến / chú ý |
 |---|---|---|
-| Ingestion API | Authenticate device, validate schema/limits, idempotent event revision persist, ACK | FastAPI/Python theo Q14; ACK sau durable commit, không sau chỉ enqueue RAM |
+| Ingestion API | Authenticate device, validate schema/limits, idempotent event revision persist, ACK | FastAPI/Python ([ADR-0003](../adr/0003-fastapi-mongodb-backend.md)); chỉ ACK sau khi commit bền vững vào DB, không ACK từ hàng đợi RAM |
 | Evidence service | Authorized upload/download, checksum, object key ownership, manifest states | Filesystem adapter cho lab; S3-compatible chỉ khi production chọn; scoped short-lived upload URL nếu dùng; không cho client tùy ý overwrite key khác |
-| Event repository/search | Metadata, filtering time/site/type/review | MongoDB theo Q14; compound indexes theo query thực, unique revision và event lineage/version preserved |
+| Event repository/search | Metadata, filtering time/site/type/review | MongoDB replica set ([ADR-0003](../adr/0003-fastapi-mongodb-backend.md)); compound indexes, unique revision và bảo toàn đầy đủ lịch sử/phiên bản sự kiện |
 | Alert workflow | Operator assignment, ACK/escalate/resolve, notification retry | DB + worker; cứu hộ theo human review/protocol, không từ một threshold chưa nghiệm thu |
 | Retrieval service | Check local/server retention, gửi request edge, phản hồi pending/expired/offline | REST/control transport; không bảo đảm có clip ngoài thời hạn lưu |
 | Fleet/config service | Inventory, desired/observed versions, rollout status | Versioned DB/bundle store, RBAC, audit |
@@ -497,7 +497,7 @@ ONNX→RKNN/TRT là build/conversion workflow offline, không convert model trê
 
 Typed calls/iterators hoặc bounded queues; events nội bộ chỉ dùng khi giúp decouple workflow cụ thể. Không cần event bus toàn cục che mọi control flow. Heavy frames truyền references, metadata immutable khi qua worker boundaries. Runtime exceptions chuyển thành typed failure ở adapter boundary, logs có correlation IDs.
 
-Q17: sau startup hợp lệ, pipeline runtime fault phải báo degraded/fault, retry/restart có giới hạn và reset state/session khi mất continuity. Giữ pipeline không phụ thuộc thành phần lỗi và recorder hoạt động; shared native core crash có thể restart toàn analytics, không silent fallback. Q13 config enabled thiếu/sai vẫn fail-fast startup, không chuyển thành runtime degraded để bỏ qua.
+Sau khi khởi động hợp lệ, lỗi phát sinh lúc chạy (runtime fault) của một pipeline phải chuyển trạng thái sang `degraded`/`operational_fault`, giới hạn số lần thử lại và reset state/session khi mất tính liên tục thời gian, đồng thời giữ nguyên hoạt động của các module không phụ thuộc và `FileRecorder`. Không được hạ lỗi cấu hình lúc khởi động thành trạng thái `degraded` để lách kiểm tra fail-fast.
 
 ### 9.1a Storage classes và resource ownership
 
@@ -514,7 +514,7 @@ Tách directory/partition/quota chỉ hạn chế disk-full, **không loại b�
 
 MVP HTTPS: event POST với schema/revision/idempotency, evidence upload riêng, health heartbeat. **Command transport tách khỏi event transport:** edge sau NAT không nhận kết nối vào, nên poll định kỳ làm truy hồi evidence và rollback khẩn cấp trễ bằng một chu kỳ poll. MVP dùng HTTPS long-poll cho kênh lệnh, WebSocket/MQTT khi cần. Event vẫn chỉ có một nguồn sự thật. Có thể thêm MQTT adapter khi cần push/integration; QoS1 vẫn duplicate, retain không dùng tùy tiện cho incident commands. Không chọn đồng thời hai event transports làm hai nguồn sự thật.
 
-Theo Q6/Q10 ngày 2026-10-11, EventPublisher nằm ở server downstream để sau này thêm Kafka, RabbitMQ hoặc WebSocket; chưa triển khai adapters/dependencies. Edge giữ HTTPS; server commit event cùng downstream outbox intent rồi worker publish, không để downstream outage đảo ngược ingestion đã commit. Transport mới giữ identity/revision/idempotency và delivery result; broker ACK/WebSocket send không thay ingestion/evidence receipt hoặc chứng minh consumer đã xử lý. Q7 giữ lab review trên dashboard; placeholder không bật notification ngoài dashboard. Xem [ADR-0002](../adr/0002-server-downstream-event-publishing.md).
+`EventPublisher` đặt tại phía Server downstream ([ADR-0002](../adr/0002-server-downstream-event-publishing.md)) để mở rộng sang Kafka, RabbitMQ hoặc WebSocket khi có yêu cầu tích hợp. Edge chỉ giao tiếp HTTPS với Server; Server ghi nguyên tử sự kiện cùng bản ghi `downstream_intent` trong cùng transaction trước khi worker phát thông báo, đảm bảo sự cố kênh thông báo ngoài không làm thất bại hay rollback sự kiện đã nhận từ Edge. Trong phạm vi lab hiện tại, thông báo ngoài Dashboard giữ ở chế độ tắt (`disabled`).
 
 ### 9.3 An toàn thông tin và dữ liệu
 
@@ -571,210 +571,115 @@ Signed config/model bundles, allowlisted factories, hash verification, downgrade
 
 Recorder segment gap/pin failure, source mất tiến triển, outbox age/bytes vượt autonomy, time-to-full, write/fsync errors, frame age, clock uncertainty và native restart/crash loop là tín hiệu P0 trước pilot. Thermal, track fragmentation, evidence completeness và desired/observed version drift bổ sung P1. Mỗi alert ghi metric/window/threshold theo site profile, severity, owner nhận, runbook và recovery condition; `>0` dùng cho lỗi như pin failure, không áp chung mọi metric. Freeze detector phải phân biệt cảnh đứng yên với luồng treo.
 
-## 11. Kiến trúc source code dự kiến
+## 11. Kiến trúc mã nguồn thực tế trong Repository
 
-**Đây là cây đề xuất cho implementation tương lai, không mô tả code đã tồn tại.** Chọn monorepo gọn, không tạo tất cả folder rỗng ngay. Python là baseline dự kiến; tree giữ semantic boundaries để đổi ngôn ngữ khi có lý do.
+Repository sử dụng cấu trúc phân lớp gọn theo ranh giới ngữ nghĩa, tách biệt hoàn toàn hợp đồng thuần (`domain/`) khỏi runtime tại biên (`apps/edge/`), dịch vụ trung tâm (`apps/server/`) và công cụ đánh giá (`tools/`):
 
 ```text
 AI-Camera-OC/
-├── pyproject.toml                  # deps core/server, optional extras theo backend
-├── src/traffic_camera/
-│   ├── domain/
-│   │   ├── contracts/              # frame metadata, detection, pose, track, event
-│   │   ├── incidents/              # FSM, temporal rules, taxonomy
-│   │   ├── motion/                 # feature logic, uncertainty, pure geometry
-│   │   └── policies/               # event quality/severity/ODD policies
-│   ├── ports/
-│   │   ├── perception.py           # PerceptionPipeline lifecycle/observations/pose requests
-│   │   ├── geometry.py
-│   │   ├── evidence.py
-│   │   ├── delivery.py
-│   │   └── control.py
-│   ├── application/
-│   │   ├── pipeline/               # orchestrator, camera sessions, routing
-│   │   ├── scheduling/             # budgets, deadlines, fairness, result ordering
-│   │   ├── evidence/               # pin/finalize/retrieve use cases
-│   │   ├── delivery/               # journal/outbox/upload coordination
-│   │   └── fleet/                  # rollout/config activation use cases
-│   ├── adapters/
-│   │   ├── video/                  # file, RTSP, USB/CSI; demux/decode implementations
-│   │   ├── buffers/                # CPU and optional native buffer ownership
-│   │   ├── ai/
-│   │   │   ├── models/             # YOLOX/RTMPose preprocessing+decode+model specs
-│   │   │   ├── engines/            # ONNX; optional RKNN/TRT/OpenVINO
-│   │   │   └── preprocessing/      # CPU; optional RGA/CUDA
-│   │   ├── camera_analytics/       # optional ISAPI/ONVIF integrations
-│   │   ├── tracking/              # ByteTrack adapter
-│   │   ├── geometry/              # calibration repository + LK estimator
-│   │   ├── evidence/              # segmenter/remux/filesystem
-│   │   ├── persistence/           # SQLite implementations/migrations
-│   │   ├── transport/             # HTTPS; optional MQTT
-│   │   └── platform/              # OS health/watchdog/device capabilities
-│   ├── bootstrap/                 # config, factories, capability validation, wiring
-│   └── utilities/                 # small clock/IDs/errors only; no catch-all business logic
+├── CONTEXT.md                      # Từ điển ngôn ngữ domain chuẩn (Ubiquitous Language)
+├── docker-compose.yml              # Lab stack: FastAPI server + MongoDB 7.0 replica set
+├── domain/                         # Pure domain contracts & state machines (không chứa I/O hay SDK AI)
+│   ├── event_contract.py           # Schema Suspected incident, canonical hash, revision & origin rules
+│   ├── evidence_contract.py        # Anchor kinds, requested/actual ranges, completeness & lifecycle
+│   ├── review_contract.py          # Versioned review decisions, stale-view guard & re-review triggers
+│   ├── alert_module_config.py      # Cấu hình module × camera, ScheduleWindow, fail-fast validation
+│   ├── geometry_contract.py        # Hiệu chuẩn mặt phẳng/ROI & kiểm tra hợp lệ hình học
+│   ├── config_contract.py          # Canonical bundle signing, TargetSpec, role auth & HWM sequence
+│   ├── probe_contract.py           # Operational fault taxonomy & stage budget ledger
+│   ├── retention_contract.py       # Chính sách giữ/xóa evidence có bảo vệ unACK & audit
+│   ├── retrieval_contract.py       # Hợp đồng yêu cầu truy hồi clip từ Edge
+│   ├── storm_contract.py           # Ngưỡng cô lập bão gói tin lỗi theo thiết bị
+│   └── downstream_contract.py      # Eligibility & outbox intent cho thông báo mở rộng (ADR-0002)
 ├── apps/
-│   ├── edge/                      # entrypoint/CLI; thin composition root
-│   ├── server/                    # API, use cases, repositories, workers, migrations
-│   └── dashboard/                 # UI sản phẩm tương lai do đội giao diện sở hữu; lab demo nằm trong server
-├── schemas/                       # network JSON schemas/OpenAPI, canonical versions
-├── configs/
-│   ├── examples/                  # no credentials; minimal reference config
-│   ├── profiles/                  # CPU/RPi/RK3588/Jetson capability defaults
-│   └── sites/                     # templates; deployed secrets/site data not committed
-├── model_manifests/               # artifacts references/hashes/licenses; not huge weights
-├── tools/
-│   ├── calibration/
-│   ├── model_conversion/
-│   ├── benchmark/
-│   ├── replay/
-│   └── diagnostics/               # RTSP probe, doctor, evidence export checks
-├── native/                        # C++ perception core (§6.7a), CMake
-│   ├── include/traffic_camera/    # public C++ API + generated observation structs
-│   ├── src/
-│   │   ├── decode/                # libav, MPP, NVDEC backends
-│   │   ├── preprocess/            # RGA, CUDA/NPP, OpenCV/NEON
-│   │   ├── engines/               # ORT C++, RKNN C API, TensorRT
-│   │   ├── models/                # YOLOX/RTMPose postprocess, NMS, SimCC
-│   │   ├── tracking/              # ByteTrack C++
-│   │   └── core/                  # per-camera pipeline, queues, scheduling, timing
-│   ├── bindings/python/           # pybind11/nanobind, GIL release, typed errors
-│   ├── tests/                     # GoogleTest/Catch2, sanitizers, fuzz
-│   └── toolchains/                # aarch64 cross-compile per board
-├── tests/
-│   ├── unit/                      # pure domain and application tests with fakes
-│   ├── contract/                  # each adapter obeys semantic ports
-│   ├── integration/               # RTSP/DB/recorder/server boundaries
-│   ├── regression/                # golden clips/model/event metrics
-│   ├── hardware/                  # explicit device markers, no default hardware dependency
-│   └── fixtures/                  # synthetic/small cleared data + external dataset refs
-├── deploy/                        # systemd, optional containers, server deployment
-├── docs/
-│   ├── architecture/system-architecture.md
-│   ├── adr/                       # decisions split into ADRs when implemented
-│   ├── runbooks/                  # provisioning/fault/recovery/privacy/upgrade
-│   └── logs/                      # action/decision tracking
-└── traffic-ai-camera-research/     # research evidence and sources
+│   ├── edge/                       # Edge runtime & Python reference perception pipeline
+│   │   ├── oracle_detector.py      # YOLOX-Tiny ONNX adapter + provenance
+│   │   ├── tracker.py              # ByteTracker với session/time reset & coarse class-group gate
+│   │   ├── pose.py                 # RTMPose-Tiny ONNX adapter + PoseScheduler có ngân sách
+│   │   ├── quality.py              # Đánh giá chất lượng ảnh ODD (blur/exposure) & freeze detector
+│   │   ├── pipeline.py             # PerceptionPipeline orchestrator & allowlisted module registry
+│   │   ├── snapshot.py             # Điểm lắp ghép & validate full event snapshot duy nhất (ADR-0005)
+│   │   ├── incident.py             # US09 Person-down (fall, lying_persistent, on_stationary_vehicle)
+│   │   ├── danger_zone.py          # US10 Danger-zone intrusion theo đa giác ROI & lịch
+│   │   ├── vehicle_incident.py     # US08 Vehicle accident & stopped vehicle in lane
+│   │   ├── parking_incident.py     # US05 Illegal parking theo vùng, lịch & dwell time
+│   │   ├── crowd_incident.py       # US06 Crowd concentration & multi-actor spatial disorder
+│   │   ├── recorder.py             # Segment ring buffer 10 phút độc lập
+│   │   ├── evidence.py             # Pin receipt, manifest finalize nguyên tử & startup reconcile
+│   │   ├── outbox.py               # SQLite WAL (synchronous=FULL) event/evidence journal
+│   │   ├── uploader.py             # Idempotent event/clip delivery & WAN outage drain
+│   │   ├── config_store.py         # Local/signed config activation giữ LKG & HWM
+│   │   ├── canary.py               # Canary rollout monitor & auto-rollback
+│   │   ├── health.py / probe.py    # EdgeHealthMonitor & SyntheticProbe 4 công đoạn
+│   │   ├── quota.py                # StorageQuotaGuard bảo vệ clip đã ghim/chưa ACK
+│   │   ├── live_pipeline.py        # RTSP/live runner ghép nối nguồn video thực
+│   │   └── doctor.py               # Kiểm tra môi trường, SQLite WAL safety & cấu hình fail-fast
+│   └── server/                     # Central backend (FastAPI + MongoDB replica set)
+│       ├── main.py                 # REST endpoints, device/reviewer/dashboard auth & demo UI
+│       ├── store.py                # Multi-document ACID event/review/audit repository
+│       ├── evidence.py             # Lưu trữ bền vững & phát HTTP Range video bằng chứng
+│       ├── retrieval.py            # Điều phối truy hồi bằng chứng từ Edge
+│       ├── storm_guard.py          # Circuit breaker chống bão gói tin lỗi theo thiết bị
+│       ├── live_stream.py          # Luồng quan sát trực tiếp phục vụ kiểm thử lab
+│       └── doctor.py               # Kiểm tra kết nối MongoDB & in cấu hình đã che bí mật
+├── models/                         # Model manifests, SHA-256 hashes & license attribution (không lưu weights lớn)
+├── fixtures/                       # Golden conformance vectors & deterministic test fixtures
+├── tools/                          # Semantic replay evaluators (ADR-0006), benchmark & dataset fetchers
+├── tests/                          # 896 unit, contract & integration tests (188 subtests)
+├── openspec/                       # Đặc tả thay đổi kiến trúc/hợp đồng (OpenSpec specs & designs)
+└── docs/                           # Kiến trúc, ADR (0001–0006 + sơ đồ .drawio), requirements, datasets, logs
 ```
 
-### 11.1 Quy tắc quản lý module
+> **Ranh giới mở rộng Native C++ Core (`#10, #12`, §6.7a):** Khi triển khai lên phần cứng nhúng đích, thư mục `native/` (CMake, C++17, pybind11/nanobind) sẽ cài đặt cùng giao diện ngữ nghĩa `PerceptionPipeline` cho khâu giải mã phần cứng + tiền xử lý + suy luận TensorRT/RKNN/ORT C++ + `ByteTrack`, đối chiếu trực tiếp với bản Python reference trong `apps/edge/` qua bộ golden conformance chung.
 
-- Vendor imports confined adapters; domain tests chạy không cần board/NPU/network.
-- Optional extras và lazy imports cho RKNN/TRT/OpenVINO để reference machine không cần mọi SDK.
-- Không để `utilities/` thành nơi chứa inference/event logic hoặc service locator.
-- Không tạo port mới nếu không có lý do cụ thể về substitution, test isolation hoặc lifecycle; `ImagePreprocessor`/`InferenceEngine`/`Decoder` giữ là boundary nội bộ adapter đến khi có implementation thứ hai thật.
-- Config schema có owner; labels/keypoints/network contracts versioned, tránh sao chép mỗi adapter một định nghĩa.
-- Native adapter và Python reference cùng implement `PerceptionPipeline`. Detector/Tracker/PoseEstimator là stage nội bộ; không bọc core tự chạy thành ba port gây duplicate work. Contract tests chạy cùng application consumer cho hai implementation.
-- C++ bindings expose hẹp; không duplicate IncidentEngine Python/C++ trước có nhu cầu và test parity.
-- Models/artifacts/video thật lưu ngoài Git hoặc artifact storage; repo chỉ manifest, hash, quyền và tiny fixtures đủ kiểm thử.
-- Pin dependency/backend versions theo deployment profile; lockfiles/build metadata và third-party notices.
-- Schema sharing với dashboard dùng generated types nếu cần; không share Python DB entity trực tiếp như wire contract.
+### 11.1 Quy tắc giữ sạch ranh giới module
 
-### 11.2 Cấu hình minh họa
+- `domain/` tuyệt đối không import thư viện mạng, database, OpenCV hay ONNX Runtime; mọi bài test hợp đồng chạy độc lập không cần phần cứng hay Docker.
+- Các feature pipeline chỉ trả `SnapshotFacts` (hoặc `None`); chỉ `apps/edge/snapshot.py` được dựng envelope sự kiện và gọi `validate_event` ([ADR-0005](../adr/0005-incident-snapshot-ownership.md)).
+- Mọi công cụ đánh giá video offline trong `tools/` bắt buộc đi qua `PerceptionPipeline.process_frame` với cấu hình hiệu lực tường minh ([ADR-0006](../adr/0006-semantic-replay-pipeline-reuse.md)).
+- Trọng số mô hình (`.onnx`) và tệp video kiểm thử (`.mp4`) lưu tại `data/` ngoài Git, được khóa tính toàn vẹn bằng mã băm SHA-256 trong `models/` và `data/benchmark/manifest.json`.
 
-```yaml
-schema_version: 1
-profile: reference_cpu
-cameras:
-  - id: test-01
-    source:
-      type: rtsp
-      uri_secret: CAMERA_TEST_RTSP_URI
-    analysis:
-      target_fps: 10
-      max_frame_age_ms: 500
-    calibration_ref: calibrations/test-01/v1
-perception:
-  detector:
-    adapter: yolox_onnx
-    model_manifest: model_manifests/yolox-small-onnx.yaml
-  pose:
-    adapter: rtmpose_onnx
-    model_manifest: model_manifests/rtmpose-onnx.yaml
-motion_estimation:
-  adapter: identity
-tracking:
-  adapter: bytetrack
-evidence:
-  mode: encoded_segments
-  pre_roll_seconds: 10
-  post_roll_seconds: 20
-delivery:
-  adapter: https
-  endpoint: https://example.invalid/api
-  credential_secret: EDGE_SERVER_CREDENTIAL
-```
+## 12. Công cụ vận hành và đánh giá đã triển khai
 
-Số FPS/age/pre/post ở đây là giá trị minh họa để test, không default production đã nghiệm thu. Orange Pi đổi profile/adapters/manifests sau compatibility validation, không chỉ đổi extension `.onnx` thành `.rknn`. Secret reference không được tự resolve thành plaintext trong logs/config export.
+| Công cụ | Lệnh / Module thực tế | Mục đích |
+|---|---|---|
+| **Edge & Server Doctor** | `python -m apps.edge.doctor`, `python -m apps.server.doctor` | Kiểm tra cấu hình hiệu lực (che secret), phiên bản SQLite WAL, kết nối DB và tính hợp lệ của tài nguyên trước khi chạy |
+| **ONNX Oracle Conformance** | `tools/oracle_conformance.py` | Đối chiếu kết quả tiền xử lý, suy luận và NMS của `YOLOX-Tiny` với golden vectors đã ghim |
+| **Semantic Clip Evaluators** | `tools/eval_clip.py`, `tools/eval_vehicle.py`, `tools/eval_all_scenarios.py` | Chạy replay ngữ nghĩa qua `PerceptionPipeline` cho `person_down`, `vehicle_incident` hoặc tổ hợp 4–5 module; xuất JSON snapshot, pose outcomes, trạng thái chất lượng ảnh và độ trễ |
+| **Pipeline Throughput Benchmark** | `tools/run_benchmark.py` | Đo phân rã độ trễ P50/P90/P95 từng công đoạn và đỉnh bộ nhớ RSS giữa Baseline và Full Pipeline (+`RTMPose-Tiny`) |
+| **Pin-budget & Recorder Lab** | `apps/edge/detector_recorder_lab.py`, `apps/edge/pin_budget_lab.py` | Chẩn đoán độ phủ khoảng thời gian `[-10s, +20s]`, startup reconcile và hành vi khi thiếu pre-roll |
+| **Negative Audit Sampler** | `tools/negative_audit_report.py` | Lấy mẫu phân tầng các khoảng thời gian không có cảnh báo để con người kiểm tra tỷ lệ bỏ sót ngoài thực địa |
+| **Asset Fetchers** | `tools/fetch_oracle_assets.py`, `tools/fetch_benchmark_dataset.py` | Tải và xác thực SHA-256 cho trọng số mô hình lab cùng các clip benchmark tham chiếu |
 
-## 12. Utilities và công cụ phụ trợ
+## 13. Chiến lược kiểm thử và báo cáo Benchmark
 
-| Công cụ | Mục đích |
-|---|---|
-| `camera-probe` | Kiểm tra RTSP local, codec/FPS/PTS/reconnect; redact credentials |
-| `device-doctor` | Versions/driver/runtime, khả năng decode/inference, RAM/disk/thermal, artifacts |
-| Calibration tool | Mốc ảnh/mét, distortion, ROI/vạch/hướng, sai số và version |
-| Replay runner | Reproduce event-time, fast/realtime, export metrics không phát cảnh báo thật |
-| Model conversion pipeline | Khi chọn target: ONNX export→RKNN/TRT build, representative INT8 data, golden comparisons |
-| Benchmark runner | detector-only + E2E, burst/thermal/queue/drops, manifest hardware/software |
-| Evidence verifier | Check manifest/hash/gaps/retention/export provenance |
-| Dataset/annotation utilities (data engine) | License provenance, split site/time/person; hard-negative mining từ false positive đã review và negative audit; dataset versioning gắn với model artifact; vòng fine-tune cho điều kiện VN. Model pretrained trên COCO nhiều khả năng là điểm nghẽn chất lượng trước phần cứng |
-| Config validator | Dry-run dependency/capability/secret validation trước activation |
-| Privacy utilities | Redact credentials/logs và derived evidence theo policy |
+1. **Phân tầng kiểm thử:**
+   - *Domain & Contract tests:* Kiểm tra FSM thời gian, chống lặp, phân quyền ký cấu hình, HWM rollback, schema snapshot và bất biến review bằng đồng hồ giả lập tất định.
+   - *Golden & Replay tests:* Đối chiếu đầu ra ONNX oracle và đảm bảo parity ngữ nghĩa giữa các công cụ `tools/eval_*.py` với runtime `PerceptionPipeline`.
+   - *Persistence & Resilience tests:* Kiểm tra SQLite WAL crash recovery, ghim/dọn segment cạnh tranh, mất WAN 24 giờ, tràn quota đĩa, storm guard và HTTP Range playback.
+   - *Live Hardware & Field gates (`G1–G5`):* Kiểm thử luồng RTSP camera thật, soak 24–72h trên phần cứng đích và đánh giá chất lượng trên cohort CCTV cố định có nhãn độc lập.
+2. **Chuẩn bắt buộc của báo cáo Benchmark (`G3`):** Mọi báo cáo năng lực phần cứng phải xuất kèm manifest máy đọc được (mẫu tại [deployment-readiness.md](deployment-readiness.md)) ghi rõ SKU/OS/SDK, SHA-256 model/config/dataset, thông số luồng video, P95/P99 `frame_age` và `event_latency`, khoảng hở recorder, đỉnh WAL/outbox, nhiệt độ và công suất tiêu thụ khi bật đồng thời AI + ghi hình + tải lên.
 
-Clock abstraction cho domain tests, ID generator, typed errors và bounded queue helpers đủ nhỏ có thể đặt utilities. Các helpers có platform dependencies đặt adapter tương ứng.
+## 14. Lộ trình cổng nghiệm thu (`G0` → `G5`)
 
-## 13. Kiểm thử và acceptance
+Chi tiết trạng thái từng giai đoạn xem tại [Kế hoạch triển khai](implementation-plan.md), [Tracker slices](../../.scratch/system-build-slices/PRD.md) và [Checklist tích hợp & release](../implementation-checklists/integration-release.md):
 
-### 13.1 Layers
+| Gate | Phạm vi bắt buộc | Trạng thái |
+|---|---|---|
+| **G0** | Hợp đồng dữ liệu, deterministic fixtures, golden ONNX conformance, `mypy` + unit/integration suite | **Đạt cho software-lab** (`896` tests pass) |
+| **G1** | Luồng RTSP camera thật + recorder độc lập + pin/recovery/upload/review xuyên suốt + đo sai số clock LAN | **Đang mở** (chờ camera thật & native core `#10/#12/#15`) |
+| **G2** | Đánh giá chất lượng AI & negative audit trên cohort CCTV giao thông cố định 720p–1080p có nhãn độc lập | **Đang mở** (chờ thu thập & gán nhãn cohort CCTV cố định) |
+| **G3** | Conformance + soak 24–72h đo nhiệt/tải toàn hệ thống trên đúng SKU phần cứng nhúng đích | **Đang mở** (chưa khóa SKU phần cứng đích) |
+| **G4a** | Sẵn sàng pilot cho `person_down`: mất WAN, đầy đĩa, signed rollback, power-cut drill và hồ sơ pháp lý/bản quyền | **Đang mở** |
+| **G4b** | Nghiệm thu hiệu chuẩn hình học/ROI, chất lượng `G2` và ngân sách tải `G3` riêng cho từng module cảnh báo mở rộng | **Đang mở** (4 module mở rộng đã xong logic phần mềm trong lab) |
+| **G5** | Nghiệm thu thực địa dài ngày (ngày/đêm/mưa), chốt khối lượng ca trực review và quyết định mở rộng quy mô | **Đang mở** |
 
-1. Unit domain: FSM, durations, unknown observations, cooldown/dedup, velocity outliers và gaps bằng fake clock.
-2. Contract adapters: tọa độ gốc, colors/layout, label/keypoint schema, empty vs fail, buffer lifetime/release, backend capability errors.
-3. Golden perception: cùng frames trên ONNX/RKNN/TRT; IoU/class/pose tolerance và event regression, không yêu cầu tensors giống tuyệt đối.
-4. Integration: RTSP disconnect, codec switch, SQLite outbox, segment pin/cleanup race, server duplicates/reordered revisions và upload retry.
-5. Hardware/performance: 1/2/4 streams, person/pose bursts, wall-power/thermal, queue age/P95/P99, 72h soak theo workload.
-6. Field pilot: ngày/đêm/mưa, xe máy đông, người xa/che khuất, operator feedback, nhiều camera-ngày và sufficient events.
+## 15. Các quyết định còn mở trước khi triển khai Pilot
 
-### 13.2 Mỗi báo cáo benchmark phải ghi
+- **Ranh giới tiến trình cho Native C++ Core (§6.7a):** Quyết định chạy in-process qua Python bindings hay tách tiến trình IPC riêng sau khi đo độ ổn định và thời gian khôi phục (RTO) trên thiết bị đích.
+- **Camera SKU & Stream Ownership ADR:** Chốt model camera CCTV thực tế, độ chính xác capture timestamp và phương án cấp luồng RTSP độc lập cho Recorder và Analytics (dual-stream main/sub hoặc local relay).
+- **Target Board SKU & Bản quyền Trọng số Thương mại:** Chốt cấu hình phần cứng biên (ví dụ Jetson Orin NX 8 GB / 16 GB) và hoàn tất rà soát giấy phép thương mại cho trọng số mô hình cũng như quyền riêng tư dữ liệu tại điểm lắp đặt.
+- **Production Backend Topology ADR:** Chốt kiến trúc HA/sao lưu cho MongoDB và kho lưu trữ clip bằng chứng (on-prem hay cloud, S3-compatible storage, PKI quản lý khóa ký cấu hình).
+- **Định mức Chi phí Vận hành & Ca trực (TCO / Review Load):** Xác định từ số liệu pilot thực tế theo công thức `ReviewHours/month = Cameras × AlertsRequiringReview/camera-day × MeanReviewMinutes × 30 / 60` trước khi nhân rộng toàn hạm đội.
 
-Hardware/OS/drivers/SDK; model/artifact hash; input/precision/batch; source codec/resolution/FPS/bitrate; sampling/crops/pose concurrency; recorder/render/upload settings; nhiệt môi trường; event metrics, latency/drop/quality và provenance dataset. TOPS hay FPS model đơn lẻ không thành camera capacity. Xuất machine-readable manifest với duration/workload, frame age/event latency P95/P99, recorder gaps, fsync/WAL, CPU/RAM/accelerator/thermal/power, outbox bytes/age và pose burst. Đo từng bottleneck decode/preprocess/inference/memory/disk/uplink rồi khóa số camera ở workload bền vững; thiếu kết quả dùng `null` + lý do, không dùng `0` giả số đo. Mẫu trong [deployment readiness](deployment-readiness.md).
-
-### 13.3 Gates
-
-- Đổi backend: contract tests + golden event quality + E2E performance đạt tiêu chí thống nhất.
-- Đổi camera: stream test, lens/ROI/geometry calibration lại, field regression và quality/ODD update.
-- Production: commercial license clearance, security/retention review, sustained thermal/disk/network recovery, operator workflow, evidence integrity và rollback.
-- Mục tiêu recall/báo giả/latency chọn theo pilot và nhân lực; không lấy con số nghiên cứu làm cam kết tự động.
-- Trước field pilot: preliminary targets + lab capacity envelope (10.1) đã ký; fault-injection drills đạt — camera freeze/reconnect/codec change, analytics kill/hang/native crash, recorder kill, WAN outage nhiều giờ, disk 95%/100%/write errors/WAL growth, power cut lúc commit và rename, clock jump, model load/config activation failure, duplicate/reordered/conflicting revisions; 24–72h soak recording + analytics + upload. Signed rollout test chặn bad hash/signature, expired/old sequence, wrong target và clock uncertain; synthetic không tạo notification. Final field quality/SLO ký sau pilot trước fleet; central backup/restore drill theo SLA.
-
-## 14. Triển khai và nghiệm thu
-
-Scope ban đầu là person-down một camera cố định/ROI lòng đường. Mỗi feature có pipeline/state/config riêng, chia sẻ PerceptionPipeline khi tương thích; vehicle mở sau person-down và có gate riêng. Không tạo module/folder hoặc adapter tương lai trước khi ticket cần.
-
-| Gate | Phạm vi bắt buộc |
-|---|---|
-| G0 | Facts/ODD, preliminary targets, quyền samples/checkpoint và contract inputs |
-| G1 | File+RTSP, native ONNX detector/tracker, recorder độc lập, event/pin/evidence/server/demo; crash/retry đúng |
-| G2 | Native pose, quality/ODD, fast/slow/persistent lying, hard negatives/ID-switch và negative audit |
-| G3 | Native/oracle/target conformance + actual-target capacity/soak; thêm conversion/RKNN nếu target được chọn |
-| G4a | Reliability, trust, signed rollout, retrieval, restore và UI/operator readiness cho person-down |
-| G4b | Calibration/motion/vehicle quality riêng, chỉ khi scope vehicle bật |
-| G5 | Field acceptance/final SLO/review load và quyết định scale |
-
-[Plan](implementation-plan.md) giữ phase/owner/phạm vi89task; [tracker50ticket](../../.scratch/system-build-slices/PRD.md) giữ blockers và Execution; [release checklist](../implementation-checklists/integration-release.md) giữ cases/gate sign-off. Không coi G1 vertical slice là G2 AI quality hoặc G3 hardware capacity.
-
-G1 dùng software decode khi board chưa chọn; trước target acceptance phải build/test exact platform, decode/buffer path thực và thermal/I/O dưới recording/upload. F04 khóa camera sessions/main-sub/clock mapping và stream ADR từ probe; F03 khóa ring/pins/autonomy/reserve/gap budget. F05 kiểm exact checkpoint/dataset terms và spike export nếu có target; clearance cuối trước field site. Các inputs này không được suy từ marketing FPS/TOPS.
-
-## 15. Các câu hỏi còn mở khi implement
-
-- Ranh giới C++/Python đã chốt ở §6.7a; còn mở: core in-process hay process riêng (quyết định sau soak test), và định dạng struct chung (generated dataclass hay FlatBuffers).
-- Camera/SKU/firmware, FPS/codec và capture timestamp quality thực tế.
-- Artifact YOLOX/RTMPose thương mại nào được clearance; khả năng export RKNN từng checkpoint.
-- Native buffer import/concurrency trên board/OS/SDK được chọn; zero-copy phải đo.
-- ROI/ODD/retention, số camera/site, pose budget, alert SLA và final acceptance thresholds.
-- Kênh lệnh lab đã chọn outbound HTTPS long-poll. Chỉ xem xét WebSocket/MQTT khi production requirements chứng minh cần; không là lựa chọn mở chặn baseline.
-- Main/sub stream và topology dual/relay chốt bằng camera test trước nghiệm thu Slice 1; event ring đã chốt, không hỏi lại storage mode của lab.
-- Cloud/on-prem, object store license và yêu cầu pháp lý cụ thể của đơn vị triển khai. **Phải thành ADR trước pilot** vì quyết định HA/DR server, PKI, data residency, backup và chi phí.
-- Cost model `TCO/camera/tháng = edge HW khấu hao + storage wear + điện + mạng + server storage/compute + observability + support + human review`; cần số event/ngày và false alert rate từ pilot. `ReviewHours/month = Cameras × AlertsRequiringReview/camera-day × MeanReviewMinutes × 30 / 60`; false alerts chỉ tính phần chi phí false-positive, tổng review gồm cả true/uncertain/escalation. Không gán effort/person-week hoặc tiền tuyệt đối khi chưa có inventory/workload/team data.
-- Provisioning reproducible (image build + provisioning as code + site desired state versioned) — làm ở Slice 4, khi có thiết bị thật.
-
-**Kết luận:** kiến trúc ổn định ở semantic contracts và domain logic, không ở vendor tensor format. Thay phần cứng là thay adapter + artifact + config + kiểm chứng; không viết lại toàn bộ nghiệp vụ, nhưng cũng không bỏ qua hiệu chuẩn, quantization, memory path và chất lượng hiện trường.
+**Kết luận:** Kiến trúc hệ thống giữ tính ổn định dài hạn ở tầng hợp đồng ngữ nghĩa (`domain/`), điểm sở hữu snapshot tập trung ([ADR-0005](../adr/0005-incident-snapshot-ownership.md)) và đường chạy pipeline dùng chung ([ADR-0006](../adr/0006-semantic-replay-pipeline-reuse.md)). Việc nâng cấp mô hình AI hay chuyển sang phần cứng tăng tốc nhúng chỉ thay đổi tầng adapter, manifest và bài đo conformance/capacity mà không phải viết lại nghiệp vụ cốt lõi.

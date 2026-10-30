@@ -1,44 +1,27 @@
-# Hồ sơ readiness cho edge AI camera
+# Hồ sơ sẵn sàng triển khai (Deployment Readiness)
 
-**Cập nhật:** 2026-10-11. **Trạng thái:** mẫu thu thập/chưa nghiệm thu; không có số đo hardware trong repo được dùng để ký capacity. Tài liệu này hỗ trợ [kiến trúc](system-architecture.md), không thay đặc tả module.
+**Cập nhật:** 2026-10-30 · **Trạng thái:** Hồ sơ kiểm soát điều kiện trước pilot và sản xuất. Bản tham chiếu phần mềm trong lab đã hoàn thiện logic cho 5 nhóm cảnh báo (`896` tests / `188` subtests / `72` files `mypy`), nhưng **chưa có phần cứng nhúng đích hoặc dữ liệu thực địa để ký nghiệm thu capacity (`G3`) hay field readiness (`G4–G5`)**.
 
-## Hồ sơ cần khóa
+Tài liệu liên quan: [Kiến trúc hệ thống](system-architecture.md) · [Hợp đồng tích hợp](contracts.md) · [Kế hoạch triển khai](implementation-plan.md) · [Hồ sơ lab](lab-profile.md) · [Checklist tích hợp & G0–G5](../implementation-checklists/integration-release.md).
 
-Inventory workstation và ODD/protocol snapshot hiện tại: [hồ sơ lab](lab-profile.md). Facts host này không phải edge capacity evidence.
+---
 
-Owner dưới đây là vai trò đề xuất; chủ dự án phải gán người cụ thể, ngày và link bằng chứng trước khi đánh dấu đạt. `TBD`, `null`, `REQUIRED` là thiếu dữ liệu, không phải giá trị nghiệm thu.
+## 1. Phân ranh vai trò nghiệm thu
 
-Quyết định vòng 1 ngày 2026-10-11: chưa chọn board; ONNX/software decode làm baseline lab, event ring + clip sự kiện, một server lab nội bộ. G1 lab không đòi hardware đích; inventory lab ghi thực tế, mục target chưa chọn ghi rõ pending. Trước nghiệm thu target capacity/pilot vẫn cần facts, decoder/buffer và benchmark trên thiết bị thật; kết quả x86 không chứng minh Raspberry Pi hoặc RKNN đã đạt. Tracker C++ ở P1, pose native ở P2; backend mới phải giữ contract semantic và vượt conformance/event regression.
+Mọi giá trị `TBD`, `null` hoặc `REQUIRED` trong hồ sơ site là dữ liệu còn thiếu, tuyệt đối không coi là đã đạt. Trước pilot phải gán định danh người chịu trách nhiệm thực tế cho từng vai trò:
 
-| Artifact | Nội dung bắt buộc | Owner đề xuất | Gate |
-|---|---|---|---|
-| Physical/facts sheet | Camera SKU/firmware; main/sub codec/profile/bitrate/FPS; concurrent sessions đã test; board/RAM/OS/kernel/SDK; storage SKU/TBW/filesystem; switch/VLAN/WAN; UPS/power/thermal enclosure | Edge/platform | Trước BOM và Slice 1 |
-| Stream ADR | Upstream/reconnect/capture owner; dual/relay; timestamp mapping; bounded queue; main/sub; kill/hang test | Edge/platform | Trước nghiệm thu Slice 1 |
-| Workload/retention | Camera/site, analysis FPS, pose mean/burst, event/day, ring/pre/post, pinned retention, export/delete policy | Product + edge | Trước BOM |
-| Preliminary SLO | ODD, latency, evidence completeness, offline autonomy, RPO/RTO scope, AI quality và review capacity | Product + operations | Trước hardware/PoC |
-| Storage plan | Mount/quota/reserve, shared physical failure domains, WAL/checkpoint/fsync budget, time-to-full, endurance/backup | Platform | Tối thiểu Slice 1; đủ trước pilot |
-| Threat/privacy record | Attacker/trust boundaries, physical access, credentials; căn cứ xử lý, retention/access/transfer, legal approval tên/ngày/site | Security + pháp chế | Trước pilot có dữ liệu thật |
-| Model manifest | Exact weights/hash, code/checkpoint/dataset terms, training/source lineage, conversion/runtime/pre/post versions, golden/field report, clearance | ML + pháp chế | Trước release lên site |
-| Benchmark/capacity | Workload và provenance, bottlenecks, thermal 24–72h, recording/upload đồng thời, P95/P99 và headroom đã đo | Edge + ML | Trước field pilot |
-| Failure/recovery matrix | Fault, expected degraded state, dữ liệu được bảo vệ, detection time/RTO, test evidence và runbook | QA + operations | Trước field pilot |
-| Field acceptance | Ngày/đêm/mưa/che khuất, positives/hard negatives, negative-audit sampling/uncertainty, recall/FP và operator load | ML + product | Trước fleet |
-| Central SLA/restore | Ingestion/DB/object-store failure domain, durable receipts, backup/restore/HA theo SLA | Backend + operations | Trước fleet theo SLA |
+| Vai trò | Phạm vi chịu trách nhiệm | Đầu ra bắt buộc trước Pilot (`G4a`) |
+|---|---|---|
+| **Product / Operations Owner** | Ký phạm vi use case, ngưỡng cảnh báo, năng lực ca trực review và nghiệm thu thực địa | Chữ ký phê duyệt site profile, SLO sơ bộ và ngân sách phút review/camera-ngày |
+| **Edge / Platform Lead** | Khóa SKU camera & board nhúng, stream ownership, đồng bộ thời gian, quota đĩa và bảo mật thiết bị | Báo cáo `G1` (live RTSP + crash/pin) và `G3` (soak 24–72h trên thiết bị đích) |
+| **ML / Evaluation Owner** | Quản lý artifact mô hình, hiệu chuẩn hình học/ROI, tập kiểm định CCTV cố định và negative audit | Báo cáo `G2` trên tập CCTV cố định held-out có nhãn độc lập + hồ sơ bản quyền weights |
+| **Backend / QA Lead** | Độ bền lưu trữ event/evidence, quy trình khôi phục thảm họa, storm guard và kiểm thử lỗi xuyên module | Biên bản vượt ma trận lỗi `X01–X45` trong [integration-release.md](../implementation-checklists/integration-release.md) |
 
-## Ứng viên công nghệ và gate mở rộng — 2026-10-20
+---
 
-Theo [quyết định Q35](../logs/2026-10-20-requirements-expansion.md), RF-DETR + ViTPose là ứng viên đánh giá bổ sung; YOLOX/RTMPose/ONNX và software decode vẫn là baseline lab. NVIDIA Jetson Orin NX là dòng ứng viên, không phải Xavier NX; board deployment chưa chọn và chưa có accepted SKU. Exact RAM/SKU, OS/SDK/runtime, checkpoints/weights/hash, license/data clearance, model quality và camera/FPS/capacity đều `pending`. Xem [hồ sơ ứng viên](../requirements/technology-candidates.md).
+## 2. Mẫu hồ sơ điểm lắp đặt tối thiểu (Site Profile Template)
 
-[Danh mục tình huống](../requirements/urban-safety-scenarios.md) không phải cam kết detector + pose đáp ứng toàn bộ 13 nhóm hoặc nhánh phá hoại. Mỗi capability cần dữ liệu/quan sát domain, temporal/state/rule/config phù hợp và gate quality riêng: positives/hard negatives, bỏ sót, báo nhầm theo camera/giờ, latency từ diễn biến đủ điều kiện đến cảnh báo, tải review và ODD ngày/đêm/mưa đã kiểm thử; ngưỡng số theo site/workload còn pending. Thiếu hình ảnh hoặc ngoài điều kiện đã kiểm thử là unknown/degraded, không phải negative. Person-down đạt gate trước, tai nạn xe sau; giữ ADR-0001.
-
-Trước chấp nhận engine cần conformance semantic/native-oracle và event regression. Trước ký capacity cần benchmark **actual target SKU toàn hệ thống**: decode, perception, tracking, các module bật/temporal state, ghi ring/clip và upload đồng thời; đo P95/P99, memory/I/O/storage, headroom và thermal soak 24–72h. Không suy từ inference-only FPS, TOPS, workstation x86 hoặc việc register thêm module. Privacy/site approval, exact artifact rights và provenance vẫn là gate, không được bỏ qua vì là ứng viên.
-
-Theo hiệu chỉnh Q36, raw clip giữ **10 giây trước/20 giây sau anchor**: person-down giữ baseline [contracts §3](contracts.md), person fall có onset quan sát dùng onset estimate có provenance, persistent lying/on-vehicle thiếu onset dùng first qualifying observation của chuỗi persistence đang dùng (không gọi là onset); các nhóm mới dùng mốc đủ điều kiện cảnh báo. Không đổi anchor/runtime person-down sang alert-condition. Clip không bảo đảm bao phủ toàn bộ sự kiện kéo dài hay onset. Giữ mốc bắt đầu quan sát/thời gian duy trì, vùng/config và nguồn gốc; onset ngoài clip phải thể hiện rõ, lịch sử quan sát không thay video. Complete/partial/missing theo hợp đồng hiện hành; không tự thêm nhiều clip hoặc NVR dài ngày.
-
-## Site profile tối thiểu
-
-Target lab đã xác nhận ở Q6: pre-roll 10 giây, post-roll 20 giây, event ring 10 phút, server giữ clip 7 ngày và edge outage budget 24 giờ cho clip chưa ACK. Đây là đầu vào sizing; chưa xác nhận quota, bitrate/event rate, time-to-full hoặc bảo đảm autonomy. Q12 bảo vệ pinned/unACK evidence, dọn dữ liệu được phép trước; vẫn thiếu thì degraded và evidence mới partial/failed. Không tự xóa evidence chưa ACK khi vượt 24 giờ. State/outbox có reserve hữu hạn; khi journal không commit được phải báo fault và không ACK giả.
-
-Minh họa dữ liệu cần thu thập, chưa phải schema runtime. Không đưa credential hoặc URI có password vào hồ sơ.
+Thông số đầu vào mặc định đang áp dụng trong software lab: **pre-roll 10 giây**, **post-roll 20 giây**, **event ring 10 phút**, **server giữ clip 7 ngày**, **ngân sách tự chủ mất WAN 24 giờ cho clip chưa ACK**. Các con số này là tham số thiết kế ban đầu; khi ra site phải đo bitrate thực, tần suất sự kiện và tốc độ đường truyền để chốt quota đĩa. Không đưa mật khẩu hoặc RTSP URI chứa thông tin xác thực vào hồ sơ.
 
 ```yaml
 site:
@@ -49,13 +32,16 @@ site:
 camera:
   id: REQUIRED
   sku_firmware: REQUIRED
-  main_stream_profile_ref: REQUIRED # codec/profile/resolution/FPS/bitrate đo
-  sub_stream_profile_ref: REQUIRED # hoặc explicit unsupported
+  mount_type: fixed_traffic_cctv # Bắt buộc cố định; loại trừ dashcam/PTZ quét liên tục
+  resolution_profile: REQUIRED   # Bắt buộc trong dải 1280x720 .. 1920x1080
+  main_stream_profile_ref: REQUIRED
+  sub_stream_profile_ref: REQUIRED # Hoặc ghi rõ unsupported
   verified_concurrent_sessions: null
   stream_ownership_adr: REQUIRED
 odd:
-  profile_ref: REQUIRED # min person pixels, light/weather, occlusion/ROI
+  profile_ref: REQUIRED # Chiều cao pixel người tối thiểu, ánh sáng/thời tiết, vùng che khuất/ROI
 workload:
+  enabled_alert_modules: ["person_down"] # Các module mở rộng phải có G4b riêng
   camera_count_per_edge: null
   analysis_fps_per_camera: null
   pose_mean_roi_per_second: null
@@ -69,7 +55,7 @@ evidence:
   quota_and_reserve_ref: REQUIRED
 network:
   measured_uplink_mbps: null
-  expected_maximum_outage_hours: null
+  expected_maximum_outage_hours: 24
 acceptance:
   preliminary_slo_ref: REQUIRED
   capacity_report_ref: REQUIRED
@@ -78,23 +64,24 @@ acceptance:
   approved_at: null
 ```
 
-## Sizing evidence và phục hồi WAN
+---
 
-Anchor/ranges và pin recovery theo [contracts §3](contracts.md). Với ring10 phút, phải đo maximum anchor-to-pin delay gồm verification/scheduling/handoff/recovery cộng pre10 giây và clock/keyframe margin; vượt budget báo partial/missing, không coi clip đủ chiều dài là đủ onset.
+## 3. Quy tắc tính dung lượng Evidence, SQLite và Phục hồi sau mất WAN
 
-F03/J05 ghi backlog B, tốc độ upload hữu dụng U và tốc độ sinh evidence G cùng đơn vị. Nếu U ≤ G thì backlog không thoát; nếu U > G, thời gian drain xấp xỉ B/(U−G). Đo cả burst, pin/temp/proxy/WAL/reserve và lúc upload cạnh tranh recording. Outage24h không phải TTL xóa protected data.
+1. **Bao phủ khoảng thời gian yêu cầu (`contracts.md §3`):** Với ring 10 phút, hệ thống phải đảm bảo tổng độ trễ từ mốc neo (`evidence_anchor_time`) đến lúc ghim segment (`verification + scheduling + crash recovery + pre_roll 10s + keyframe margin`) nằm trong 10 phút. Nếu vượt ngân sách, hệ thống báo `partial` hoặc `missing` trung thực; không đánh dấu `complete` chỉ vì xuất được file video.
+2. **Công thức giải tỏa hàng đợi sau mất WAN (`contracts.md §10`):** Gọi $B$ là dung lượng backlog tồn đọng, $U$ là băng thông tải lên hữu dụng dành cho đồng bộ bù (đã trừ băng thông sự kiện mới) và $G$ là tốc độ phát sinh bằng chứng mới. Nếu $U \le G$, hàng đợi không thể tự thoát (`recovery_impossible`); nếu $U > G$, thời gian giải tỏa ước tính là $T = B / (U - G)$. Ngân sách mất WAN 24 giờ **không** phải là TTL để xóa dữ liệu chưa được Server ACK.
+3. **Độ bền SQLite và xử lý lỗi tải lên quá cỡ (`HTTP 413`):**
+   - Outbox và manifest evidence tại Edge chạy SQLite `journal_mode=WAL`, `synchronous=FULL`. `apps/edge/doctor.py` kiểm tra phiên bản SQLite runtime để cảnh báo rủi ro WAL-reset trên các bản `< 3.51.3` chưa xác minh bản vá distro ([chi tiết](../logs/2026-10-17-sqlite-upload.md)).
+   - Khi Server trả `HTTP 413` (clip vượt trần dung lượng upload), Edge phân loại là `operational_fault`, ngừng retry vô ích, giữ nguyên file pin cục bộ ở trạng thái `failed` và không giải phóng clip dù metadata sự kiện đã được ACK.
+4. **Giới hạn của số đo hiệu năng trong Lab hiện tại:**
+   - Trên máy trạm CPU x86 (`Intel Core i5-12400F`, ONNX Runtime CPU), pipeline chuẩn đạt **16.35–20.10 FPS** (Baseline `YOLOX-Tiny` + `ByteTrack`) và **8.84–15.88 FPS** khi bật thêm `RTMPose-Tiny` trên luồng 1080p chẩn đoán ([báo cáo chi tiết](../reports/2026-10-21-pipeline-benchmark-report.md)).
+   - Các clip từng dùng để thử tải và kiểm tra hồi quy phần mềm (`shibuya_crossing_1080p.mp4`, `intersection_traffic_1080p.mp4`, và các clip dashcam gán nhầm nhãn cũ) **đã được rút khỏi diện bằng chứng chất lượng ODD** theo [đợt kiểm định 2026-10-30](../logs/2026-10-30-pre-camera-dataset-replay.md). Không dùng số FPS trên CPU x86 hoặc kết quả trên clip chẩn đoán làm bằng chứng vượt `G2` hay `G3`.
 
-G3 áp dụng target thực: ONNX vẫn phải native/oracle/event conformance và soak; chỉ thêm conversion/RKNN parity khi chọn RKNN. Chưa chọn target thì chưa ký capacity, nhưng không chặn lab ONNX.
+---
 
-*Lưu ý benchmark lab (cập nhật 2026-10-27):* Đã thực hiện đo đạc benchmark pipeline đa kịch bản toàn diện trên workstation x86 (Intel Core i5-12400F, ONNX Runtime CPU) chạy đồng thời cả 4 Engine nhận diện (Person-down, Vehicle incident, Illegal parking, Crowd incident) kèm ByteTracker và RTMPose-Tiny:
-- **Video 1080p Full HD (`fall_0001`, `shibuya_crossing`):** Độ trễ trung vị P50 đạt 30.3–36.8 ms/frame (tương đương **28–33 FPS** xử lý thời gian thực).
-- **Video 720p HD (`AccidentBench Fixed CCTV`):** Độ trễ trung vị P50 đạt 22.0–24.3 ms/frame (tương đương **40–45 FPS**).
-- **Ràng buộc ODD phần cứng:** Đã khóa vĩnh viễn tiêu chuẩn: **100% camera CCTV giao thông cố định, độ phân giải HD (720p) đến 2MP (1080p)**. Tuyệt đối loại bỏ camera hành trình (dashcam) và camera độ nét thấp (< 720p) khỏi benchmark và hồ sơ triển khai.
-Đây là căn cứ xác nhận năng lực phần mềm đạt chuẩn real-time ($\ge 25\text{ FPS}$) ngay trên CPU thông thường. Benchmark trên actual hardware SKU đích (Jetson Orin NX) và thermal soak 24–72h vẫn là điều kiện bắt buộc trước khi ký nghiệm thu capacity.
+## 4. Mẫu Manifest Benchmark Phần cứng Đích (`G3`)
 
-## Manifest benchmark tối thiểu
-
-Số chưa đo là `null`; điền lý do trong `missing_measurements`. Clock basis phải cho biết capture age hay receive age. Không ký capacity từ manifest mẫu này.
+Mọi trường chưa đo thực tế trên thiết bị đích phải giữ `null` kèm lý do trong `missing_measurements`.
 
 ```json
 {
@@ -106,6 +93,7 @@ Số chưa đo là `null`; điền lý do trong `missing_measurements`. Clock ba
   "duration_hours": null,
   "workload": {
     "camera_count": null,
+    "enabled_modules": ["person_down"],
     "analysis_fps_per_camera": null,
     "pose_mean_roi_per_second": null,
     "pose_burst_roi_per_second": null,
@@ -127,33 +115,23 @@ Số chưa đo là `null`; điền lý do trong `missing_measurements`. Clock ba
     "resource_timeseries_ref": null,
     "event_quality_report_ref": null
   },
-  "missing_measurements": ["Template only; no hardware run"],
+  "missing_measurements": ["Template only; target hardware SKU not yet selected"],
   "accepted_capacity": null,
   "approval_ref": null
 }
 ```
 
-## Rủi ro và quyết định còn mở
+---
 
-Priority là thứ tự xử lý thiết kế, chưa phải xác suất định lượng từ vận hành. Ghi likelihood/confidence sau khi có field data; không coi mọi rủi ro dưới đây là lỗi đã xảy ra.
+## 5. Sổ đăng ký rủi ro trước Pilot
 
-| Risk | Priority | Trigger / bằng chứng cần | Mitigation / quyết định |
+| Rủi ro | Mức ưu tiên | Dấu hiệu / Bằng chứng kiểm tra | Biện pháp kiểm soát bắt buộc |
 |---|---|---|---|
-| Recorder phụ thuộc analytics upstream | P0 | Kill/hang analytics tạo segment gap | Stream ADR + fault domain đúng §6.3a |
-| Disk full/wear/failure | P0 | Time-to-full, write/fsync error, health/endurance | Quota/reserve/I/O budget; ghi residual physical SPOF; backup theo RPO |
-| Capacity hoặc nhiệt không đạt | P0 | Frame age/pose burst/throttle trong soak | Giảm scope/camera, đổi BOM; không chỉ giảm threshold AI |
-| Domain shift/ID switch/missing onset | P0 | Field regression/negative audit theo ODD | Persistent-lying path, uncertainty, dataset/acceptance theo site |
-| Privacy hoặc artifact license chưa clearance | P0 | Thiếu hồ sơ owner/ngày/phạm vi/hash | Chặn production; không suy license repo thành weights license |
-| Native crash làm mất analytics state | P1 trước pilot | Crash/restart hoặc RTO không đạt | Pinned SDK/soak; process isolation có điều kiện, reset epoch |
-| Update compromise/rollback/clock uncertain | P0 trước pilot | Bad signature/expired/old sequence/wrong target | Trust bootstrap/rotation/revocation + signed activation tests |
-| Malformed storm | P1 trước pilot | Forensic quota/counter tăng | Bounded samples/duplicate compaction; truncation fault |
-| WAN hoặc central outage | P1 | Outbox age/bytes, ACK outage | Offline autonomy, reconcile; central HA theo SLA |
-| Python/C++ divergence | P1 | Golden/event tolerance fail | Shared conformance kit, chặn release |
-| Review overload | P1 | Alerts cần review × phút/alert | TCO gồm true/false/uncertain alerts; ký review capacity |
-
-Không chọn sẵn ba process, shared-memory IPC, WORM compliance mode, Kubernetes hoặc HA đa site. Những lựa chọn đó cần fault test, threat model, retention và SLA; rollback phải giữ trust high-water mark và data compatibility.
-
-## Độ bền SQLite và upload evidence (cập nhật 2026-10-17)
-
-- SQLite WAL-reset race sửa ở 3.51.3 (backport 3.44.6/3.50.7). Python hệ thống và `.venv-oracle` đều dùng 3.45.1 (libsqlite3-0 3.45.1-1ubuntu2.8; chưa xác minh backport của distro). `apps/edge/doctor.py` cảnh báo không chặn; pin bản đã sửa trước pilot.
-- HTTP 413 khi upload là operational fault: không retry, giữ nguyên pin cục bộ, request ở trạng thái `failed` với `operational_fault`; ACK metadata không giải phóng clip. Cần sizing artifact tối đa theo bitrate/GOP thực. Chi tiết: [log](../logs/2026-10-17-sqlite-upload.md).
+| Recorder bị ảnh hưởng khi Analytics treo/crash | **P0** | Kill/treo tiến trình AI làm hở segment video | Tách luồng đọc stream theo Camera Stream ADR; kiểm chứng lỗi `X01/X02` ở `G1` |
+| Đầy đĩa, mòn thẻ nhớ/SSD hoặc lỗi ghi I/O | **P0** | `disk_time_to_full_estimate` giảm, lỗi `fsync`, vượt reserve | Áp dụng `StorageQuotaGuard`, bảo vệ clip unACK, dự phòng vùng trống cho SQLite WAL |
+| Quá nhiệt hoặc sụt FPS khi chạy dài ngày trên board đích | **P0** | `frame_age` tăng, thermal throttle trong bài soak 24–72h | Giảm số camera/module trên mỗi thiết bị hoặc nâng SKU phần cứng; không hạ ngưỡng AI tùy tiện |
+| Trượt miền dữ liệu (domain shift) giữa clip lab và CCTV thực địa | **P0** | Tăng báo động giả hoặc bỏ sót qua negative audit | Khóa chặt ODD CCTV cố định 720p–1080p, bổ sung `person_lying_persistent` và kiểm định `G2` theo site |
+| Chưa hoàn tất bản quyền weights hoặc phê duyệt quyền riêng tư | **P0** | Thiếu hồ sơ cấp phép thương mại cho model/dataset hoặc site | Chặn triển khai thương mại cho tới khi có hồ sơ pháp lý ký duyệt (`YOLOX` Apache-2.0 khác với quyền dùng từng bộ weights/tập huấn luyện) |
+| Kích hoạt nhầm cấu hình lỗi, tấn công replay cấu hình hoặc lệch đồng hồ | **P0** | Bundle sai chữ ký, sai target, `trust_sequence <= HWM` hoặc `clock_synchronized=False` | Đã có `SignedConfigStore` + HWM đơn điệu + giữ nguyên LKG + canary auto-rollback (`#34, #35`) |
+| Bão gói tin rác (malformed storm) từ thiết bị lỗi hoặc bị xâm nhập | **P1** | Tăng đột biến lỗi schema `4xx` trên endpoint ingestion | Đã có `MalformedStormGuard` cô lập theo từng thiết bị (`429` có giới hạn forensic sample, `#41`) |
+| Quá tải nhân sự trực xác minh (review overload) | **P1** | Số cảnh báo cần duyệt × số phút/cảnh báo vượt ca trực | Đo thực tế từ pilot (`ReviewHours/month`), điều chỉnh ROI/lịch/ngưỡng trước khi nhân rộng |

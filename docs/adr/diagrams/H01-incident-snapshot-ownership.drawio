@@ -1,7 +1,50 @@
-<?xml version="1.0" encoding="UTF-8"?><mxfile host="app.diagrams.net"><diagram id="snapshot-ownership" name="Proposed snapshot ownership"><mxGraphModel adaptiveColors="auto" page="1" pageWidth="1260" pageHeight="760"><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="title" value="H01 · Approved design: Suspected incident snapshot ownership" style="text;html=1;fontSize=22;fontStyle=1;fontFamily=Helvetica;align=left;" vertex="1" parent="1"><mxGeometry x="40" y="20" width="1160" height="56" as="geometry"/></mxCell><mxCell id="features" value="Feature modules
-Independent rules / state / anchors" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1"><mxGeometry x="40" y="240" width="180" height="76" as="geometry"/></mxCell><mxCell id="context" value="Runtime and feature context
-Session / lineage / quality / config" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1"><mxGeometry x="280" y="100" width="180" height="76" as="geometry"/></mxCell><mxCell id="snapshot" value="Suspected incident module
-Construct / validate full snapshot" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e9f2eb;strokeColor=#176345;strokeWidth=3;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1"><mxGeometry x="280" y="240" width="180" height="76" as="geometry"/></mxCell><mxCell id="evidence" value="EvidenceLifecycle
-Durable intent before pin" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1"><mxGeometry x="520" y="240" width="180" height="76" as="geometry"/></mxCell><mxCell id="outbox" value="EventOutbox
-Event + outbox + request intent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1"><mxGeometry x="760" y="100" width="180" height="76" as="geometry"/></mxCell><mxCell id="recorder" value="Recorder
-Pin / finalize / receipt" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1"><mxGeometry x="760" y="380" width="180" height="76" as="geometry"/></mxCell><mxCell id="e1" value="scenario facts" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="features" target="snapshot"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="e2" value="authoritative context" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="context" target="snapshot"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="e3" value="validated snapshot" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="snapshot" target="evidence"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="e4" value="atomic commit" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="evidence" target="outbox"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="e5" value="pin after intent" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="evidence" target="recorder"><mxGeometry relative="1" as="geometry"/></mxCell><mxCell id="legend" value="Approved design; not implemented. Solid box = module; green outline = deep module. No runtime implementation or readiness claim." style="text;html=1;fontSize=13;fontFamily=Helvetica;align=left;whiteSpace=wrap;" vertex="1" parent="1"><mxGeometry x="40" y="680" width="1160" height="48" as="geometry"/></mxCell></root></mxGraphModel></diagram></mxfile>
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net">
+  <diagram id="snapshot-ownership" name="Accepted snapshot ownership">
+    <mxGraphModel adaptiveColors="auto" page="1" pageWidth="1260" pageHeight="760">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="H01 · Accepted architecture: Suspected incident snapshot ownership" style="text;html=1;fontSize=22;fontStyle=1;fontFamily=Helvetica;align=left;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="1160" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="features" value="Feature modules&#10;Independent rules / state / anchors" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="240" width="180" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="context" value="Runtime and feature context&#10;Session / lineage / quality / config" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="280" y="100" width="180" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="snapshot" value="Suspected incident module&#10;Construct / validate full snapshot" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e9f2eb;strokeColor=#176345;strokeWidth=3;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="280" y="240" width="180" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="evidence" value="EvidenceLifecycle&#10;Durable intent before pin" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="520" y="240" width="180" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="outbox" value="EventOutbox&#10;Event + outbox + request intent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="760" y="100" width="180" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="recorder" value="Recorder&#10;Pin / finalize / receipt" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#536159;strokeWidth=1;fontFamily=Helvetica;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="760" y="380" width="180" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="scenario facts" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="features" target="snapshot">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" value="authoritative context" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="context" target="snapshot">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" value="validated snapshot" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="snapshot" target="evidence">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" value="atomic commit" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="evidence" target="outbox">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" value="pin after intent" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;defaultLabelBackgroundColor=gap;strokeColor=#536159;fontFamily=Helvetica;fontSize=12;" edge="1" parent="1" source="evidence" target="recorder">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="legend" value="Accepted architecture (Python reference implemented; native target conformance pending per G3-G5). Solid box = module; green outline = deep module." style="text;html=1;fontSize=13;fontFamily=Helvetica;align=left;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="40" y="680" width="1160" height="48" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

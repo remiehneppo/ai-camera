@@ -1,34 +1,31 @@
-# Tài liệu hệ thống AI Camera
+# Tài liệu kỹ thuật hệ thống AI Camera
 
-**Cập nhật hệ thống: 2026-10-30.** Toàn bộ 893 unit & integration tests (188 subtests) và kiểm tra kiểu tĩnh `mypy` (72 source files) toàn dự án xanh. Hiện tại 29 tickets đã hoàn thành (`done`) và 10 tickets đạt mức thử nghiệm (`partial`) trong software lab. 5 nhóm tính năng nhận diện trên Edge đã hoạt động trong software lab: Person-down (US09), Tai nạn giao thông (US08), Xâm nhập vùng nguy hiểm (US10 / #57), Đỗ xe sai vùng/giờ (US05), và Tập trung đông người / gây rối (US06).
+**Cập nhật:** 2026-10-30 · **Kiểm chứng hiện tại:** **896 unit & integration tests** (`188` subtests) và **`mypy` trên 72 source files** xanh.  
+**Trạng thái thực thi:** Software-lab Python reference hoàn chỉnh cho 5 nhóm cảnh báo trên Edge (`person_down`, `vehicle_incident`, `danger_zone`, `illegal_parking`, `crowd_incident`), snapshot tập trung ([ADR-0005](adr/0005-incident-snapshot-ownership.md)), semantic replay dùng chung pipeline ([ADR-0006](adr/0006-semantic-replay-pipeline-reuse.md)), backend FastAPI/MongoDB, lưu trữ/truy hồi evidence, signed config/canary/rollback và tự chủ WAN 24h. Native C++ core (`#10/#12`), target hardware conformance/capacity (`G3`) và nghiệm thu thực địa (`G4–G5`) đang mở.
 
-ODD phần cứng được khóa cứng: **100% camera CCTV giao thông cố định, độ nét từ HD (720p) đến 2MP (1080p)**; loại bỏ camera hành trình (dashcam) và camera độ nét thấp (< 720p).
+**Ràng buộc ODD cố định:** Hệ thống chỉ thiết kế và nghiệm thu cho **camera CCTV giao thông gắn cố định, độ phân giải HD (1280×720) đến Full HD (1920×1080)**. Loại trừ vĩnh viễn camera hành trình (dashcam) và luồng độ phân giải thấp (`< 720p`).
 
-## Đọc theo nhu cầu
+## Bản đồ tài liệu chuẩn
 
-| Cần biết | Tài liệu chuẩn |
+| Nhu cầu tra cứu | Tài liệu chuẩn |
 |---|---|
-| Hệ thống làm gì, các thuật ngữ domain chuẩn | [CONTEXT](../CONTEXT.md) |
-| Định nghĩa các nhóm an toàn đô thị, tham số, hard negatives và gates | [Requirement tình huống](requirements/urban-safety-scenarios.md) |
-| Module, dependency, ODD camera cố định và fault boundary | [Kiến trúc hệ thống](architecture/system-architecture.md) |
-| Hợp đồng API, anchor alert_condition, signed config, rollback, WAN outage và retention | [Hợp đồng tích hợp](architecture/contracts.md) |
-| Quyết định kiến trúc cốt lõi | [ADR-0001 pipeline](adr/0001-feature-pipeline-boundaries.md), [ADR-0002 downstream](adr/0002-server-downstream-event-publishing.md), [ADR-0003 backend](adr/0003-fastapi-mongodb-backend.md), [ADR-0004 contracts](adr/0004-integration-contracts.md) |
-| Snapshot và semantic replay Python reference | [ADR-0005 snapshot](adr/0005-incident-snapshot-ownership.md), [ADR-0006 replay](adr/0006-semantic-replay-pipeline-reuse.md), [OpenSpec design](../openspec/changes/deepen-incident-snapshots-and-replay/design.md), [Tiến độ và kiểm chứng](../openspec/changes/deepen-incident-snapshots-and-replay/tasks.md), [Log triển khai](logs/2026-10-29-architecture-deepening-review.md#implementation-authorized--2026-10-30) |
-| Phase, ownership, phân bổ trách nhiệm | [Plan triển khai](architecture/implementation-plan.md) |
-| Theo dõi tiến độ và chọn việc | [Tracker thực thi](../.scratch/system-build-slices/PRD.md) và [Index mở rộng](../.scratch/system-build-slices/requirements-expansion-index.md) |
-| Sổ đăng ký dataset video (CCTV 720p–1080p, quy tắc loại bỏ dashcam) | [Sổ đăng ký dataset](datasets/video-datasets.md) |
-| Công cụ tải video CCTV cố định chuẩn ODD từ Hugging Face | [fetch_traffic_cctv_dataset.py](../tools/fetch_traffic_cctv_dataset.py) |
-| Đánh giá đa kịch bản nhận diện trên video (Person-down, Xe, Đỗ xe, Đám đông) | [eval_all_scenarios.py](../tools/eval_all_scenarios.py) |
-| Đối chiếu replay dataset trước khi có camera thật & truy vết/sửa lỗi `fall_0005` | [Replay pre-camera](logs/2026-10-30-pre-camera-dataset-replay.md), [Truy vết & sửa T1 fall_0005](logs/2026-10-30-fall-0005-anomaly-trace.md) |
-| Chi tiết nghiệm thu theo module | [18 checklist module](implementation-checklists/README.md) |
-| Cross-module failure tests và release gates | [Integration/G0–G5](implementation-checklists/integration-release.md) |
-| Facts/ODD/sizing và benchmark CPU 28–45 FPS | [Deployment readiness](architecture/deployment-readiness.md) |
-| Baseline đã kiểm chứng vs Ứng viên tương lai (RF-DETR/ViTPose/Orin NX) | [Ứng viên công nghệ](requirements/technology-candidates.md) |
+| Từ điển thuật ngữ domain bắt buộc | [CONTEXT.md](../CONTEXT.md) |
+| Các quyết định kiến trúc đã chốt (ADR-0001 → ADR-0006) | [Mục lục ADR](adr/README.md) |
+| Kiến trúc tổng thể, phân lớp, cấu trúc mã nguồn và fault boundaries | [Kiến trúc hệ thống](architecture/system-architecture.md) |
+| Hợp đồng tích hợp: snapshot, evidence anchor/pin, review, probe, signed config, WAN outage | [Hợp đồng tích hợp](architecture/contracts.md) |
+| Phân chia trách nhiệm, trạng thái phase P0–P5 và lộ trình gate G0–G5 | [Kế hoạch triển khai](architecture/implementation-plan.md) |
+| Điều kiện sẵn sàng triển khai, site profile mẫu và rủi ro trước pilot | [Deployment readiness](architecture/deployment-readiness.md) |
+| Cấu hình máy lab, số đo tham chiếu x86 và protocol kiểm thử tối thiểu | [Hồ sơ lab & protocol](architecture/lab-profile.md) |
+| Định nghĩa 14 nhóm tình huống an toàn đô thị, tham số và hard negatives | [Requirement tình huống](requirements/urban-safety-scenarios.md) |
+| Baseline công nghệ hiện hành và điều kiện đánh giá ứng viên (RF-DETR, ViTPose, Orin NX) | [Ứng viên công nghệ](requirements/technology-candidates.md) |
+| Sổ đăng ký video dataset, kết quả rà soát ODD và lệnh replay chuẩn | [Sổ đăng ký dataset video](datasets/video-datasets.md) |
+| Hướng dẫn review ranh giới SOLID, ma trận 45 lỗi X01–X45 và release gates | [Mục lục checklist](implementation-checklists/README.md) · [Ranh giới SOLID](implementation-checklists/architecture-analysis.md) · [Integration & G0–G5](implementation-checklists/integration-release.md) |
+| Runbook xử lý sự cố vận hành synthetic probe | [Synthetic Probe Runbook](runbooks/synthetic-probe-operational-fault.md) |
+| Tracker thực thi theo lát cắt dọc (68 tickets) | [Tracker PRD](../.scratch/system-build-slices/PRD.md) · [Index mở rộng](../.scratch/system-build-slices/requirements-expansion-index.md) |
 
-## Nguồn chuẩn và cập nhật
+## Bằng chứng kiểm chứng & nhật ký kỹ thuật trọng tâm
 
-ADR/quyết định accepted xác định lựa chọn; requirements định nghĩa phạm vi nghiệp vụ; architecture/contracts đặc tả hành vi; plan xác định scope/owner; tracker slices xác định thứ tự và tiến độ; checklist xác định bằng chứng nghiệm thu. Nếu chúng mâu thuẫn phải sửa các tài liệu chịu ảnh hưởng, không dùng log hoặc research để âm thầm ghi đè quyết định.
-
-Chỉ claim/cập nhật Execution ở ticket slices. Module checklist giữ task IDs và link evidence; không claim/đóng như một backlog thứ hai. Gate chỉ accepted khi report và owner sign-off đủ; thiết kế được duyệt không phải runtime đã pass.
-
-Các điểm còn mở gồm facts/site/target/protocol production trong readiness và mục 15 kiến trúc, cùng ngưỡng/gate từng nhóm và kiểm thử policy evidence theo loại trong requirement tình huống (Q36 giữ baseline person-down). Không hỏi lại event ring, MongoDB hoặc native C++ P1 đã chốt. RKNN là nhánh theo target; G3 conformance/capacity vẫn bắt buộc cho mọi target.
+- **Kiến trúc Snapshot & Semantic Replay (2026-10-30):** [OpenSpec design](../openspec/changes/deepen-incident-snapshots-and-replay/design.md) · [Log phê duyệt & triển khai](logs/2026-10-29-architecture-deepening-review.md) · [Log code review & sửa lỗi hậu cutover](logs/2026-10-30-head-minus-3-code-review.md).
+- **Tái cấu trúc & làm sạch hệ thống tài liệu (2026-10-30):** [Biên bản refactor & dọn tài liệu lỗi thời](logs/2026-10-30-docs-refactor-and-prune.md).
+- **Kiểm định Video Replay & Đính chính ODD trước camera thật (2026-10-30):** [Replay 17 clip & rút phân loại ODD giả](logs/2026-10-30-pre-camera-dataset-replay.md) · [Truy vết & sửa lỗi T1 `fall_0005`](logs/2026-10-30-fall-0005-anomaly-trace.md).
+- **Benchmark thông lượng tham chiếu trên CPU x86:** [Báo cáo Benchmark Pipeline](reports/2026-10-21-pipeline-benchmark-report.md) *(đo trên clip đô thị chẩn đoán 1080p, không thay thế nghiệm thu ODD hoặc capacity trên board nhúng đích)*.

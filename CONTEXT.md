@@ -1,6 +1,6 @@
 # AI Camera giao thông
 
-Hệ thống quan sát sự kiện an toàn đô thị từ video, giữ bằng chứng và hỗ trợ người trực xác minh. Ngôn ngữ dưới đây phản ánh [thiết kế hiện hành](docs/architecture/system-architecture.md); không ngụ ý đã triển khai.
+Hệ thống quan sát sự kiện an toàn đô thị từ video camera cố định, lưu giữ bằng chứng có provenance và hỗ trợ người trực xác minh. Từ điển dưới đây chuẩn hóa ngôn ngữ domain dùng chung giữa mã nguồn, [kiến trúc hệ thống](docs/architecture/system-architecture.md), [hợp đồng tích hợp](docs/architecture/contracts.md) và [danh mục tình huống](docs/requirements/urban-safety-scenarios.md); việc một thuật ngữ xuất hiện tại đây không đồng nghĩa nhóm cảnh báo đó đã được triển khai hoặc nghiệm thu hiện trường.
 
 ## Language
 
@@ -93,8 +93,6 @@ _Avoid_: Camera hành trình (dashcam - chuyển động di động tạo luồn
 
 ## Tài liệu liên quan
 
-- [Mục lục tài liệu](docs/README.md) và [hợp đồng tích hợp](docs/architecture/contracts.md).
-- [Requirement tình huống an toàn đô thị](docs/requirements/urban-safety-scenarios.md).
-- [Plan theo module](docs/architecture/implementation-plan.md).
-- [Deployment readiness](docs/architecture/deployment-readiness.md).
-- Quyết định chưa chốt nằm trong plan/readiness; không coi đề xuất là quyết định accepted.
+- [Mục lục tài liệu kỹ thuật](docs/README.md), [danh mục ADR](docs/adr/README.md) và [hợp đồng tích hợp](docs/architecture/contracts.md).
+- [Requirement tình huống an toàn đô thị](docs/requirements/urban-safety-scenarios.md) và [sổ đăng ký dataset video](docs/datasets/video-datasets.md).
+- [Kế hoạch triển khai](docs/architecture/implementation-plan.md) và [deployment readiness](docs/architecture/deployment-readiness.md).

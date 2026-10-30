@@ -8,7 +8,7 @@
 - Incident Engine: `IncidentEngine` (behavioral fall / dwell / cooldown analysis)
 - Pose Estimator: `RTMPose-Tiny` (ONNX, 256x192, 17 keypoints SimCC)
 - Storage & Outbox: `FileRecorder` (segment ring buffer) & `EventOutbox` (SQLite WAL)
-
+- **Phạm vi báo cáo:** Số đo thông lượng & độ trễ phần mềm tham chiếu trên CPU x86 (`120` frames, `sample_fps=10.0`). Hai clip đô thị 1080p dưới đây có zoom/reframing nên chỉ dùng để đo tải tính toán (compute profiling), **không** dùng làm bộ kiểm định chất lượng ODD camera giao thông cố định (xem [video-datasets.md](../datasets/video-datasets.md)).
 ---
 
 ## 1. Bảng so sánh tổng hợp
@@ -103,10 +103,10 @@
 
 ## 4. Đánh giá & Kết luận
 
-1. **Khả năng đáp ứng thời gian thực (Real-time capability):**
-   - **Baseline (YOLOX-Tiny + ByteTrack):** Đạt **~20–25 FPS** khi chạy CPU thuần trên độ phân giải 1080p, thời gian xử lý trung bình mỗi frame chỉ khoảng **38–45 ms**.
-   - **Khi bật RTMPose-Tiny:** Chi phí trích xuất 17 keypoints mỗi người chỉ khoảng **~5–8 ms**. Với số lượng người trong cảnh từ 2–5 người, pipeline vẫn duy trì tốc độ xử lý ổn định ở mức **~12–16 FPS**, hoàn toàn vượt chỉ tiêu ODD thiết kế ban đầu (**10–15 analysis FPS**).
-2. **Bộ nhớ RAM & Tài nguyên:**
-   - Mức chiếm dụng RAM ổn định ở mức **~200–260 MB RSS**, không xảy ra hiện tượng rò rỉ bộ nhớ (memory leak) nhờ cơ chế cache giới hạn kích thước (`bounded cache`) và buffer xoay vòng (`ring buffer`).
-3. **Khả năng mở rộng lên phần cứng nhúng (Edge Hardware / Jetson Orin NX):**
-   - Với kết quả đo được trên CPU x86, khi chuyển đổi sang TensorRT trên GPU nhúng (như Jetson Orin NX), độ trễ suy luận YOLOX và RTMPose dự kiến sẽ giảm thêm 3–5 lần, đảm bảo余裕 headroom cho việc mở rộng thêm các module phân tích hành vi khác.
+1. **Thông lượng tham chiếu trên CPU x86 (`Intel Core i5-12400F`):**
+   - **Baseline (`YOLOX-Tiny` + `ByteTrack`):** Đạt **17.88–19.37 FPS** trên luồng 1080p (P50 toàn pipeline **51.50–54.27 ms/frame**).
+   - **Full Pipeline + `RTMPose-Tiny`:** Chi phí suy luận `RTMPose-Tiny` đạt P50 **3.93–4.11 ms/người**; tổng thông lượng đạt **13.56–15.88 FPS** tùy mật độ người và phương tiện trong khung hình.
+2. **Bộ nhớ RAM (RSS):**
+   - Đỉnh bộ nhớ đạt **273.5–336.1 MB** cho cấu hình Baseline và **520.1–530.7 MB** khi nạp đồng thời session ONNX của `RTMPose-Tiny`, giữ ổn định nhờ ring buffer và cache có giới hạn kích thước.
+3. **Giới hạn suy diễn sang phần cứng nhúng:**
+   - Kết quả trên CPU x86 là mốc tham chiếu phần mềm trong lab, **không** thay thế bài đo conformance, nhiệt độ và capacity dài hạn (`G3`) trên thiết bị đích (Jetson Orin NX / TensorRT hoặc SBC ARM/RKNN).

@@ -69,7 +69,7 @@ Lưu ý: p95 chỉ đo `pipeline.process_frame`, gồm persistence cục bộ; l
 - Intersection: proposal đầu `vehicle_vehicle` tại 0.4004 giây gắn hai bbox tách rời; cảnh nền đổi hướng có thể làm nhiễu chuyển động pixel. **[INFERENCE]** Camera motion/bbox jitter cần điều tra trước khi hiệu chỉnh rule. Chưa gán false positive cho toàn bộ 76 proposal và không lấy mục tiêu 76→0.
 - `fall_0001`: ảnh từ 10.8 đến 20 giây có người nằm trên sàn. Proposal persistent-lying phát tại 14.6 giây, anchor 11.5; proposal fall phát tại 14.7, anchor 10.8. Hai loại khác nhau không tự động có nghĩa là duplicate. Không tính latency onset hay true-positive rate khi thiếu onset do người duyệt.
 - `fall_0002/0003`: một số mốc thấy người cúi/ngồi/đứng; tên file `fall` không đủ để gọi không phát proposal là miss. `fall_0004` tại 20 giây thấy người hạ thấp sát tường; cần review toàn timeline và pose/detection trước khi xác nhận miss.
-- `fall_0005`: mốc 12.8 giây của `suspected_disorder` trùng bối cảnh người dùng thiết bị tập; mốc 20 giây thấy người trên mặt sân nhưng không có Person-down proposal. Đưa cả hai khoảng vào danh sách cần review, chưa coi là false positive/false negative đã xác nhận.
+- `fall_0005`: mốc 12.8 giây của `suspected_disorder` trùng bối cảnh người dùng thiết bị tập; mốc 20 giây thấy người trên mặt sân nhưng không có Person-down proposal. Đưa cả hai khoảng vào danh sách cần review trong lượt chạy tại `HEAD=758bc95` này (cập nhật chuyển tiếp: truy vết frame-by-frame và bản sửa T1 cho `ByteTracker` / `CrowdIncidentEngine` đã được ghi nhận tại [2026-10-30-fall-0005-anomaly-trace.md](2026-10-30-fall-0005-anomaly-trace.md)).
 - Các clip này đã được agent xem; không dùng lại như unseen hold-out.
 
 ### Lệnh, phiên bản và artifact
