@@ -79,8 +79,11 @@ _Avoid_: Bịa đặt thời gian đứng yên qua khoảng mất dấu camera (
 **Crowd concentration**: Tập trung đông người theo số lượng người N và thời gian duy trì T trong vùng quan sát.
 _Avoid_: Mặc nhiên suy diễn thành gây rối trật tự.
 
-**Suspected public disorder**: Nghi ngờ gây rối trật tự dựa trên hành vi phân tán hoảng loạn (dispersal divergence), xung đột động học vận tốc cao, hoặc biến thiên góc hướng hỗn loạn trong đám đông.
-_Avoid_: Đám đông tụ tập trật tự, hàng đợi xe buýt, người chạy bộ riêng lẻ.
+**Suspected public disorder**: Nghi ngờ gây rối trật tự dựa trên hành vi phân tán hoảng loạn của nhiều người cùng lúc (multi-actor dispersal divergence), xung đột động học vận tốc cao, hoặc biến thiên góc hướng hỗn loạn trong một cụm không gian cục bộ.
+_Avoid_: Đám đông tụ tập trật tự, hàng đợi xe buýt, một cá nhân vận động/chạy bộ riêng lẻ hoặc gom gộp người ở hậu cảnh xa không cùng cụm.
+
+**Danger-zone intrusion**: Tình huống người đi vào và duy trì hiện diện trong vùng nguy hiểm (ROI) đang trong khung lịch giám sát theo cấu hình camera, không suy diễn danh tính hoặc quyền truy cập.
+_Avoid_: Người đi ngoài ROI, ngoài khung giờ hiệu lực, hoặc kết luận xâm nhập trái phép về mặt pháp lý.
 
 **Suspected property vandalism**: Nghi ngờ tác động đập/đá/phá kéo hoặc ném vật vào tài sản; độc lập với tương tác bạo lực giữa người.
 _Avoid_: Thiệt hại hoặc ý định đã xác định; mọi thao tác sửa chữa/dọn dẹp.

@@ -1,6 +1,6 @@
 # AI Camera lab slice
 
-Implemented software-lab slices: synthetic event/dashboard (#01), lab facts/protocol (#02), versioned review with audit trail and re-review triggers (#04), retry/revision delivery (#05), file recorder/replay (#06), durable pinned evidence (#07), server evidence upload/playback (#08), process crash recovery (#09), pinned ONNX detector oracle (#11), Python ByteTracker with time/session semantics (#13), end-to-end perception pipeline baseline (#14), live runner (#15 partial), startup/shutdown (#16), truthful health monitor with operational fault surfacing (#17), storage quota protection (#18), dataset feedback lineage (#20), ODD image quality assessment and freeze detection (#21 partial), RTMPose-Tiny pose estimation (#22), track gap and clock jump handling (#23 partial), pose scheduling and degradation (#24), person fall detection (#25), persistent lying (#26), on-vehicle review priority and danger overrides (#27), negative audit sampling and Horvitz-Thompson quality regression G2 (#28), device lifecycle and site access enforcement (#33), pose outcomes flow into person-down incidents (#53); plus independent module x camera configuration with fail-fast doctor reporting (#03 partial); retained-evidence retrieval commands with authorization (#32), a bounded inbound storm guard and edge counter (#41), a synthetic probe with pin-gap injection and runtime scheduler (#40), central retention with backup/restore reconciliation proof (#43), local/signed config activation (#34), canary deployment and authorized rollback with fresh sequence (#35), 24h WAN outage autonomy with metadata priority and backlog drain (#36), vehicle motion kinematics with US08 suspected incident flow (#47), illegal parking dwell time detection (#62 partial), and crowd concentration & suspected disorder (#63 partial). Full Python test suite (823 tests) passes across edge, health, quota, pose, review API, quality evaluation, device lifecycle, retention, vehicle motion, illegal parking, crowd incidents, and contracts. Native C++ acceleration (#10/#12), camera hardware RTSP field validation, and production target deployment acceptance (G3–G5) remain open as tracked in the [tracker](.scratch/system-build-slices/PRD.md). ODD constraint is strictly locked: 100% fixed traffic CCTV cameras (720p to 1080p); dashcams and low-resolution (<720p) streams are permanently disqualified. deployment acceptance (G3–G5) remain open as tracked in the [tracker](.scratch/system-build-slices/PRD.md).
+Implemented software-lab slices: synthetic event/dashboard (#01), lab facts/protocol (#02), versioned review with audit trail and re-review triggers (#04), retry/revision delivery (#05), file recorder/replay (#06), durable pinned evidence (#07), server evidence upload/playback (#08), process crash recovery (#09), pinned ONNX detector oracle (#11), Python ByteTracker with time/session semantics and coarse class-group association (#13), end-to-end perception pipeline baseline with centralized incident snapshot ownership (#14, ADR-0005), live runner (#15 partial), startup/shutdown (#16), truthful health monitor with operational fault surfacing (#17), storage quota protection (#18), dataset feedback lineage (#20), ODD image quality assessment and freeze detection (#21 partial), RTMPose-Tiny pose estimation (#22), track gap and clock jump handling (#23 partial), pose scheduling and degradation (#24), person fall detection (#25), persistent lying (#26), on-vehicle review priority and danger overrides (#27), negative audit sampling and Horvitz-Thompson quality regression G2 (#28), device lifecycle and site access enforcement (#33), pose outcomes flow into person-down incidents (#53); plus independent module x camera configuration with fail-fast doctor reporting (#03 partial), danger-zone intrusion module x camera carrier E2E (#57 partial), retained-evidence retrieval commands with authorization (#32), a bounded inbound storm guard and edge counter (#41), a synthetic probe with pin-gap injection and runtime scheduler (#40), central retention with backup/restore reconciliation proof (#43), local/signed config activation (#34), canary deployment and authorized rollback with fresh sequence (#35), 24h WAN outage autonomy with metadata priority and backlog drain (#36), vehicle motion kinematics with US08 suspected incident flow (#47), illegal parking dwell time detection (#62 partial), crowd concentration & spatial-cluster suspected disorder (#63 partial), and shared semantic replay pipeline reuse across evaluators (ADR-0006). Full Python test suite (893 tests, 188 subtests) and static type checks (`mypy`, 72 source files) pass across edge, snapshot ownership, semantic replay, health, quota, pose, review API, quality evaluation, device lifecycle, retention, vehicle motion, danger zone, illegal parking, crowd incidents, and contracts. Native C++ acceleration (#10/#12), camera hardware RTSP field validation, and production target deployment acceptance (G3–G5) remain open as tracked in the [tracker](.scratch/system-build-slices/PRD.md). ODD constraint is strictly locked: 100% fixed traffic CCTV cameras (720p to 1080p); dashcams and low-resolution (<720p) streams are permanently disqualified.
 
 ## Run the lab stack
 
@@ -326,18 +326,45 @@ out of git — only paths, sizes and hashes are recorded.
 | Tool | Purpose |
 |---|---|
 | `tools/eval_clip.py` | Run the full edge pipeline over one or more clips and report detections, incident events, pose outcomes and latency |
+| `tools/eval_vehicle.py` | Shared pipeline with vehicle-only policy; CLI speed/deceleration defaults 20/150, direct-call defaults 8/50 |
+| `tools/eval_all_scenarios.py` | Shared pipeline with Person-down, vehicle, parking and crowd policies; pose enabled unless `--no-pose` |
 | `tools/run_benchmark.py` | Throughput/latency benchmark; `--video <clip>` benchmarks a fetched dataset clip without editing the code |
 | `tools/a3d_labels.py` | Turn A3D per-frame accident labels into a clip label set (needs the external id mapping; never guesses) |
 | `tools/negative_audit_report.py` | Stratified negative audit / Horvitz-Thompson recall report for G2 |
 | `tools/oracle_conformance.py` | Detector oracle conformance against golden fixtures |
 | `tools/fetch_benchmark_dataset.py`, `tools/fetch_oracle_assets.py` | Download and verify the bundled benchmark clips and oracle artifacts |
 
+All three evaluators call `PerceptionPipeline.process_frame`, create a new replay session and temporary
+local recorder/outbox per clip, and never deliver events or media over the network. Reports include
+effective tracker/feature/pose configuration. Vehicle and multi-scenario replay retain tracker
+thresholds 0.25/0.08/0.3 rather than the pipeline defaults used by `eval_clip`.
+
+```sh
+.venv-oracle/bin/python tools/eval_vehicle.py --video /path/to/clip.mp4 --max-frames 30
+.venv-oracle/bin/python tools/eval_all_scenarios.py --videos /path/to/clip.mp4 --max-frames 30 --no-pose
+.venv-oracle/bin/python tools/eval_clip.py --video /path/to/clip.mp4 --max-frames 30
+```
+
+`eval_all_scenarios` preserves CLI/direct frame limits 200/300, vehicle policy 15/120, parking dwell
+20 seconds and crowd count/duration 5/3; effective pose processing queue/batch budget remains 30.
+`eval_clip` defaults to all sampled frames (`--max-frames 0`) with pose off. Detection statuses outside
+`ok`/`ok_empty` fail the run after pipeline status/gap handling; pose degradation remains separate.
+Explicit missing paths fail; unavailable auto-selected corpus paths retain existing skip behavior.
+Captures and temporary storage are cleaned up on errors as well as success.
+
+Where latency is reported, `latency_scope` identifies `process_frame` **including local snapshot
+persistence**, excluding decode, sampling, model startup and network. This scope is not directly
+comparable with historical evaluator timings. Zero events means zero emitted snapshots—not a reviewed
+negative, complete Evidence, quality gate or target-hardware acceptance. See the
+[implementation evidence](docs/logs/2026-10-29-architecture-deepening-review.md#replay-integration-review-corrections-and-cli-smoke).
+
 ## Checks
 
-Run the entire test suite with pytest using the oracle lab environment:
+Run static type checking and the entire test suite using the oracle lab environment:
 ```sh
+.venv-oracle/bin/python -m mypy domain/ apps/ tools/
 .venv-oracle/bin/python -m pytest -q
 ```
-All **676 tests** (126 subtests) across edge perception, tracking, fall incident engine, RTMPose estimation, ODD quality assessment, health monitoring, storage quota, server review API, negative audit G2 evaluation, device lifecycle, and event contracts pass.
+All **893 tests** (188 subtests) and `mypy` checks across **72 source files** pass across edge perception, centralized incident snapshots, semantic replay evaluators, tracking, fall/danger-zone/vehicle/parking/crowd incident engines, RTMPose estimation, ODD quality assessment, health monitoring, storage quota, server review API, negative audit G2 evaluation, device lifecycle, and event contracts.
 
 Run the local contract and SQLite tests with `python -m unittest discover -s tests`. MongoDB transaction, HTTP auth, and browser checks require the Compose lab to be running; they are separate from this unit suite.

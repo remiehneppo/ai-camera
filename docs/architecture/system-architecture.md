@@ -1,7 +1,7 @@
 # Kiến trúc hệ thống AI Camera giao thông tại edge
 
 **Trạng thái:** Thiết kế tham chiếu; đã có software-lab implementation từng phần (xem mục lục/tracker), không phải tuyên bố mọi API/runtime đã implement hoặc cam kết hiệu năng.
-**Cập nhật nghiệp vụ:** 2026-10-20. [Mục lục tài liệu](../README.md) · [Hợp đồng tích hợp chuẩn](contracts.md) · [Plan triển khai](implementation-plan.md).
+**Cập nhật nghiệp vụ & kiến trúc:** 2026-10-30. [Mục lục tài liệu](../README.md) · [Hợp đồng tích hợp chuẩn](contracts.md) · [Plan triển khai](implementation-plan.md).
 **Phạm vi:** Edge analytics, evidence, server cảnh báo/truy hồi và quản trị thiết bị.  
 **Cơ sở:** Các quyết định kỹ thuật trong hội thoại và [báo cáo nghiên cứu](../../traffic-ai-camera-research/report.md).
 
@@ -17,11 +17,12 @@
 
 ### 1.1a Danh mục an toàn đô thị và trạng thái thực thi trên Edge
 
-[Requirement tình huống](../requirements/urban-safety-scenarios.md) xác định danh mục mục tiêu an toàn đô thị. Hiện tại, **4 nhóm nghiệp vụ nhận diện cốt lõi đã được triển khai hoàn chỉnh trên Edge trong software lab**:
+[Requirement tình huống](../requirements/urban-safety-scenarios.md) xác định danh mục mục tiêu an toàn đô thị. Hiện tại, **5 nhóm nghiệp vụ nhận diện cốt lõi đã được triển khai trên Edge trong software lab**:
 1. **US09 — Person-down**: `person_fall` (có onset quan sát), `person_lying_persistent` (người nằm lòng đường), `person_on_stationary_vehicle` (người nằm/ngả trên xe đứng yên với độ ưu tiên review riêng), tích hợp RTMPose-Tiny keypoints 17 điểm.
 2. **US08 — Tai nạn có xe**: `vehicle_vehicle` (đâm va giữa các xe), `vehicle_pedestrian` (xe va chạm người đi bộ), `vehicle_rollover_or_barrier` (xe tự lật/ngã đâm dải phân cách) qua phân tích động học mượt hóa trajectory và rủi ro va chạm TTC / IoU không gian ảnh.
-3. **US05 — Đỗ xe sai vùng/giờ**: `illegal_parking` với cơ chế đo thời gian dừng đỗ liên tục (`dwell_seconds`) trong ROI cấm và khung giờ hạn chế (`ScheduleWindow`), loại bỏ 5 hard negatives.
-4. **US06 — Đông người & Nghi ngờ gây rối**: Phân tách 2 tầng độc lập: Tầng 1 `crowd_concentration` (tụ tập đông người theo số lượng và thời gian duy trì) và Tầng 2 `suspected_disorder` (phân tán hoảng loạn, xung đột động học vận tốc cao, biến thiên hướng hỗn loạn).
+3. **US10 — Vào vùng nguy hiểm**: `danger_zone_intrusion` theo dõi xâm nhập và thời gian duy trì liên tục (`dwell_seconds`) của người trong vùng ROI chuẩn hóa theo lịch hoạt động, làm carrier E2E cho kiến trúc `module × camera` (#57).
+4. **US05 — Đỗ xe sai vùng/giờ**: `illegal_parking` với cơ chế đo thời gian dừng đỗ liên tục (`dwell_seconds`) trong ROI cấm và khung giờ hạn chế (`ScheduleWindow`), loại bỏ 5 hard negatives.
+5. **US06 — Đông người & Nghi ngờ gây rối**: Phân tách 2 tầng độc lập: Tầng 1 `crowd_concentration` (tụ tập đông người theo số lượng và thời gian duy trì) và Tầng 2 `suspected_disorder` (gom cụm không gian theo kích thước phối cảnh, yêu cầu đa tác nhân phân tán hoảng loạn, xung đột động học vận tốc cao, hoặc biến thiên hướng hỗn loạn).
 
 Mỗi tính năng là một pipeline engine độc lập được đăng ký qua allowlisted factory (`ALLOWLISTED_FACTORIES = frozenset({"person_down", "vehicle_incident", "danger_zone", "illegal_parking", "crowd_incident"})`), chia sẻ chung nguồn video, detector YOLOX-Tiny và ByteTracker mà không trùng lặp inference.
 
@@ -61,6 +62,9 @@ Camera cố định ngoài trời đường phố/vỉa hè; vùng/lịch/ngoạ
 | Chia sẻ Hình học Biên (`apps/edge/geometry.py`) | Thuật toán ray-casting `point_in_polygon` tập trung duy nhất tại module dùng chung; không sao chép trùng lặp trong từng engine |
 | Lưu trữ Trạng thái Biên Bền vững | SQLite WAL mode (`synchronous=FULL`) bảo đảm `high_water_mark` và cấu hình LKG không bị lùi hay mất sau crash/reboot |
 | Điều phối Mạng WAN & Ưu tiên Metadata | `WanOutageCoordinator` đảm bảo tự chủ 24h, bảo vệ 50MB reserve, không xóa TTL unACK, ưu tiên metadata trước clips và giải tỏa backlog theo $B / (U - G)$ |
+| Tập trung quyền tạo Snapshot ([ADR-0005](../adr/0005-incident-snapshot-ownership.md)) | 5 feature engine chỉ trả dữ kiện `{anchor_kind, payload}`; `apps/edge/snapshot.py:build_incident_snapshot` sở hữu duy nhất việc dựng, gắn ngữ cảnh/lineage/quality và validate full snapshot trước khi persist |
+| Tái sử dụng Pipeline cho Semantic Replay ([ADR-0006](../adr/0006-semantic-replay-pipeline-reuse.md)) | Các evaluator (`eval_clip`, `eval_vehicle`, `eval_all_scenarios`) gọi chung `PerceptionPipeline.process_frame` với `origin="replay"` và storage tạm độc lập, loại bỏ vòng điều phối trùng lặp |
+| Ghép nối Track theo Nhóm Nhãn Thô (`ByteTracker`) | Liên kết IoU chỉ thực hiện trong cùng nhóm ngữ nghĩa thô (`person`, `two_wheeler`, `motor_vehicle`), chặn nhãn nhiễu (`bird`, `cat`, `bench`) nuốt track người mà vẫn giữ liên tục khi xe nháy `bus`/`truck` |
 
 **Công nghệ:** Python orchestration/reference pipeline, FastAPI/Python + MongoDB cho server; ONNX Runtime baseline inference; RKNN/MPP/RGA khi chọn target, alternative backends chỉ khi có yêu cầu. C++17 cho perception core (§6.7a), bindings pybind11/nanobind dự kiến; Python reference giữ làm oracle. Q19 chỉ yêu cầu dev demo UI đơn giản; chọn HTML/JS do FastAPI phục vụ để test qua API, không bắt buộc React app. Đội giao diện riêng ghép UI sản phẩm qua API/schema sau.
 
