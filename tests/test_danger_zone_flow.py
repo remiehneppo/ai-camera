@@ -22,7 +22,6 @@ from domain.alert_module_config import (
     RegionOfInterest,
     ScheduleWindow,
 )
-from domain.event_contract import validate_event
 
 
 def _make_track(
@@ -82,22 +81,13 @@ class TestDangerZoneIncidentEngine(unittest.TestCase):
         self.assertEqual(len(events), 1)
 
         event = events[0]
-        self.assertEqual(event["schema_version"], 1)
-        self.assertEqual(event["camera_id"], "cam-01")
+        self.assertEqual(event["anchor_kind"], "alert_condition")
         self.assertEqual(event["payload"]["taxonomy"], "danger_zone_intrusion")
         self.assertEqual(event["payload"]["severity"], "critical")
         self.assertEqual(event["payload"]["track_id"], 10)
         self.assertEqual(event["payload"]["anchor_time"], 1.1)
         self.assertEqual(event["payload"]["detection_time"], 1.1)
-
-        # Verify evidence request follows Q36 alert_condition anchor [-10, +20]
-        reqs = event["payload"]["evidence_requests"]
-        self.assertEqual(reqs[0]["evidence_anchor_kind"], "alert_condition")
-        self.assertEqual(reqs[0]["evidence_anchor_time"], 1.1)
-        self.assertEqual(reqs[0]["requested_start"], -8.9)
-        self.assertEqual(reqs[0]["requested_end"], 21.1)
-        validated = validate_event(event)
-        self.assertIsNotNone(validated)
+        self.assertEqual(self.engine.rule_lineage, [{"role": "danger_zone_incident", "version": "1.0.0"}])
 
     def test_cooldown_prevents_duplicate_spam(self) -> None:
         """Continuous presence inside danger zone respects cooldown."""

@@ -20,28 +20,23 @@ Rejects hard negatives:
 4) Pedestrians outside restricted ROI: do NOT count towards crowd threshold.
 5) Observation gap / track discontinuity: resets persistence timer.
 
-Generates valid full-snapshot event contracts passing domain.event_contract.validate_event:
-- pipeline_id: "crowd-incident-pipeline-v1"
-- pipeline_version: "1"
+Generates rule facts dictionaries:
+- anchor_kind: "alert_condition"
 - payload["taxonomy"]: "crowd_concentration" | "suspected_disorder"
 - payload["severity"]: "medium" (crowd) | "high" (disorder)
 - payload["crowd_count"]: count of pedestrians in cluster
-- evidence_requests with Q36 anchor: evidence_anchor_kind="alert_condition",
-  requested_start = anchor - 10, requested_end = anchor + 20.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 import math
 from typing import Any, Callable, Sequence
 from uuid import uuid4
 
 from apps.edge.geometry import is_normalized_polygon, point_in_polygon
 from apps.edge.tracker import Track
-from domain.event_contract import validate_event
-from domain.evidence_contract import make_evidence_request
+
 
 PEDESTRIAN_LABELS: frozenset[str] = frozenset({"person", "pedestrian"})
 
@@ -154,6 +149,7 @@ class CrowdIncidentEngine:
         self.origin = str(origin)
         self.model_artifact_hash = str(model_artifact_hash)
         self.module = str(module_name) if module_name is not None else self.factory
+        self.rule_lineage: list[dict[str, str]] = [{"role": "crowd_incident", "version": "1.0.0"}]
         self.calibration_version = str(calibration_version)
         self.quality_state = str(quality_state)
         self.frame_dimensions = frame_dimensions
@@ -392,24 +388,8 @@ class CrowdIncidentEngine:
 
         return is_disorder, metrics
 
-    def _create_event(self, ctx: CrowdEventContext) -> dict[str, Any]:
-        """Construct, validate, and return a validated full-snapshot event contract dictionary."""
-        event_id = str(uuid4())
-        message_id = f"msg-{uuid4().hex[:12]}"
-        request_id = f"req-{uuid4().hex[:12]}"
-        now_iso = (
-            datetime.now(timezone.utc)
-            .isoformat(timespec="microseconds")
-            .replace("+00:00", "Z")
-        )
-
-        evidence_request = make_evidence_request(
-            request_id=request_id,
-            session_id=self.stream_session_id,
-            anchor_kind="alert_condition",
-            anchor_time=ctx.anchor_time,
-        )
-
+    def _create_facts(self, ctx: CrowdEventContext) -> dict[str, Any]:
+        """Return rule facts (anchor kind and scenario payload); snapshot assembly belongs to the caller."""
         detections: list[dict[str, Any]] = []
         for p in ctx.pedestrians:
             detections.extend(p.history_detections[-10:])
@@ -417,10 +397,6 @@ class CrowdIncidentEngine:
             detections = detections[-40:]
 
         payload: dict[str, Any] = {
-            "quality": {
-                "state": self.quality_state,
-                "odd_supported": True if self.quality_state == "normal" else None,
-            },
             "taxonomy": ctx.taxonomy,
             "severity": ctx.severity,
             "crowd_count": int(ctx.crowd_count),
@@ -430,36 +406,14 @@ class CrowdIncidentEngine:
             "anchor_time": float(ctx.anchor_time),
             "detection_time": float(ctx.detection_time),
             "detections": detections,
-            "evidence_requests": [evidence_request],
         }
         if ctx.extra_payload:
             payload.update(ctx.extra_payload)
 
-        event_snapshot: dict[str, Any] = {
-            "schema_version": 1,
-            "message_id": message_id,
-            "event_id": event_id,
-            "revision": 1,
-            "device_id": self.device_id,
-            "camera_id": self.camera_id,
-            "stream_session_id": self.stream_session_id,
-            "pipeline_id": self.pipeline_id,
-            "pipeline_version": self.pipeline_version,
-            "origin": self.origin,
-            "event_time": now_iso,
-            "produced_at": now_iso,
-            "config_version": self.config_version,
-            "model_lineage": [
-                {"role": "crowd_detector", "version": "1.0.0"},
-                {"role": "crowd_incident", "version": "1.0.0"},
-            ],
-            "model_artifact_hash": self.model_artifact_hash,
-            "calibration_version": self.calibration_version,
-            "quality_state": self.quality_state,
+        return {
+            "anchor_kind": "alert_condition",
             "payload": payload,
         }
-
-        return validate_event(event_snapshot)
 
     def process_tracks(
         self,
@@ -557,7 +511,7 @@ class CrowdIncidentEngine:
                         pedestrians=pedestrians_in_roi,
                         extra_payload={"persistence_seconds": round(persistence_duration, 2)},
                     )
-                    events.append(self._create_event(ctx))
+                    events.append(self._create_facts(ctx))
                     self._last_crowd_alert_time = ts
         else:
             # Drops below threshold or excepted: reset persistence timer
@@ -578,7 +532,7 @@ class CrowdIncidentEngine:
                     pedestrians=pedestrians_in_roi,
                     extra_payload={"disorder_metrics": metrics},
                 )
-                events.append(self._create_event(ctx))
+                events.append(self._create_facts(ctx))
                 self._last_disorder_alert_time = ts
 
         return events

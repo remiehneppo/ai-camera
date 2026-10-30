@@ -24,6 +24,8 @@ class EventsFromOutboxTests(unittest.TestCase):
         self.assertEqual(records[0]["origin"], "synthetic")
         self.assertIsNone(records[0]["pose_status"], "no pose outcome recorded on this fixture")
         self.assertEqual(records[0]["revision"], 1)
+        self.assertEqual(records[0]["event_id"], event["event_id"])
+        self.assertEqual(records[0]["stream_session_id"], event["stream_session_id"])
 
     def test_an_empty_outbox_yields_no_events(self):
         with tempfile.TemporaryDirectory() as tmp:

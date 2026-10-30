@@ -207,4 +207,4 @@ class EdgeReviewFixTests(unittest.TestCase):
         self.assertEqual(observe(24, lying), [])
         second = observe(35, lying)
         self.assertEqual(len(second), 1)
-        self.assertEqual(second[0]["anchor_time"], 20)
+        self.assertEqual(second[0]["payload"]["anchor_time"], 20)

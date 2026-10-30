@@ -16,13 +16,11 @@ Covers:
     - Near-miss.
     - Perspective overlap.
     - Stationary vehicle without prior motion.
-  * Full snapshot validation against domain.event_contract.validate_event:
-    - pipeline_id: "vehicle-incident-pipeline-v1"
-    - pipeline_version: "1"
+  * Rule facts validation:
+    - anchor_kind: "alert_condition"
     - payload["taxonomy"]: "vehicle_incident"
     - payload["interaction_type"]: vehicle_vehicle | vehicle_pedestrian | vehicle_rollover_or_barrier
     - payload["severity"]: critical | high
-    - evidence_requests with Q36 anchor: evidence_anchor_kind="alert_condition", [-10s, +20s].
 """
 
 from __future__ import annotations
@@ -39,7 +37,6 @@ from apps.edge.vehicle_incident import (
     VehicleIncidentEngine,
     point_in_polygon,
 )
-from domain.event_contract import validate_event
 from domain.evidence_contract import make_evidence_request, validate_evidence_request
 from domain.vehicle_motion import (
     KinematicsTracker,
@@ -308,23 +305,19 @@ class TestVehicleIncidentEngineBranches(unittest.TestCase):
 
         self.assertGreaterEqual(len(events), 1, "Vehicle-vehicle crash must trigger an event")
         ev = events[0]
-        # Conformance check with domain.event_contract.validate_event
-        validate_event(ev)
-
-        self.assertEqual(ev["pipeline_id"], "vehicle-incident-pipeline-v1")
-        self.assertEqual(ev["pipeline_version"], "1")
+        self.assertEqual(ev["anchor_kind"], "alert_condition")
         self.assertEqual(ev["payload"]["taxonomy"], "vehicle_incident")
         self.assertEqual(ev["payload"]["interaction_type"], "vehicle_vehicle")
         self.assertIn(ev["payload"]["severity"], ("critical", "high"))
         self.assertIn(1, ev["payload"]["track_ids"])
         self.assertIn(2, ev["payload"]["track_ids"])
-
-        # Q36 Evidence request anchor check
-        req = ev["payload"]["evidence_requests"][0]
-        self.assertEqual(req["evidence_anchor_kind"], "alert_condition")
-        anchor = req["evidence_anchor_time"]
-        self.assertEqual(req["requested_start"], anchor - 10)
-        self.assertEqual(req["requested_end"], anchor + 20)
+        self.assertEqual(
+            self.engine.rule_lineage,
+            [
+                {"role": "vehicle_motion", "version": "1.0.0"},
+                {"role": "vehicle_incident", "version": "1.0.0"},
+            ],
+        )
 
     def test_branch_2_vehicle_pedestrian_incident(self) -> None:
         """Vehicle and pedestrian converge, followed by pedestrian impact / person down."""
@@ -349,12 +342,10 @@ class TestVehicleIncidentEngineBranches(unittest.TestCase):
 
         self.assertGreaterEqual(len(events), 1, "Vehicle-pedestrian impact must trigger an event")
         ev = events[0]
-        validate_event(ev)
-
+        self.assertEqual(ev["anchor_kind"], "alert_condition")
         self.assertEqual(ev["payload"]["taxonomy"], "vehicle_incident")
         self.assertEqual(ev["payload"]["interaction_type"], "vehicle_pedestrian")
         self.assertEqual(ev["payload"]["severity"], "critical")
-        self.assertEqual(ev["payload"]["evidence_requests"][0]["evidence_anchor_kind"], "alert_condition")
 
     def test_branch_3a_two_wheeler_rollover(self) -> None:
         """Two-wheeler moving and then experiencing sudden aspect ratio inversion (fallen over)."""
@@ -376,12 +367,10 @@ class TestVehicleIncidentEngineBranches(unittest.TestCase):
 
         self.assertGreaterEqual(len(events), 1, "Two-wheeler rollover must trigger an incident")
         ev = events[0]
-        validate_event(ev)
-
+        self.assertEqual(ev["anchor_kind"], "alert_condition")
         self.assertEqual(ev["payload"]["taxonomy"], "vehicle_incident")
         self.assertEqual(ev["payload"]["interaction_type"], "vehicle_rollover_or_barrier")
         self.assertEqual(ev["payload"]["severity"], "critical")
-        self.assertEqual(ev["payload"]["evidence_requests"][0]["evidence_anchor_kind"], "alert_condition")
 
     def test_branch_3b_vehicle_barrier_crash(self) -> None:
         """Vehicle moving at high speed crashes into barrier/curb and stops abruptly."""
@@ -405,7 +394,7 @@ class TestVehicleIncidentEngineBranches(unittest.TestCase):
 
         self.assertGreaterEqual(len(events), 1, "Barrier crash with sudden deceleration into stationary state must trigger")
         ev = events[0]
-        validate_event(ev)
+        self.assertEqual(ev["anchor_kind"], "alert_condition")
         self.assertEqual(ev["payload"]["interaction_type"], "vehicle_rollover_or_barrier")
 
 

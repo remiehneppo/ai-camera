@@ -23,17 +23,15 @@ Covers:
   * schedule_filter: active vs inactive schedule windows.
   * Multi-camera independence: multiple engine instances do not leak state.
   * Track format flexibility: supports both Track instances and dict representations.
-- Full Snapshot Validation:
-  * Full schema compliance with domain.event_contract.validate_event.
-  * pipeline_id == "crowd-incident-pipeline-v1", pipeline_version == "1".
-  * Q36 alert_condition anchor: [-10s, +20s] with policy lab-pre10-post20-v1.
+- Rule Facts Validation:
+  * Rule facts compliance (anchor_kind="alert_condition", payload scenario fields).
 """
 
 from __future__ import annotations
 
 import math
 import unittest
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from apps.edge.crowd_incident import (
     PEDESTRIAN_LABELS,
@@ -41,7 +39,6 @@ from apps.edge.crowd_incident import (
     point_in_polygon,
 )
 from apps.edge.tracker import Track
-from domain.event_contract import validate_event
 from domain.evidence_contract import make_evidence_request
 
 
@@ -175,10 +172,7 @@ class TestCrowdConcentrationLayer(unittest.TestCase):
         self.assertEqual(len(events), 1)
 
         event = events[0]
-        self.assertEqual(event["pipeline_id"], "crowd-incident-pipeline-v1")
-        self.assertEqual(event["pipeline_version"], "1")
-        self.assertEqual(event["camera_id"], "cam-park-01")
-
+        self.assertEqual(event["anchor_kind"], "alert_condition")
         payload = event["payload"]
         self.assertEqual(payload["taxonomy"], "crowd_concentration")
         self.assertEqual(payload["severity"], "medium")
@@ -186,20 +180,7 @@ class TestCrowdConcentrationLayer(unittest.TestCase):
         self.assertEqual(payload["anchor_time"], 3.0)
         self.assertEqual(payload["detection_time"], 3.0)
         self.assertEqual(len(payload["track_ids"]), 5)
-
-        # Validate Q36 evidence request
-        ev_reqs = payload["evidence_requests"]
-        self.assertEqual(len(ev_reqs), 1)
-        req = ev_reqs[0]
-        self.assertEqual(req["evidence_anchor_kind"], "alert_condition")
-        self.assertEqual(req["evidence_anchor_time"], 3.0)
-        self.assertEqual(req["requested_start"], -7.0)  # anchor - 10 = 3 - 10 = -7
-        self.assertEqual(req["requested_end"], 23.0)   # anchor + 20 = 3 + 20 = 23
-        self.assertEqual(req["policy_version"], "lab-pre10-post20-v1")
-
-        # Full contract validation
-        validated = validate_event(event)
-        self.assertIsNotNone(validated)
+        self.assertEqual(engine.rule_lineage, [{"role": "crowd_incident", "version": "1.0.0"}])
 
     def test_crowd_concentration_configurable_thresholds(self) -> None:
         engine = CrowdIncidentEngine(
@@ -287,7 +268,7 @@ class TestSuspectedDisorderLayer(unittest.TestCase):
         self.assertGreater(event["payload"]["disorder_metrics"]["dispersal_rate"], 25.0)
 
         # Validate contract
-        validate_event(event)
+        self.assertEqual(event["anchor_kind"], "alert_condition")
 
     def test_disorder_aggressive_kinetic_surge(self) -> None:
         """Test aggressive kinetic surging (multiple people surging with high speed & acceleration)."""
@@ -643,22 +624,16 @@ class TestLifecycleAndOperationalControls(unittest.TestCase):
         self.assertEqual(engine.crowd_persistence_duration, 0.0)
 
 
-class TestEventContractValidation(unittest.TestCase):
-    """Rigorous verification of generated event contracts against domain schema."""
+class TestRuleFactsValidation(unittest.TestCase):
+    """Rigorous verification of generated rule facts against contract."""
 
     def test_all_contract_fields_conformance(self) -> None:
         engine = CrowdIncidentEngine(
             camera_id="camera-market-10",
             device_id="edge-jetson-01",
-            pipeline_id="crowd-incident-pipeline-v1",
-            pipeline_version="1",
-            config_version="crowd-incident-v1",
-            origin="live",
-            model_artifact_hash="sha256-crowd-incident-v1",
-            calibration_version="uncalibrated-image-v1",
-            quality_state="nominal",
             min_crowd_count=5,
             min_duration_seconds=3.0,
+            quality_state="nominal",
         )
 
         for t in [0.0, 1.0, 2.0, 3.0]:
@@ -668,35 +643,18 @@ class TestEventContractValidation(unittest.TestCase):
                 self.assertEqual(len(evs), 1)
                 evt = evs[0]
 
-        # Check schema version and identifiers
-        self.assertEqual(evt["schema_version"], 1)
-        self.assertEqual(evt["revision"], 1)
-        UUID(evt["event_id"])  # must be canonical UUID
-        UUID(evt["stream_session_id"])
-        self.assertTrue(evt["message_id"].startswith("msg-"))
-        self.assertEqual(evt["pipeline_id"], "crowd-incident-pipeline-v1")
-        self.assertEqual(evt["pipeline_version"], "1")
-        self.assertEqual(evt["origin"], "live")
-
-        # Check payload
+        self.assertEqual(evt["anchor_kind"], "alert_condition")
         payload = evt["payload"]
         self.assertEqual(payload["taxonomy"], "crowd_concentration")
         self.assertEqual(payload["severity"], "medium")
         self.assertEqual(payload["crowd_count"], 5)
-        self.assertEqual(payload["quality"]["state"], "nominal")
-
-        # Check evidence request
-        ev_req = payload["evidence_requests"][0]
-        self.assertEqual(ev_req["session_id"], evt["stream_session_id"])
-        self.assertEqual(ev_req["evidence_anchor_kind"], "alert_condition")
-        self.assertEqual(ev_req["evidence_anchor_time"], 3.0)
-        self.assertEqual(ev_req["requested_start"], -7.0)
-        self.assertEqual(ev_req["requested_end"], 23.0)
-
-        # Validate with official contract validator
-        validated = validate_event(evt)
-        self.assertEqual(validated["event_id"], evt["event_id"])
-
+        self.assertEqual(payload["anchor_time"], 3.0)
+        self.assertEqual(payload["detection_time"], 3.0)
+        self.assertEqual(len(payload["track_ids"]), 5)
+        self.assertEqual(engine.rule_lineage, [{"role": "crowd_incident", "version": "1.0.0"}])
+        self.assertEqual(engine.quality_state, "nominal")
+        self.assertEqual(engine.camera_id, "camera-market-10")
+        self.assertEqual(engine.device_id, "edge-jetson-01")
 
 if __name__ == "__main__":
     unittest.main()

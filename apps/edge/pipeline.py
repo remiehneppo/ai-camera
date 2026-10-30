@@ -40,8 +40,7 @@ from apps.edge.quota import StorageQuotaManager
 from apps.edge.recorder import FileRecorder
 from apps.edge.tracker import ByteTracker
 from apps.edge.uploader import EdgeUploader
-from domain.event_contract import validate_event
-from domain.evidence_contract import make_evidence_request
+from apps.edge.snapshot import build_incident_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -637,57 +636,40 @@ class PerceptionPipeline:
                 pose_outcomes=pose_outcomes,
                 frame_dimensions=frame_dims,
             )
-            for item in (incidents or ()):
-                if not isinstance(item, dict):
-                    continue
-                if "schema_version" in item and "payload" in item:
-                    item["camera_id"] = self.camera_id
-                    item["device_id"] = self.device_id
-                    item["stream_session_id"] = self.stream_session_id
-                    item["origin"] = self.origin
-                    item["config_version"] = getattr(engine, "config_version", self.config_version)
-                    item["calibration_version"] = self.calibration_version
-
-                    # Propagate real detector provenance while retaining module rule lineage
-                    real_detector_entry = {
-                        "role": "detector",
-                        "version": self.model_lineage[0].get("version", "unknown") if self.model_lineage else "unknown",
-                    }
-                    existing_lineage = item.get("model_lineage", [])
-                    module_entries = [
-                        entry for entry in existing_lineage
-                        if entry.get("role") not in {"detector", "person_detector", "vehicle_detector", "crowd_detector"}
-                    ]
-                    item["model_lineage"] = [real_detector_entry] + module_entries
-                    item["model_artifact_hash"] = self.model_artifact_hash
-
-                    for req in item.get("payload", {}).get("evidence_requests", []):
-                        req["session_id"] = self.stream_session_id
-                    cap_name = str(getattr(engine, "factory", getattr(engine, "module", "unknown")))
-                    if self.capability_policies and cap_name in self.capability_policies:
-                        scoped = assess_capability_quality(
-                            rgb,
-                            capability=cap_name,
-                            camera_id=self.camera_id,
-                            site_id=self.site_id,
-                            policy=self.capability_policies[cap_name],
-                        )
-                        item["payload"]["quality"] = scoped["quality"]
-                        item["payload"]["capability_scope"] = scoped["scope"]
-                        item["quality_state"] = scoped["quality"]["state"]
-                    else:
-                        item["payload"]["quality"] = dict(self.quality)
-                        item["quality_state"] = self.quality_state
-                    validated_item = validate_event(item)
-                    self.evidence.persist(validated_item)
-                    emitted_events.append(validated_item)
-                elif item.get("taxonomy") in {
-                    "person_fall",
-                    "person_lying_persistent",
-                    "person_on_stationary_vehicle",
-                }:
-                    event = self._handle_incident(item, ts, rgb=rgb)
-                    emitted_events.append(event)
+            for facts in (incidents or ()):
+                cap_name = str(getattr(engine, "factory", getattr(engine, "module", "person_down")))
+                quality = self.quality
+                scope = None
+                if cap_name in self.capability_policies:
+                    scoped = assess_capability_quality(
+                        rgb,
+                        capability=cap_name,
+                        camera_id=self.camera_id,
+                        site_id=self.site_id,
+                        policy=self.capability_policies[cap_name],
+                    )
+                    quality = scoped["quality"]
+                    scope = scoped["scope"]
+                context = {
+                    "camera_id": self.camera_id,
+                    "device_id": self.device_id,
+                    "stream_session_id": self.stream_session_id,
+                    "origin": self.origin,
+                    "model_lineage": self._event_model_lineage(),
+                    "model_artifact_hash": self.model_artifact_hash,
+                    "calibration_version": self.calibration_version,
+                    "quality": quality,
+                    "capability_scope": scope,
+                }
+                feature = {
+                    "pipeline_id": self.pipeline_id if cap_name == "person_down" else engine.pipeline_id,
+                    "pipeline_version": self.pipeline_version if cap_name == "person_down" else engine.pipeline_version,
+                    "config_version": getattr(engine, "config_version", None) or self.config_version,
+                    "rule_lineage": getattr(engine, "rule_lineage", []),
+                }
+                snapshot = build_incident_snapshot(facts, context=context, feature=feature)
+                self.evidence.persist(snapshot)
+                emitted_events.append(snapshot)
 
         return emitted_events
 
@@ -742,98 +724,6 @@ class PerceptionPipeline:
                 "version": str(model_id),
             })
         return lineage
-
-    def _handle_incident(self, incident: dict[str, Any], timestamp: float, *, rgb: Any = None) -> dict[str, Any]:
-        """Construct validated Event snapshot, pin ring buffer, and atomically enqueue to outbox."""
-        event_id = str(uuid4())
-        message_id = f"msg-{uuid4().hex[:12]}"
-        request_id = f"req-{uuid4().hex[:12]}"
-        anchor_time = float(incident.get("anchor_time", timestamp))
-        taxonomy = str(incident.get("taxonomy", "person_fall"))
-        anchor_kind = str(incident.get("anchor_kind", "onset"))
-        severity = str(incident.get("severity", "critical"))
-
-        now_iso = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
-
-        # Create structured evidence request: [anchor_time - 10, anchor_time + 20]
-        evidence_request = make_evidence_request(
-            request_id=request_id,
-            session_id=self.stream_session_id,
-            anchor_kind=anchor_kind,
-            anchor_time=anchor_time,
-        )
-
-        if self.capability_policies and "person_down" in self.capability_policies:
-            scoped = assess_capability_quality(
-                rgb,
-                capability="person_down",
-                camera_id=self.camera_id,
-                site_id=self.site_id,
-                policy=self.capability_policies["person_down"],
-            )
-            quality_info = scoped["quality"]
-            cap_scope: dict[str, Any] | None = scoped["scope"]
-            quality_state = scoped["quality"]["state"]
-        else:
-            quality_info = dict(self.quality)
-            cap_scope = None
-            quality_state = self.quality_state
-
-        payload: dict[str, Any] = {
-            "quality": quality_info,
-            "taxonomy": taxonomy,
-            "lifecycle": "candidate",
-            "severity": severity,
-            "confidence": float(incident.get("confidence", 0.9)),
-            "track_id": incident.get("track_id"),
-            "anchor_time": anchor_time,
-            "detection_time": float(incident.get("detection_time", timestamp)),
-            "detections": incident.get("detections", []),
-            "evidence_requests": [evidence_request],
-        }
-        if cap_scope is not None:
-            payload["capability_scope"] = cap_scope
-        pose_evidence = incident.get("pose_evidence")
-        if pose_evidence is not None:
-            payload["pose_evidence"] = pose_evidence
-        vehicle_track_id = incident.get("vehicle_track_id")
-        if vehicle_track_id is not None:
-            payload["vehicle_track_id"] = vehicle_track_id
-        association_uncertainty = incident.get("association_uncertainty")
-        if association_uncertainty is not None:
-            payload["association_uncertainty"] = association_uncertainty
-
-        event_snapshot: dict[str, Any] = {
-            "schema_version": 1,
-            "message_id": message_id,
-            "event_id": event_id,
-            "revision": 1,
-            "device_id": self.device_id,
-            "camera_id": self.camera_id,
-            "stream_session_id": self.stream_session_id,
-            "pipeline_id": self.pipeline_id,
-            "pipeline_version": self.pipeline_version,
-            "origin": self.origin,
-            "event_time": now_iso,
-            "produced_at": now_iso,
-            "config_version": self.config_version,
-            "model_lineage": self._event_model_lineage(),
-            "model_artifact_hash": self.model_artifact_hash,
-            "calibration_version": self.calibration_version,
-            "quality_state": quality_state,
-            "payload": payload,
-        }
-
-        # Validate event contract
-        validated_event = validate_event(event_snapshot)
-
-        self.evidence.persist(validated_event)
-
-        return validated_event
-
-    def _handle_fall_incident(self, incident: dict[str, Any], timestamp: float) -> dict[str, Any]:
-        """Backwards compatibility delegation to _handle_incident."""
-        return self._handle_incident(incident, timestamp)
 
     def request_pose(
         self,

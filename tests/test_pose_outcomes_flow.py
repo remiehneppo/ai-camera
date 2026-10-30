@@ -411,8 +411,10 @@ class PoseOutcomesFlowTests(unittest.TestCase):
             timestamp = round(timestamp + 0.5, 3)
         self.assertEqual(len(clock_events), 1)
         clock_event = clock_events[0]
-        self.assertEqual(clock_event["taxonomy"], "person_lying_persistent")
-        clock_evidence = clock_event["pose_evidence"]
+        self.assertEqual(clock_event["anchor_kind"], "first_qualifying_observation")
+        payload = clock_event["payload"]
+        self.assertEqual(payload["taxonomy"], "person_lying_persistent")
+        clock_evidence = payload["pose_evidence"]
         self.assertEqual(clock_evidence["status"], "failed")
         self.assertEqual(clock_evidence["reason"], "inference_failed")
         self.assertEqual(clock_evidence["keypoints"], [])

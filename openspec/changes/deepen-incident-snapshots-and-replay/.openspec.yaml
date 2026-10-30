@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-10-29
+goal: Concentrate incident snapshot ownership and reuse runtime perception in
+  semantic replay without changing detector thresholds

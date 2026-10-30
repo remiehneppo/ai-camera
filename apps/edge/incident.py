@@ -192,7 +192,7 @@ class IncidentEngine:
             "request_id": None,
         }
 
-    def _create_incident(
+    def _create_facts(
         self,
         *,
         taxonomy: str,
@@ -205,14 +205,14 @@ class IncidentEngine:
         vehicle_track_id: int | str | None = None,
         association_uncertainty: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        incident = {
+        payload: dict[str, Any] = {
             "taxonomy": taxonomy,
+            "lifecycle": "candidate",
             "severity": severity,
-            "anchor_kind": anchor_kind,
+            "confidence": round(float(track.score), 3),
             "anchor_time": anchor_time,
             "detection_time": detection_time,
             "track_id": track.track_id,
-            "confidence": round(float(track.score), 3),
             "detections": self._format_detections(track),
             "pose_evidence": pose_evidence if pose_evidence is not None else {
                 "status": "none",
@@ -225,10 +225,13 @@ class IncidentEngine:
             },
         }
         if vehicle_track_id is not None:
-            incident["vehicle_track_id"] = vehicle_track_id
+            payload["vehicle_track_id"] = vehicle_track_id
         if association_uncertainty is not None:
-            incident["association_uncertainty"] = association_uncertainty
-        return incident
+            payload["association_uncertainty"] = association_uncertainty
+        return {
+            "anchor_kind": anchor_kind,
+            "payload": payload,
+        }
 
     def reset(self) -> None:
         self._states.clear()
@@ -519,7 +522,7 @@ class IncidentEngine:
                                      or ts - state.last_alert_time >= self.cooldown_seconds)):
                             # Confirmed fall incident!
                             anchor_time = state.onset_time if state.onset_time is not None else ts
-                            incident = self._create_incident(
+                            incident = self._create_facts(
                                 taxonomy="person_fall",
                                 severity="critical",
                                 anchor_kind="onset",
@@ -571,7 +574,7 @@ class IncidentEngine:
                                 severity = self.persistent_lying_severity
                                 vehicle_track_id = None
                                 association_uncertainty = None
-                            incident = self._create_incident(
+                            incident = self._create_facts(
                                 taxonomy=taxonomy,
                                 severity=severity,
                                 anchor_kind="first_qualifying_observation",

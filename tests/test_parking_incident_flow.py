@@ -16,14 +16,11 @@ Covers:
     4) Vehicle parked outside restricted ROI: does NOT trigger.
     5) Observation gap / track discontinuity: resets dwell timer (does not fabricate long dwell
        duration across gaps).
-  * Generates valid full-snapshot event contracts passing domain.event_contract.validate_event:
-    - pipeline_id: "parking-incident-pipeline-v1"
-    - pipeline_version: "1"
+  * Rule facts validation:
+    - anchor_kind: "alert_condition"
     - payload["taxonomy"]: "illegal_parking"
     - payload["severity"]: "low" or "medium"
     - payload["dwell_seconds"]: measured dwell time
-    - evidence_requests with Q36 anchor: evidence_anchor_kind="alert_condition",
-      requested_start = anchor - 10, requested_end = anchor + 20.
   * Lifecycle operations: reset, observation_gap, per-camera state isolation.
 """
 
@@ -40,7 +37,6 @@ from apps.edge.parking_incident import (
 )
 from apps.edge.tracker import Track
 from domain.alert_module_config import ScheduleWindow
-from domain.event_contract import validate_event
 
 
 def _make_track(
@@ -166,29 +162,13 @@ class TestParkingIncidentDwellDetection(unittest.TestCase):
         self.assertEqual(len(evs), 1)
 
         event = evs[0]
-        # Validate event schema and contract conformance
-        validated = validate_event(event)
-        self.assertEqual(validated["pipeline_id"], "parking-incident-pipeline-v1")
-        self.assertEqual(validated["pipeline_version"], "1")
-        self.assertEqual(validated["camera_id"], "cam-urban-01")
-        self.assertEqual(validated["device_id"], "device-edge-01")
-
-        payload = validated["payload"]
+        self.assertEqual(event["anchor_kind"], "alert_condition")
+        payload = event["payload"]
         self.assertEqual(payload["taxonomy"], "illegal_parking")
         self.assertEqual(payload["severity"], "low")
         self.assertAlmostEqual(payload["dwell_seconds"], 2.0, places=1)
         self.assertEqual(payload["track_id"], track_id)
-
-        # Check Q36 evidence request
-        reqs = payload["evidence_requests"]
-        self.assertEqual(len(reqs), 1)
-        req = reqs[0]
-        self.assertEqual(req["evidence_anchor_kind"], "alert_condition")
-        self.assertEqual(req["evidence_anchor_time"], 2.0)
-        self.assertEqual(req["requested_start"], -8.0)  # 2.0 - 10
-        self.assertEqual(req["requested_end"], 22.0)   # 2.0 + 20
-        self.assertEqual(req["policy_version"], "lab-pre10-post20-v1")
-
+        self.assertEqual(self.engine.rule_lineage, [{"role": "parking_incident", "version": "1.0.0"}])
     def test_alert_cooldown_prevents_spamming(self) -> None:
         track_id = 102
         # Advance to trigger at t=2.0

@@ -67,7 +67,7 @@ class TestIncidentGap(unittest.TestCase):
         self.assertEqual(self._run(track, [10.5, 11.0, 11.5, 12.0, 12.5], LIE), [])
         out = self._run(track, [13.0, 13.5], LIE)
         self.assertEqual(len(out), 1)
-        self.assertAlmostEqual(out[0]["anchor_time"], 10.0, delta=0.05)
+        self.assertAlmostEqual(out[0]["payload"]["anchor_time"], 10.0, delta=0.05)
 
     def test_backward_clock_jump_resets_state(self) -> None:
         track = Track(1, LIE, 0.9, "person", 5.0)

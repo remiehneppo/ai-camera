@@ -20,7 +20,25 @@ def noisy(seed):
 
 class FallEngine:
     def process_tracks(self, tracks, timestamp):
-        return [{"taxonomy": "person_fall"}]
+        return [{
+            "anchor_kind": "onset",
+            "payload": {
+                "taxonomy": "person_fall",
+                "severity": "critical",
+                "confidence": 0.9,
+                "anchor_time": float(timestamp),
+                "detection_time": float(timestamp),
+                "lifecycle": "candidate",
+                "detections": [
+                    {
+                        "bbox": [2.0, 2.0, 10.0, 14.0],
+                        "score": 0.9,
+                        "timestamp": float(timestamp),
+                        "label": "person",
+                    }
+                ],
+            },
+        }]
 
     def reset(self): pass
     def observation_gap(self): pass

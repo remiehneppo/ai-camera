@@ -32,6 +32,8 @@ Mỗi AI revision là **full snapshot**, không phải delta. Identity revision 
 
 Fixtures bắt buộc: 3→1→2, chỉ có revision 3, hai writer concurrent, same-key/different-hash, camera/origin/session substitution, retry đổi sent_at nhưng không đổi hash và AI update xen review.
 
+Implementation note (2026-10-30, ADR-0005): Python reference dùng `apps.edge.snapshot.build_incident_snapshot(facts, *, context, feature)` để dựng full snapshot. Năm feature engine chỉ trả `{anchor_kind, payload}`; payload giữ dữ kiện tình huống, Person-down giữ lifecycle candidate, không cấp event/request identity hoặc quality. Pipeline đánh giá quality hiện tại/scoped và truyền camera/session/Origin/model/calibration cùng producer/config/rule riêng của feature. Constructor từ chối envelope hoặc quality/Evidence request do facts cung cấp, giữ source anchor và tạo bản sao metadata độc lập trước validation. Pipeline chuyển snapshot hợp lệ cho EvidenceLifecycle trước khi trả event; schema và ownership persist/retry ở §3.1 không đổi. Bằng chứng và giới hạn nằm trong [log triển khai](../logs/2026-10-29-architecture-deepening-review.md#producer-integration-and-controlled-runtime-smoke); đây không phải nghiệm thu native lifecycle hoặc raw Evidence coverage.
+
 ## 3. Evidence request, anchor và pin receipt
 
 Lab dùng event ring 10 phút, pre10/post20 giây, server clips 7 ngày; outage24h là sizing budget, không phải TTL xóa unACK. Timestamp khoảng evidence dùng source event-time và mapping sang recorder session kèm uncertainty, không join frame IDs giữa hai RTSP sessions.
@@ -132,6 +134,8 @@ Tests: bật provider sau nhiều tuần disabled không phát backlog; policy c
 **Semantic replay:** cùng observation sequence hoặc fixed sampling plan, PTS/virtual event clock, bounded queues có backpressure và watermark source–recorder–consumer. Recorder không xoay ring vượt watermark analytics chưa xử lý. Event-time deadlines được mô phỏng theo policy fixture, không drop vì tốc độ wall-clock máy test. Fast hay paced phải cho cùng domain outcomes trên cùng inputs; perception numeric parity theo tolerance.
 
 **Realtime stress:** nguồn chạy tốc độ thực, deadlines/queue-age/drop/fairness thật. Kiểm freshness, coverage, memory, recorder gap và degraded state; không yêu cầu event set giống semantic replay nếu quan sát bị drop. Cả hai mode giữ origin=replay và chặn notification.
+
+Implementation note (2026-10-30, ADR-0006): Ba command eval_vehicle/eval_all_scenarios/eval_clip dùng cùng process_frame của Python reference, mỗi video có session và storage tạm riêng, Origin=replay và không có uploader. Hai evaluator từng gọi stage trực tiếp nay chỉ giữ decode/sampling/cấu hình/tổng hợp; tracker và ngưỡng feature giữ giá trị hiệu lực riêng từng caller. Multi-scenario giữ scheduler xử lý pose của PoseManager với queue/batch 30 như đường cũ, không thay bằng budget 8 của bộ chọn candidate cũ. Detection ngoài ok/ok_empty kết thúc lỗi sau khi pipeline ghi status/gap; pose failed/skipped vẫn độc lập. Báo cáo lấy snapshot đã persist, ghi effective_config và phạm vi process_frame gồm local persistence khi có latency. Capture và storage tạm được dọn ở đường bình thường/lỗi; explicit path không tồn tại trả lỗi, không báo thành công. Bằng chứng trong [log](../logs/2026-10-29-architecture-deepening-review.md#replay-integration-review-corrections-and-cli-smoke) chỉ xác nhận đường semantic replay/reference đã chạy, không thay native lifecycle, raw coverage, target stress hoặc server/review acceptance.
 
 ## 8. Target gate có điều kiện
 

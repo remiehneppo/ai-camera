@@ -253,16 +253,17 @@ class TestIncidentEngine(unittest.TestCase):
         self.assertEqual(len(incidents), 1, "Expected fall incident confirmation at t=4.6")
 
         incident = incidents[0]
-        self.assertEqual(incident["taxonomy"], "person_fall")
-        self.assertEqual(incident["severity"], "critical")
         self.assertEqual(incident["anchor_kind"], "onset")
-        self.assertEqual(incident["track_id"], 20)
-        self.assertAlmostEqual(incident["detection_time"], 4.6, delta=0.05)
+        payload = incident["payload"]
+        self.assertEqual(payload["taxonomy"], "person_fall")
+        self.assertEqual(payload["severity"], "critical")
+        self.assertEqual(payload["track_id"], 20)
+        self.assertAlmostEqual(payload["detection_time"], 4.6, delta=0.05)
         # Onset timestamp should point back to when the fall started/reached ground (~1.0 - 1.5s)
-        self.assertGreaterEqual(incident["anchor_time"], 1.0)
-        self.assertLessEqual(incident["anchor_time"], 1.6)
-        self.assertGreaterEqual(incident["confidence"], 0.8)
-        self.assertTrue(len(incident["detections"]) > 0)
+        self.assertGreaterEqual(payload["anchor_time"], 1.0)
+        self.assertLessEqual(payload["anchor_time"], 1.6)
+        self.assertGreaterEqual(payload["confidence"], 0.8)
+        self.assertTrue(len(payload["detections"]) > 0)
 
     def test_cooldown_prevents_duplicate_incidents(self) -> None:
         """30-second cooldown per track_id suppresses duplicate events."""
@@ -356,14 +357,15 @@ class TestIncidentEngine(unittest.TestCase):
         self.assertEqual(len(incidents), 1, "Expected persistent lying incident at t=3.1")
 
         incident = incidents[0]
-        self.assertEqual(incident["taxonomy"], "person_lying_persistent")
-        self.assertEqual(incident["severity"], "high")
         self.assertEqual(incident["anchor_kind"], "first_qualifying_observation")
-        self.assertAlmostEqual(incident["anchor_time"], 0.0, delta=0.05)
-        self.assertAlmostEqual(incident["detection_time"], 3.1, delta=0.05)
-        self.assertEqual(incident["track_id"], 50)
-        self.assertGreaterEqual(incident["confidence"], 0.8)
-        self.assertTrue(len(incident["detections"]) > 0)
+        payload = incident["payload"]
+        self.assertEqual(payload["taxonomy"], "person_lying_persistent")
+        self.assertEqual(payload["severity"], "high")
+        self.assertAlmostEqual(payload["anchor_time"], 0.0, delta=0.05)
+        self.assertAlmostEqual(payload["detection_time"], 3.1, delta=0.05)
+        self.assertEqual(payload["track_id"], 50)
+        self.assertGreaterEqual(payload["confidence"], 0.8)
+        self.assertTrue(len(payload["detections"]) > 0)
 
     def test_persistent_lying_separate_duration_and_severity(self) -> None:
         """Configuring separate duration (e.g. 5.0s) and severity ('high') is respected."""
@@ -396,10 +398,10 @@ class TestIncidentEngine(unittest.TestCase):
         track.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=5.1)
         incidents = engine.process_tracks([track], timestamp=5.1)
         self.assertEqual(len(incidents), 1)
-        self.assertEqual(incidents[0]["taxonomy"], "person_lying_persistent")
-        self.assertEqual(incidents[0]["severity"], "high")
         self.assertEqual(incidents[0]["anchor_kind"], "first_qualifying_observation")
-        self.assertAlmostEqual(incidents[0]["anchor_time"], 0.0, delta=0.05)
+        self.assertEqual(incidents[0]["payload"]["taxonomy"], "person_lying_persistent")
+        self.assertEqual(incidents[0]["payload"]["severity"], "high")
+        self.assertAlmostEqual(incidents[0]["payload"]["anchor_time"], 0.0, delta=0.05)
 
     def test_persistent_lying_early_recovery_cancels_candidate(self) -> None:
         """Standing or sitting semi-upright before duration cancels persistent lying candidate."""
@@ -454,8 +456,8 @@ class TestIncidentEngine(unittest.TestCase):
         track1.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=5.6)
         incidents = self.engine.process_tracks([track1], timestamp=5.6)
         self.assertEqual(len(incidents), 1)
-        self.assertEqual(incidents[0]["taxonomy"], "person_lying_persistent")
-        self.assertAlmostEqual(incidents[0]["anchor_time"], 2.5, delta=0.05)
+        self.assertEqual(incidents[0]["payload"]["taxonomy"], "person_lying_persistent")
+        self.assertAlmostEqual(incidents[0]["payload"]["anchor_time"], 2.5, delta=0.05)
 
     def test_persistent_lying_cooldown_prevents_duplicate_spam(self) -> None:
         """Persistent lying triggers once, and cooldown suppresses repeated alerts."""
@@ -470,7 +472,7 @@ class TestIncidentEngine(unittest.TestCase):
         track.update([100.0, 220.0, 260.0, 280.0], score=0.9, timestamp=3.1)
         incidents = self.engine.process_tracks([track], timestamp=3.1)
         self.assertEqual(len(incidents), 1)
-        self.assertEqual(incidents[0]["taxonomy"], "person_lying_persistent")
+        self.assertEqual(incidents[0]["payload"]["taxonomy"], "person_lying_persistent")
 
         # Continues lying through t=25.0 (within 30s cooldown) -> no spam
         for i in range(32, 250):
@@ -519,8 +521,8 @@ class TestIncidentEngine(unittest.TestCase):
 
         incidents_2 = self.engine.process_tracks([track], timestamp=38.1)
         self.assertEqual(len(incidents_2), 1)
-        self.assertEqual(incidents_2[0]["track_id"], 60)
-        self.assertAlmostEqual(incidents_2[0]["anchor_time"], 35.0, delta=0.1)
+        self.assertEqual(incidents_2[0]["payload"]["track_id"], 60)
+        self.assertAlmostEqual(incidents_2[0]["payload"]["anchor_time"], 35.0, delta=0.1)
 
     def test_engine_reset_clears_states(self) -> None:
         track = Track(track_id=70, bbox=[100.0, 100.0, 160.0, 260.0], score=0.9, label="person", timestamp=0.0)
@@ -562,9 +564,9 @@ class TestIncidentEngine(unittest.TestCase):
         track.update([108.0, 220.0, 268.0, 280.0], score=0.9, timestamp=3.1)
         incidents = self.engine.process_tracks([track], timestamp=3.1)
         self.assertEqual(len(incidents), 1)
-        self.assertEqual(incidents[0]["taxonomy"], "person_lying_persistent")
         self.assertEqual(incidents[0]["anchor_kind"], "first_qualifying_observation")
-        self.assertAlmostEqual(incidents[0]["anchor_time"], 0.0, delta=0.05)
+        self.assertEqual(incidents[0]["payload"]["taxonomy"], "person_lying_persistent")
+        self.assertAlmostEqual(incidents[0]["payload"]["anchor_time"], 0.0, delta=0.05)
 
     def test_id_switch_without_prior_standing_triggers_persistent_lying(self) -> None:
         """When an ID switch occurs on a lying person without prior standing, the new track triggers persistent lying with its first observation anchor."""
@@ -600,10 +602,10 @@ class TestIncidentEngine(unittest.TestCase):
         incidents = self.engine.process_tracks([track2], timestamp=4.1)
         self.assertEqual(len(incidents), 1)
         incident = incidents[0]
-        self.assertEqual(incident["taxonomy"], "person_lying_persistent")
-        self.assertEqual(incident["track_id"], 86)
         self.assertEqual(incident["anchor_kind"], "first_qualifying_observation")
-        self.assertAlmostEqual(incident["anchor_time"], 1.0, delta=0.05)
+        self.assertEqual(incident["payload"]["taxonomy"], "person_lying_persistent")
+        self.assertEqual(incident["payload"]["track_id"], 86)
+        self.assertAlmostEqual(incident["payload"]["anchor_time"], 1.0, delta=0.05)
 
     def test_non_person_tracks_ignored_by_incident_engine(self) -> None:
         """P0-01: IncidentEngine strictly ignores non-person tracks (e.g., car, truck)."""
@@ -642,7 +644,7 @@ class TestIncidentEngine(unittest.TestCase):
             t = round(i * 0.1, 2)
             track.update([300.0, 220.0, 460.0, 280.0], score=0.9, timestamp=t)
             for incident in self.engine.process_tracks([track], timestamp=t):
-                anchors.append(incident["anchor_time"])
+                anchors.append(incident["payload"]["anchor_time"])
         self.assertEqual(len(anchors), 1)
         self.assertAlmostEqual(anchors[0], 2.1, delta=0.01)
 
@@ -699,8 +701,8 @@ class TestIncidentEngine(unittest.TestCase):
                 self.assertEqual(incidents, [], f"Triggered prematurely at t={t} (needs 3.0s continuous stationary)")
             elif len(incidents) > 0:
                 self.assertEqual(len(incidents), 1)
-                self.assertEqual(incidents[0]["taxonomy"], "person_lying_persistent")
-                self.assertAlmostEqual(incidents[0]["anchor_time"], 2.0, delta=0.15)
+                self.assertEqual(incidents[0]["payload"]["taxonomy"], "person_lying_persistent")
+                self.assertAlmostEqual(incidents[0]["payload"]["anchor_time"], 2.0, delta=0.15)
                 triggered = True
                 break
         self.assertTrue(triggered, "Expected persistent lying incident after 3.0s stationary")
@@ -727,12 +729,12 @@ class TestIncidentEngine(unittest.TestCase):
 
         self.assertEqual(len(emitted), 1, "on-vehicle must still emit a review event")
         incident = emitted[0]
-        self.assertEqual(incident["taxonomy"], "person_on_stationary_vehicle")
-        self.assertEqual(incident["severity"], "low")
         self.assertEqual(incident["anchor_kind"], "first_qualifying_observation")
-        self.assertAlmostEqual(incident["anchor_time"], 1.0, delta=0.05)
-        self.assertEqual(incident["track_id"], 901)
-        self.assertEqual(incident["vehicle_track_id"], 900)
+        self.assertEqual(incident["payload"]["taxonomy"], "person_on_stationary_vehicle")
+        self.assertEqual(incident["payload"]["severity"], "low")
+        self.assertAlmostEqual(incident["payload"]["anchor_time"], 1.0, delta=0.05)
+        self.assertEqual(incident["payload"]["track_id"], 901)
+        self.assertEqual(incident["payload"]["vehicle_track_id"], 900)
 
     def test_rapid_fall_over_stationary_vehicle_stays_critical(self) -> None:
         """#27 danger override: an observed falling onset is never demoted for bbox overlap."""
@@ -757,9 +759,9 @@ class TestIncidentEngine(unittest.TestCase):
                 break
 
         self.assertEqual(len(emitted), 1)
-        self.assertEqual(emitted[0]["taxonomy"], "person_fall")
-        self.assertEqual(emitted[0]["severity"], "critical")
         self.assertEqual(emitted[0]["anchor_kind"], "onset")
+        self.assertEqual(emitted[0]["payload"]["taxonomy"], "person_fall")
+        self.assertEqual(emitted[0]["payload"]["severity"], "critical")
 
     def test_fallen_vehicle_beside_lying_person_is_not_low_priority(self) -> None:
         """#27 danger override: a fallen/overturned 2-wheeler keeps the high review priority."""
@@ -778,9 +780,9 @@ class TestIncidentEngine(unittest.TestCase):
             emitted.extend(engine.process_tracks([bike, person], timestamp=t))
 
         self.assertEqual(len(emitted), 1)
-        self.assertEqual(emitted[0]["taxonomy"], "person_lying_persistent")
-        self.assertEqual(emitted[0]["severity"], "high")
-        self.assertNotIn("vehicle_track_id", emitted[0])
+        self.assertEqual(emitted[0]["payload"]["taxonomy"], "person_lying_persistent")
+        self.assertEqual(emitted[0]["payload"]["severity"], "high")
+        self.assertNotIn("vehicle_track_id", emitted[0]["payload"])
 
     def test_moving_vehicle_arriving_after_lying_is_not_on_vehicle(self) -> None:
         """#27: a vehicle that was moving/arrived after the lying state started cannot demote."""
@@ -800,9 +802,9 @@ class TestIncidentEngine(unittest.TestCase):
             emitted.extend(engine.process_tracks([bike, person], timestamp=t))
 
         self.assertEqual(len(emitted), 1)
-        self.assertEqual(emitted[0]["taxonomy"], "person_lying_persistent")
-        self.assertEqual(emitted[0]["severity"], "high")
-        self.assertNotIn("vehicle_track_id", emitted[0])
+        self.assertEqual(emitted[0]["payload"]["taxonomy"], "person_lying_persistent")
+        self.assertEqual(emitted[0]["payload"]["severity"], "high")
+        self.assertNotIn("vehicle_track_id", emitted[0]["payload"])
 
     def test_vehicle_tilting_after_lying_onset_activates_danger_override(self) -> None:
         """#27 danger override: the qualifying vehicle must stay upright for low priority."""
@@ -822,9 +824,9 @@ class TestIncidentEngine(unittest.TestCase):
             emitted.extend(engine.process_tracks([bike, person], timestamp=t))
 
         self.assertEqual(len(emitted), 1)
-        self.assertEqual(emitted[0]["taxonomy"], "person_lying_persistent")
-        self.assertEqual(emitted[0]["severity"], "high")
-        self.assertNotIn("vehicle_track_id", emitted[0])
+        self.assertEqual(emitted[0]["payload"]["taxonomy"], "person_lying_persistent")
+        self.assertEqual(emitted[0]["payload"]["severity"], "high")
+        self.assertNotIn("vehicle_track_id", emitted[0]["payload"])
 
     def test_sudden_stopping_vehicle_triggers_danger_override(self) -> None:
         """#27: vehicle running at high speed and suddenly stopping before lying triggers danger override."""
@@ -851,9 +853,9 @@ class TestIncidentEngine(unittest.TestCase):
 
         self.assertEqual(len(emitted), 1)
         # Sudden stop acts as accident indicator: danger override keeps severity high
-        self.assertEqual(emitted[0]["taxonomy"], "person_lying_persistent")
-        self.assertEqual(emitted[0]["severity"], "high")
-        self.assertNotIn("vehicle_track_id", emitted[0])
+        self.assertEqual(emitted[0]["payload"]["taxonomy"], "person_lying_persistent")
+        self.assertEqual(emitted[0]["payload"]["severity"], "high")
+        self.assertNotIn("vehicle_track_id", emitted[0]["payload"])
 
     def test_fall_candidate_motion_does_not_overwrite_onset_time(self) -> None:
         """P1-10: Motion while in fall candidate updates lying_start_time but preserves onset_time."""
@@ -891,9 +893,9 @@ class TestIncidentEngine(unittest.TestCase):
                 break
 
         self.assertEqual(len(incidents), 1)
-        self.assertEqual(incidents[0]["taxonomy"], "person_fall")
+        self.assertEqual(incidents[0]["payload"]["taxonomy"], "person_fall")
         # Onset time must be the original fall start at 0.5, NOT the motion settling time at 1.0!
-        self.assertAlmostEqual(incidents[0]["anchor_time"], 0.5, delta=0.05)
+        self.assertAlmostEqual(incidents[0]["payload"]["anchor_time"], 0.5, delta=0.05)
 
     def test_incident_engine_roi_polygon_filtering(self) -> None:
         """P1-13: IncidentEngine filters tracks by bounding box foot point against roi_polygon."""
@@ -931,8 +933,8 @@ class TestIncidentEngine(unittest.TestCase):
             emitted.extend(incidents)
 
         self.assertEqual(len(emitted), 1)
-        self.assertEqual(emitted[0]["track_id"], 101)
-        self.assertEqual(emitted[0]["taxonomy"], "person_lying_persistent")
+        self.assertEqual(emitted[0]["payload"]["track_id"], 101)
+        self.assertEqual(emitted[0]["payload"]["taxonomy"], "person_lying_persistent")
 
 
 
@@ -1084,25 +1086,6 @@ class TestEdgePipelineIncidents(unittest.TestCase):
         self.assertAlmostEqual(payload["anchor_time"], 3.1, delta=0.05)
         self.assertEqual(payload["evidence_requests"][0]["evidence_anchor_kind"], "first_qualifying_observation")
         self.assertAlmostEqual(payload["evidence_requests"][0]["evidence_anchor_time"], 3.1, delta=0.05)
-
-    def test_handle_fall_incident_backward_compatibility(self) -> None:
-        """_handle_fall_incident delegates cleanly to _handle_incident without aliasing."""
-        incident = {
-            "taxonomy": "person_fall",
-            "severity": "critical",
-            "anchor_kind": "onset",
-            "anchor_time": 10.0,
-            "detection_time": 13.5,
-            "track_id": 99,
-            "confidence": 0.95,
-            "detections": [],
-        }
-        event = self.pipeline._handle_fall_incident(incident, 13.5)
-        self.assertEqual(event["payload"]["taxonomy"], "person_fall")
-        self.assertNotIn("anchor_kind", event["payload"])
-        self.assertEqual(event["payload"]["severity"], "critical")
-        self.assertEqual(event["payload"]["evidence_requests"][0]["evidence_anchor_kind"], "onset")
-        self.assertFalse(self.pipeline._handle_incident is self.pipeline._handle_fall_incident)
 
 
 if __name__ == "__main__":

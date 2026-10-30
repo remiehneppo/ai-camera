@@ -19,14 +19,11 @@ Rejects hard negatives:
 5) Observation gap / track discontinuity: resets dwell timer (does not fabricate long dwell
    duration across gaps).
 
-Generates valid full-snapshot event contracts passing domain.event_contract.validate_event:
-- pipeline_id: "parking-incident-pipeline-v1"
-- pipeline_version: "1"
+Generates rule facts dictionaries:
+- anchor_kind: "alert_condition"
 - payload["taxonomy"]: "illegal_parking"
 - payload["severity"]: "low" or "medium" (default "low")
 - payload["dwell_seconds"]: measured dwell time
-- evidence_requests with Q36 anchor: evidence_anchor_kind="alert_condition",
-  requested_start = anchor - 10, requested_end = anchor + 20.
 """
 
 from __future__ import annotations
@@ -40,8 +37,7 @@ from uuid import uuid4
 from apps.edge.geometry import is_normalized_polygon, point_in_polygon
 from apps.edge.tracker import Track
 from domain.alert_module_config import ScheduleWindow, WEEKDAYS
-from domain.event_contract import validate_event
-from domain.evidence_contract import make_evidence_request
+
 
 DEFAULT_VEHICLE_LABELS: frozenset[str] = frozenset({"car", "truck", "bus", "motorcycle"})
 
@@ -120,6 +116,7 @@ class ParkingIncidentEngine:
         self.origin = str(origin)
         self.model_artifact_hash = str(model_artifact_hash)
         self.module = str(module_name) if module_name is not None else self.factory
+        self.rule_lineage: list[dict[str, str]] = [{"role": "parking_incident", "version": "1.0.0"}]
         self.calibration_version = str(calibration_version)
         self.quality_state = str(quality_state)
         self.roi_polygon = roi_polygon
@@ -210,75 +207,31 @@ class ParkingIncidentEngine:
             self._tracks[tid] = state
         return state
 
-    def _build_event(
+    def _build_facts(
         self,
         track: Track,
         state: _VehicleParkingState,
         anchor_time: float,
         detection_time: float,
     ) -> dict[str, Any]:
-        """Construct, validate, and return a validated full-snapshot event contract dictionary."""
-        event_id = str(uuid4())
-        message_id = f"msg-{uuid4().hex[:12]}"
-        request_id = f"req-{uuid4().hex[:12]}"
-        now_iso = (
-            datetime.now(timezone.utc)
-            .isoformat(timespec="microseconds")
-            .replace("+00:00", "Z")
-        )
-
-        evidence_request = make_evidence_request(
-            request_id=request_id,
-            session_id=self.stream_session_id,
-            anchor_kind="alert_condition",
-            anchor_time=anchor_time,
-        )
-
+        """Return rule facts (anchor kind and scenario payload); snapshot assembly belongs to the caller."""
         detections: list[dict[str, Any]] = list(state.history_detections[-10:])
 
-        payload: dict[str, Any] = {
-            "quality": {
-                "state": self.quality_state,
-                "odd_supported": True if self.quality_state == "normal" else None,
+        return {
+            "anchor_kind": "alert_condition",
+            "payload": {
+                "taxonomy": "illegal_parking",
+                "severity": self.severity,
+                "confidence": round(float(track.score), 3),
+                "track_id": track.track_id,
+                "vehicle_label": track.label,
+                "dwell_seconds": round(float(state.dwell_seconds), 2),
+                "anchor_time": anchor_time,
+                "detection_time": detection_time,
+                "bbox": [round(float(c), 2) for c in track.bbox],
+                "detections": detections,
             },
-            "taxonomy": "illegal_parking",
-            "severity": self.severity,
-            "confidence": round(float(track.score), 3),
-            "track_id": track.track_id,
-            "vehicle_label": track.label,
-            "dwell_seconds": round(float(state.dwell_seconds), 2),
-            "anchor_time": anchor_time,
-            "detection_time": detection_time,
-            "bbox": [round(float(c), 2) for c in track.bbox],
-            "detections": detections,
-            "evidence_requests": [evidence_request],
         }
-
-        event_snapshot: dict[str, Any] = {
-            "schema_version": 1,
-            "message_id": message_id,
-            "event_id": event_id,
-            "revision": 1,
-            "device_id": self.device_id,
-            "camera_id": self.camera_id,
-            "stream_session_id": self.stream_session_id,
-            "pipeline_id": self.pipeline_id,
-            "pipeline_version": self.pipeline_version,
-            "origin": self.origin,
-            "event_time": now_iso,
-            "produced_at": now_iso,
-            "config_version": self.config_version,
-            "model_lineage": [
-                {"role": "vehicle_detector", "version": "1.0.0"},
-                {"role": "parking_incident", "version": "1.0.0"},
-            ],
-            "model_artifact_hash": self.model_artifact_hash,
-            "calibration_version": self.calibration_version,
-            "quality_state": self.quality_state,
-            "payload": payload,
-        }
-
-        return validate_event(event_snapshot)
 
     def process_tracks(
         self,
@@ -429,7 +382,7 @@ class ParkingIncidentEngine:
                     or (ts - state.last_alert_time) >= self.cooldown_seconds
                 )
                 if not state.triggered and cooldown_elapsed:
-                    event = self._build_event(
+                    event = self._build_facts(
                         track=track,
                         state=state,
                         anchor_time=ts,

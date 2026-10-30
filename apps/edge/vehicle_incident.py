@@ -17,29 +17,23 @@ Rejects hard negatives:
 - Perspective overlap: distant/background overlap without convergence velocity or abrupt motion change.
 - Stationary vehicle without prior motion: not treated as a crash confirmation.
 
-Generates valid event snapshots passing domain.event_contract.validate_event:
-- pipeline_id: "vehicle-incident-pipeline-v1"
-- pipeline_version: "1"
+Generates rule facts dictionaries:
+- anchor_kind: "alert_condition"
 - payload["taxonomy"]: "vehicle_incident"
 - payload["interaction_type"]: "vehicle_vehicle" | "vehicle_pedestrian" | "vehicle_rollover_or_barrier"
 - payload["severity"]: "critical" or "high"
-- evidence_requests with Q36 anchor: evidence_anchor_kind="alert_condition",
-  requested_start = anchor - 10, requested_end = anchor + 20.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 import math
 from typing import Any, Sequence
 from uuid import uuid4
 
 from apps.edge.geometry import is_normalized_polygon, point_in_polygon
 from apps.edge.tracker import Track
-from domain.event_contract import validate_event
-from domain.evidence_contract import make_evidence_request
-from apps.edge.geometry import point_in_polygon
+
 from domain.vehicle_motion import (
     KinematicsTracker,
     KinematicState,
@@ -128,6 +122,10 @@ class VehicleIncidentEngine:
         self.origin = str(origin)
         self.model_artifact_hash = str(model_artifact_hash)
         self.module = str(module_name) if module_name is not None else self.factory
+        self.rule_lineage: list[dict[str, str]] = [
+            {"role": "vehicle_motion", "version": "1.0.0"},
+            {"role": "vehicle_incident", "version": "1.0.0"},
+        ]
         self.calibration_version = str(calibration_version)
         self.quality_state = str(quality_state)
         self.roi_polygon = roi_polygon
@@ -209,7 +207,7 @@ class VehicleIncidentEngine:
             self._pairs[key] = pair
         return pair
 
-    def _build_event(
+    def _build_facts(
         self,
         interaction_type: str,
         severity: str,
@@ -220,69 +218,25 @@ class VehicleIncidentEngine:
         confidence: float,
         tracks: list[_TrackState],
     ) -> dict[str, Any]:
-        """Construct, validate, and return a validated full-snapshot event contract dictionary."""
-        event_id = str(uuid4())
-        message_id = f"msg-{uuid4().hex[:12]}"
-        request_id = f"req-{uuid4().hex[:12]}"
-        now_iso = (
-            datetime.now(timezone.utc)
-            .isoformat(timespec="microseconds")
-            .replace("+00:00", "Z")
-        )
-
-        evidence_request = make_evidence_request(
-            request_id=request_id,
-            session_id=self.stream_session_id,
-            anchor_kind="alert_condition",
-            anchor_time=anchor_time,
-        )
-
+        """Return rule facts (anchor kind and scenario payload); snapshot assembly belongs to the caller."""
         detections: list[dict[str, Any]] = []
         for t in tracks:
             detections.extend(t.history_detections[-10:])
 
-        payload: dict[str, Any] = {
-            "quality": {
-                "state": self.quality_state,
-                "odd_supported": True if self.quality_state == "normal" else None,
+        return {
+            "anchor_kind": "alert_condition",
+            "payload": {
+                "taxonomy": "vehicle_incident",
+                "interaction_type": interaction_type,
+                "severity": severity,
+                "confidence": round(float(confidence), 3),
+                "track_id": primary_track_id,
+                "track_ids": involved_track_ids,
+                "anchor_time": anchor_time,
+                "detection_time": detection_time,
+                "detections": detections,
             },
-            "taxonomy": "vehicle_incident",
-            "interaction_type": interaction_type,
-            "severity": severity,
-            "confidence": round(float(confidence), 3),
-            "track_id": primary_track_id,
-            "track_ids": involved_track_ids,
-            "anchor_time": anchor_time,
-            "detection_time": detection_time,
-            "detections": detections,
-            "evidence_requests": [evidence_request],
         }
-
-        event_snapshot: dict[str, Any] = {
-            "schema_version": 1,
-            "message_id": message_id,
-            "event_id": event_id,
-            "revision": 1,
-            "device_id": self.device_id,
-            "camera_id": self.camera_id,
-            "stream_session_id": self.stream_session_id,
-            "pipeline_id": self.pipeline_id,
-            "pipeline_version": self.pipeline_version,
-            "origin": self.origin,
-            "event_time": now_iso,
-            "produced_at": now_iso,
-            "config_version": self.config_version,
-            "model_lineage": [
-                {"role": "vehicle_motion", "version": "1.0.0"},
-                {"role": "vehicle_incident", "version": "1.0.0"},
-            ],
-            "model_artifact_hash": self.model_artifact_hash,
-            "calibration_version": self.calibration_version,
-            "quality_state": self.quality_state,
-            "payload": payload,
-        }
-
-        return validate_event(event_snapshot)
 
     def process_tracks(
         self,
@@ -438,7 +392,7 @@ class VehicleIncidentEngine:
                     v2.last_alert_time = ts
                     sev = "critical" if (pair.max_closing_speed > 30.0 or risk.iou > 0.2) else "high"
                     conf = min(0.99, max(0.85, (v1.last_score + v2.last_score) / 2.0))
-                    event = self._build_event(
+                    event = self._build_facts(
                         interaction_type="vehicle_vehicle",
                         severity=sev,
                         anchor_time=ts,
@@ -505,7 +459,7 @@ class VehicleIncidentEngine:
 
             if triggered:
                 state.last_alert_time = ts
-                event = self._build_event(
+                event = self._build_facts(
                     interaction_type="vehicle_rollover_or_barrier",
                     severity=severity,
                     anchor_time=ts,
@@ -570,7 +524,7 @@ class VehicleIncidentEngine:
                     v.last_alert_time = ts
                     p.last_alert_time = ts
                     conf = min(0.99, max(0.88, (v.last_score + p.last_score) / 2.0))
-                    event = self._build_event(
+                    event = self._build_facts(
                         interaction_type="vehicle_pedestrian",
                         severity="critical",
                         anchor_time=ts,

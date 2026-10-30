@@ -24,7 +24,25 @@ class TestPipelineRuntime(unittest.TestCase):
             outbox = EventOutbox(Path(root) / "state" / "events.sqlite3")
             class FallEngine:
                 def process_tracks(self, tracks, timestamp):
-                    return [{"taxonomy": "person_fall"}]
+                    return [{
+                        "anchor_kind": "onset",
+                        "payload": {
+                            "taxonomy": "person_fall",
+                            "severity": "critical",
+                            "confidence": 0.9,
+                            "anchor_time": float(timestamp),
+                            "detection_time": float(timestamp),
+                            "lifecycle": "candidate",
+                            "detections": [
+                                {
+                                    "bbox": [2.0, 2.0, 10.0, 14.0],
+                                    "score": 0.9,
+                                    "timestamp": float(timestamp),
+                                    "label": "person",
+                                }
+                            ],
+                        },
+                    }]
 
             pipeline = PerceptionPipeline(recorder=recorder, outbox=outbox, incident_engine=FallEngine())
             self.assertIs(pipeline.evidence.quota_manager, pipeline.health.quota_manager)
@@ -216,5 +234,175 @@ class TestPipelineRuntime(unittest.TestCase):
             fixed_pipeline.process_frame(dark_rgb, timestamp=1.0, frame_id=1, detections=[])
             self.assertEqual(fixed_pipeline.quality_state, "calibrated_fixed")
 
+
+    def test_invalid_facts_raise_value_error_before_event_or_outbox_persistence(self):
+        """Invalid facts (legacy flat, missing semantic fields, or reserved payload keys) raise ValueError before durable intent."""
+        with tempfile.TemporaryDirectory() as root:
+            recorder = FileRecorder(Path(root) / "ring")
+            outbox = EventOutbox(Path(root) / "state" / "events.sqlite3")
+
+            class InvalidFactEngine:
+                def __init__(self, mode: str):
+                    self.mode = mode
+
+                def process_tracks(self, tracks, timestamp):
+                    if self.mode == "legacy_flat":
+                        return [{"taxonomy": "person_fall"}]
+                    if self.mode == "reserved_key":
+                        return [{
+                            "anchor_kind": "onset",
+                            "payload": {
+                                "taxonomy": "person_fall",
+                                "severity": "critical",
+                                "confidence": 0.9,
+                                "anchor_time": float(timestamp),
+                                "detection_time": float(timestamp),
+                                "evidence_requests": [{"request_id": "forged"}],
+                            },
+                        }]
+                    if self.mode == "missing_semantic":
+                        return [{
+                            "anchor_kind": "onset",
+                            "payload": {
+                                "taxonomy": "person_fall",
+                            },
+                        }]
+                    return []
+
+            for mode in ("legacy_flat", "reserved_key", "missing_semantic"):
+                engine = InvalidFactEngine(mode=mode)
+                pipeline = PerceptionPipeline(recorder=recorder, outbox=outbox, incident_engine=engine)
+                rgb = np.zeros((16, 16, 3), dtype=np.uint8)
+                with self.assertRaises(ValueError):
+                    pipeline.process_frame(rgb, 10.0, 1, detections=[])
+
+                self.assertEqual(outbox.pending(), [])
+                self.assertEqual(outbox.evidence_requests(), [])
+
+    def test_scoped_and_fallback_quality_distinct_with_feature_identity_across_session_resets(self):
+        """Per-feature scoped quality stays distinct from fallback, and producer identities survive session reset."""
+        with tempfile.TemporaryDirectory() as root:
+            recorder = FileRecorder(Path(root) / "ring")
+            outbox = EventOutbox(Path(root) / "state" / "events.sqlite3")
+
+            class CustomFeatureEngine:
+                factory = "custom_alert"
+                pipeline_id = "custom-alert-pipeline-v1"
+                pipeline_version = "2"
+                config_version = "cfg-alert-v1"
+                rule_lineage = [{"role": "rule", "name": "custom_rule", "version": "1.0.0"}]
+
+                def process_tracks(self, tracks, timestamp):
+                    return [{
+                        "anchor_kind": "alert_condition",
+                        "payload": {
+                            "taxonomy": "custom_alert",
+                            "severity": "medium",
+                            "confidence": 0.85,
+                            "anchor_time": float(timestamp),
+                            "detection_time": float(timestamp),
+                            "alert_metric": 42,
+                        },
+                    }]
+
+                def reset(self):
+                    pass
+
+            custom_policy = {
+                "version": "scoped-v1",
+                "low_light_mean": 5.0,
+                "glare_mean": 240.0,
+                "low_contrast_std": 5.0,
+                "blur_laplacian_var": 4.0,
+                "freeze_frames": 3,
+            }
+            engine = CustomFeatureEngine()
+            pipeline = PerceptionPipeline(
+                recorder=recorder,
+                outbox=outbox,
+                incident_engines=[engine],
+                capability_policies={"custom_alert": custom_policy},
+            )
+
+            # Frame with mean brightness 8: fallback policy (< 15) is low_light, but scoped policy (> 5) is normal
+            dim_rgb = np.repeat(((np.indices((32, 32)).sum(axis=0) % 2) * 16).astype(np.uint8)[..., None], 3, axis=2)
+            events = pipeline.process_frame(dim_rgb, timestamp=1.0, frame_id=1, detections=[])
+            self.assertEqual(len(events), 1)
+            ev1 = events[0]
+
+            self.assertEqual(ev1["quality_state"], "normal")
+            self.assertEqual(ev1["payload"]["quality"]["state"], "normal")
+            self.assertEqual(ev1["payload"]["quality"]["policy_version"], "scoped-v1")
+            self.assertEqual(ev1["payload"]["capability_scope"]["capability"], "custom_alert")
+            self.assertEqual(pipeline.quality["state"], "low_light")
+            self.assertEqual(ev1["pipeline_id"], "custom-alert-pipeline-v1")
+            self.assertEqual(ev1["pipeline_version"], "2")
+            self.assertEqual(ev1["config_version"], "cfg-alert-v1")
+            self.assertTrue(any(e.get("name") == "custom_rule" for e in ev1["model_lineage"]))
+
+            # RTSP reconnection / stream session reset
+            pipeline.stream_session_id = "00000000-0000-4000-8000-000000000002"
+            events2 = pipeline.process_frame(dim_rgb, timestamp=2.0, frame_id=2, detections=[])
+            self.assertEqual(len(events2), 1)
+            ev2 = events2[0]
+
+            self.assertEqual(ev2["stream_session_id"], "00000000-0000-4000-8000-000000000002")
+            self.assertEqual(ev2["quality_state"], "normal")
+            self.assertEqual(ev2["payload"]["quality"]["policy_version"], "scoped-v1")
+            self.assertEqual(ev2["pipeline_id"], "custom-alert-pipeline-v1")
+            self.assertEqual(ev2["pipeline_version"], "2")
+            self.assertEqual(ev2["config_version"], "cfg-alert-v1")
+
+    def test_engine_payload_preservation(self):
+        """Pipeline preserves all feature scenario fields in the payload without loss or mutation."""
+        with tempfile.TemporaryDirectory() as root:
+            recorder = FileRecorder(Path(root) / "ring")
+            outbox = EventOutbox(Path(root) / "state" / "events.sqlite3")
+
+            class ScenarioFeatureEngine:
+                factory = "scenario_engine"
+                pipeline_id = "scenario-pipeline"
+                pipeline_version = "1"
+                config_version = "scenario-v1"
+                rule_lineage = []
+
+                def process_tracks(self, tracks, timestamp):
+                    return [{
+                        "anchor_kind": "alert_condition",
+                        "payload": {
+                            "taxonomy": "scenario_event",
+                            "severity": "high",
+                            "confidence": 0.92,
+                            "anchor_time": float(timestamp),
+                            "detection_time": float(timestamp),
+                            "track_id": 99,
+                            "dwell_seconds": 15.5,
+                            "custom_score": 0.88,
+                            "zone_tag": "entry_gate",
+                            "detections": [
+                                {
+                                    "bbox": [10.0, 10.0, 50.0, 80.0],
+                                    "score": 0.95,
+                                    "timestamp": float(timestamp),
+                                    "label": "person",
+                                }
+                            ],
+                        },
+                    }]
+
+            pipeline = PerceptionPipeline(
+                recorder=recorder,
+                outbox=outbox,
+                incident_engine=ScenarioFeatureEngine(),
+            )
+            rgb = np.zeros((32, 32, 3), dtype=np.uint8)
+            events = pipeline.process_frame(rgb, timestamp=1.0, frame_id=1, detections=[])
+            self.assertEqual(len(events), 1)
+            payload = events[0]["payload"]
+            self.assertEqual(payload["track_id"], 99)
+            self.assertEqual(payload["dwell_seconds"], 15.5)
+            self.assertEqual(payload["custom_score"], 0.88)
+            self.assertEqual(payload["zone_tag"], "entry_gate")
+            self.assertEqual(payload["detections"][0]["bbox"], [10.0, 10.0, 50.0, 80.0])
 
 

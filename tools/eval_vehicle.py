@@ -1,6 +1,6 @@
 """Evaluate Vehicle Incident Engine on test video clips.
 
-Runs OracleDetector (YOLOX-Tiny) -> ByteTracker -> VehicleIncidentEngine.
+Runs the shared PerceptionPipeline with explicit vehicle/tracker configuration and local persistence.
 Reports detections, tracking, interaction types, and accident events.
 """
 from __future__ import annotations
@@ -17,9 +17,16 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import tempfile
+from typing import Any
+
 from apps.edge.oracle_detector import OracleDetector
+from apps.edge.outbox import EventOutbox
+from apps.edge.pipeline import PerceptionPipeline
+from apps.edge.recorder import FileRecorder
 from apps.edge.tracker import ByteTracker
 from apps.edge.vehicle_incident import VehicleIncidentEngine
+from tools.eval_clip import extract_effective_config
 
 
 def evaluate_clip(
@@ -30,92 +37,130 @@ def evaluate_clip(
     max_frames: int = 300,
     min_moving_speed: float = 8.0,
     impact_deceleration: float = 50.0,
-) -> dict:
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        return {"video": str(video_path), "error": "cannot open video"}
-
-    native_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-    step = max(1, int(round(native_fps / sample_fps)))
-    
-    tracker = ByteTracker(high_threshold=0.25, low_threshold=0.08, match_threshold=0.3)
-    engine = VehicleIncidentEngine(
-        min_moving_speed=min_moving_speed,
-        impact_deceleration_threshold=impact_deceleration,
-    )
-
-    frame_idx = 0
-    processed = 0
-    events = []
-    det_count = 0
-    classes: dict[str, int] = {}
-
+) -> dict[str, Any]:
+    vpath = Path(video_path)
+    if not vpath.is_file():
+        raise FileNotFoundError(f"video not found: {video_path}")
+    cap = cv2.VideoCapture(str(vpath))
     try:
-        while True:
-            ok, frame_bgr = cap.read()
-            if not ok:
-                break
-            if frame_idx % step != 0:
+        if not cap.isOpened():
+            raise RuntimeError(f"failed to open video: {video_path}")
+        native_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        step = max(1, int(round(native_fps / sample_fps)))
+        with tempfile.TemporaryDirectory(prefix="ai-camera-eval-vehicle-") as tmp:
+            tmp_path = Path(tmp)
+            recorder = FileRecorder(tmp_path / "ring", ring_seconds=60)
+            outbox = EventOutbox(tmp_path / "events.sqlite3")
+            tracker = ByteTracker(high_threshold=0.25, low_threshold=0.08, match_threshold=0.3)
+            engine = VehicleIncidentEngine(
+                min_moving_speed=min_moving_speed,
+                impact_deceleration_threshold=impact_deceleration,
+            )
+            pipeline = PerceptionPipeline(
+                recorder=recorder,
+                outbox=outbox,
+                detector=detector,
+                tracker=tracker,
+                incident_engines=[engine],
+                origin="replay",
+            )
+
+            frame_idx = 0
+            processed = 0
+            emitted = 0
+            det_count = 0
+            classes: dict[str, int] = {}
+            detection_status_counts: dict[str, int] = {}
+            emitted_meta: dict[str, tuple[int, float]] = {}
+
+            while True:
+                ok, frame_bgr = cap.read()
+                if not ok:
+                    break
+                if frame_idx % step != 0:
+                    frame_idx += 1
+                    continue
+                if max_frames and processed >= max_frames:
+                    break
+
+                rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                raw_ts = frame_idx / native_fps
+                pts = round(raw_ts * 1_000_000)
+                time_base = "1/1000000"
+                ts = float(pts * Fraction(time_base))
+
+                emitted_events = pipeline.process_frame(rgb, timestamp=ts, frame_id=frame_idx)
+                obs = pipeline.last_observation or {}
+                detection_status = obs.get("detection_status")
+                if detection_status:
+                    detection_status_counts[detection_status] = (
+                        detection_status_counts.get(detection_status, 0) + 1
+                    )
+                if detection_status not in {"ok", "ok_empty"}:
+                    raise RuntimeError(
+                        f"Detection failed on frame {frame_idx} of {vpath.name}: "
+                        f"status={detection_status}, error={obs.get('error')}"
+                    )
+
+                dets = obs.get("detections", [])
+                det_count += len(dets)
+                for d in dets:
+                    lbl = d.get("label", "unknown")
+                    classes[lbl] = classes.get(lbl, 0) + 1
+
+                for ev in (emitted_events or []):
+                    eid = ev.get("event_id")
+                    if eid:
+                        emitted_meta[eid] = (frame_idx, ts)
+
+                emitted += len(emitted_events or [])
+                processed += 1
                 frame_idx += 1
-                continue
-            if max_frames and processed >= max_frames:
-                break
 
-            rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            raw_ts = frame_idx / native_fps
-            pts = round(raw_ts * 1_000_000)
-            time_base = "1/1000000"
-            ts = float(pts * Fraction(time_base))
-            obs = detector.detect(rgb, {
-                "camera_id": "eval-cam",
-                "stream_session_id": "eval-sess",
-                "core_epoch": 1,
-                "origin": "replay",
-                "frame_id": frame_idx,
-                "pts": pts,
-                "time_base": time_base,
-                "event_time": ts,
-            })
-            detection_status = obs.get("detection_status")
-            if detection_status not in {"ok", "ok_empty"}:
-                raise RuntimeError(
-                    f"Detection failed on frame {frame_idx} of {Path(video_path).name}: "
-                    f"status={detection_status}, error={obs.get('error')}"
+            events: list[dict[str, Any]] = []
+            for row in outbox.pending():
+                snapshot = row["event"]
+                p = snapshot.get("payload", {})
+                eid = snapshot.get("event_id")
+                meta = emitted_meta.get(eid)
+                f_idx = meta[0] if meta else None
+                t_stamp = meta[1] if meta else float(p.get("anchor_time", 0.0))
+                events.append(
+                    {
+                        "frame": f_idx,
+                        "timestamp": round(t_stamp, 2),
+                        "interaction_type": p.get("interaction_type"),
+                        "severity": p.get("severity"),
+                        "confidence": p.get("confidence"),
+                        "primary_track": p.get("track_id"),
+                        "involved_tracks": p.get("track_ids"),
+                        "event_id": eid,
+                        "taxonomy": p.get("taxonomy"),
+                        "origin": snapshot.get("origin"),
+                        "stream_session_id": snapshot.get("stream_session_id"),
+                        "details": p,
+                    }
                 )
-            dets = obs.get("detections", [])
-            for d in dets:
-                if "bbox" not in d and "bbox_xyxy" in d:
-                    d["bbox"] = d["bbox_xyxy"]
-            det_count += len(dets)
-            for d in dets:
-                lbl = d["label"]
-                classes[lbl] = classes.get(lbl, 0) + 1
 
-            tracks = tracker.update(dets, timestamp=ts)
-            emitted = engine.process_tracks(tracks, timestamp=ts)
-            for ev in emitted:
-                p = ev["payload"]
-                events.append({
-                    "frame": frame_idx,
-                    "timestamp": round(ts, 2),
-                    "interaction_type": p.get("interaction_type"),
-                    "severity": p.get("severity"),
-                    "confidence": p.get("confidence"),
-                    "primary_track": p.get("track_id"),
-                    "involved_tracks": p.get("track_ids"),
-                })
-            processed += 1
-            frame_idx += 1
+            effective_cfg = extract_effective_config(
+                pipeline,
+                sample_fps=sample_fps,
+                max_frames=max_frames,
+            )
+            return {
+                "video": vpath.name,
+                "origin": "replay",
+                "frames_processed": processed,
+                "detections": det_count,
+                "classes": classes,
+                "detection_status_counts": detection_status_counts,
+                "events": events,
+                "event_count": len(events),
+                "event_count_emitted": emitted,
+                "effective_config": effective_cfg,
+            }
     finally:
         cap.release()
-    return {
-        "video": Path(video_path).name,
-        "frames_processed": processed,
-        "detections": det_count,
-        "classes": classes,
-        "events": events,
-        "event_count": len(events),
-    }
 
 
 def main():
@@ -145,24 +190,36 @@ def main():
 
     print(f"=== Evaluating {len(videos)} video clips ===")
     results = []
-    for vid in videos:
-        vpath = Path(vid)
-        if not vpath.exists():
-            print(f"SKIP (not found): {vid}")
-            continue
-        res = evaluate_clip(
-            vpath,
-            detector,
-            sample_fps=args.sample_fps,
-            max_frames=args.max_frames,
-            min_moving_speed=args.min_speed,
-            impact_deceleration=args.impact_decel,
-        )
-        results.append(res)
-        tag = "EVENT!" if res["event_count"] > 0 else "clean (0 events)"
-        print(f"[{tag}] {res['video']}: frames={res['frames_processed']}, dets={res['detections']}, classes={res['classes']}, events={res['event_count']}")
-        for ev in res["events"]:
-            print(f"    -> Frame {ev['frame']} (t={ev['timestamp']}s): type={ev['interaction_type']}, sev={ev['severity']}, conf={ev['confidence']}, tracks={ev['involved_tracks']}")
+    try:
+        for vid in videos:
+            vpath = Path(vid)
+            if not vpath.exists() and args.video is None:
+                print(f"SKIP (not found): {vid}")
+                continue
+            res = evaluate_clip(
+                vpath,
+                detector,
+                sample_fps=args.sample_fps,
+                max_frames=args.max_frames,
+                min_moving_speed=args.min_speed,
+                impact_deceleration=args.impact_decel,
+            )
+            results.append(res)
+            tag = "EVENT!" if res["event_count"] > 0 else "zero events"
+            print(
+                f"[{tag}] {res['video']}: frames={res['frames_processed']}, "
+                f"dets={res['detections']}, classes={res['classes']}, events={res['event_count']}"
+            )
+            print(f"Effective configuration: {json.dumps(res['effective_config'], sort_keys=True)}")
+            for ev in res["events"]:
+                print(
+                    f"    -> Frame {ev['frame']} (t={ev['timestamp']}s): "
+                    f"type={ev['interaction_type']}, sev={ev['severity']}, "
+                    f"conf={ev['confidence']}, tracks={ev['involved_tracks']}"
+                )
+    except Exception as exc:
+        print(f"Evaluation failed: {exc}", file=sys.stderr)
+        return 1
 
     print("\n=== Summary ===")
     total_clips = len(results)
@@ -171,7 +228,8 @@ def main():
     print(f"Total clips evaluated: {total_clips}")
     print(f"Clips with detected events: {clips_with_events}")
     print(f"Total events emitted: {total_events}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

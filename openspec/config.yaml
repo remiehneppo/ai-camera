@@ -1,0 +1,23 @@
+schema: spec-driven
+
+context: |
+  Language: Vietnamese with diacritics. Keep OpenSpec structural headings and SHALL/MUST in English.
+  This repository is AI-Camera-OC, not a workspace monorepo.
+  Domain vocabulary lives in CONTEXT.md; accepted constraints live in docs/adr/0001-0006.
+  New architecture drafts remain proposed until explicitly accepted; specifications are not runtime evidence.
+  Keep independent alert feature rules/state/config and shared compatible perception.
+  Preserve full snapshots, immutable identity/Origin, and EvidenceLifecycle durable intent/pin/recovery ownership.
+  Use module, interface, depth, seam, adapter, leverage, locality for architectural descriptions.
+  Replay/synthetic observations do not establish live, quality, capacity, or complete Evidence acceptance.
+rules:
+  proposal:
+    - Cite the related issue and ADR; state scope, out of scope, and impact on wire contracts, storage, access control, and callers.
+  specs:
+    - Describe observable behavior, with WHEN/THEN scenarios; identify planned versus existing verification in design.md.
+  design:
+    - Record volume assumptions, ownership/atomicity, concurrency, failures, idempotency, compatibility, isolation, and rollback.
+    - Link editable draw.io source and distinguish accepted scope from proposed interface choices.
+operations:
+  apply:
+    guidance:
+      - Design approval does not authorize implementation; require the implementation-plan approval checkpoint before applying tasks.

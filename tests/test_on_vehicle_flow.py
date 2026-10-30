@@ -102,13 +102,14 @@ class OnVehicleIncidentEngineTests(unittest.TestCase):
 
         self.assertEqual(len(emitted), 1, "on-vehicle lowers priority; it must not suppress the event")
         incident = emitted[0]
-        self.assertEqual(incident["taxonomy"], "person_on_stationary_vehicle")
-        self.assertEqual(incident["severity"], "low")
         self.assertEqual(incident["anchor_kind"], "first_qualifying_observation")
-        self.assertAlmostEqual(incident["anchor_time"], first_qualifying_time, delta=1e-6)
-        self.assertEqual(incident["track_id"], 701)
-        self.assertEqual(incident["vehicle_track_id"], 700)
-        self.assertIn("vehicle_track_id", incident)
+        payload = incident["payload"]
+        self.assertEqual(payload["taxonomy"], "person_on_stationary_vehicle")
+        self.assertEqual(payload["severity"], "low")
+        self.assertAlmostEqual(payload["anchor_time"], first_qualifying_time, delta=1e-6)
+        self.assertEqual(payload["track_id"], 701)
+        self.assertEqual(payload["vehicle_track_id"], 700)
+        self.assertIn("vehicle_track_id", payload)
 
     def test_danger_override_falling_onset_with_vehicle(self) -> None:
         """An observed fast drop over the bike stays a critical person_fall."""
@@ -132,11 +133,12 @@ class OnVehicleIncidentEngineTests(unittest.TestCase):
 
         self.assertEqual(len(emitted), 1)
         incident = emitted[0]
-        self.assertEqual(incident["taxonomy"], "person_fall")
-        self.assertEqual(incident["severity"], "critical")
         self.assertEqual(incident["anchor_kind"], "onset")
-        self.assertEqual(incident["track_id"], 711)
-        self.assertNotIn("vehicle_track_id", incident)
+        payload = incident["payload"]
+        self.assertEqual(payload["taxonomy"], "person_fall")
+        self.assertEqual(payload["severity"], "critical")
+        self.assertEqual(payload["track_id"], 711)
+        self.assertNotIn("vehicle_track_id", payload)
 
     def test_danger_override_fallen_vehicle(self) -> None:
         """A fallen or overturning vehicle prevents the low-priority on-vehicle label."""
@@ -156,9 +158,11 @@ class OnVehicleIncidentEngineTests(unittest.TestCase):
 
             self.assertEqual(len(emitted), 1)
             incident = emitted[0]
-            self.assertEqual(incident["taxonomy"], "person_lying_persistent")
-            self.assertEqual(incident["severity"], "high")
-            self.assertNotIn("vehicle_track_id", incident)
+            self.assertEqual(incident["anchor_kind"], "first_qualifying_observation")
+            payload = incident["payload"]
+            self.assertEqual(payload["taxonomy"], "person_lying_persistent")
+            self.assertEqual(payload["severity"], "high")
+            self.assertNotIn("vehicle_track_id", payload)
 
         with self.subTest("motorcycle overturns after the lying onset"):
             engine = IncidentEngine(persistent_lying_duration=1.0, cooldown_seconds=30.0)
@@ -181,9 +185,11 @@ class OnVehicleIncidentEngineTests(unittest.TestCase):
 
             self.assertEqual(len(emitted), 1)
             incident = emitted[0]
-            self.assertEqual(incident["taxonomy"], "person_lying_persistent")
-            self.assertEqual(incident["severity"], "high")
-            self.assertNotIn("vehicle_track_id", incident)
+            self.assertEqual(incident["anchor_kind"], "first_qualifying_observation")
+            payload = incident["payload"]
+            self.assertEqual(payload["taxonomy"], "person_lying_persistent")
+            self.assertEqual(payload["severity"], "high")
+            self.assertNotIn("vehicle_track_id", payload)
 
     def test_late_or_moving_vehicle_not_on_vehicle(self) -> None:
         """A vehicle that was not already parked cannot demote a ground-level lying event."""
@@ -212,9 +218,11 @@ class OnVehicleIncidentEngineTests(unittest.TestCase):
 
             self.assertEqual(len(emitted), 1)
             incident = emitted[0]
-            self.assertEqual(incident["taxonomy"], "person_lying_persistent")
-            self.assertEqual(incident["severity"], "high")
-            self.assertNotIn("vehicle_track_id", incident)
+            self.assertEqual(incident["anchor_kind"], "first_qualifying_observation")
+            payload = incident["payload"]
+            self.assertEqual(payload["taxonomy"], "person_lying_persistent")
+            self.assertEqual(payload["severity"], "high")
+            self.assertNotIn("vehicle_track_id", payload)
 
         with self.subTest("motorcycle is still moving and only stops afterwards"):
             engine = IncidentEngine(
@@ -240,9 +248,11 @@ class OnVehicleIncidentEngineTests(unittest.TestCase):
 
             self.assertEqual(len(emitted), 1)
             incident = emitted[0]
-            self.assertEqual(incident["taxonomy"], "person_lying_persistent")
-            self.assertEqual(incident["severity"], "high")
-            self.assertNotIn("vehicle_track_id", incident)
+            self.assertEqual(incident["anchor_kind"], "first_qualifying_observation")
+            payload = incident["payload"]
+            self.assertEqual(payload["taxonomy"], "person_lying_persistent")
+            self.assertEqual(payload["severity"], "high")
+            self.assertNotIn("vehicle_track_id", payload)
 
     def test_observation_gap_resets_vehicle_and_person_continuity(self) -> None:
         """A gap drops the old vehicle stationarity and restarts the lying qualification."""
@@ -278,10 +288,12 @@ class OnVehicleIncidentEngineTests(unittest.TestCase):
 
             self.assertEqual(len(emitted), 1)
             incident = emitted[0]
-            self.assertEqual(incident["taxonomy"], "person_lying_persistent")
-            self.assertEqual(incident["severity"], "high")
-            self.assertNotIn("vehicle_track_id", incident)
-            self.assertAlmostEqual(incident["anchor_time"], 0.7, delta=1e-6)
+            self.assertEqual(incident["anchor_kind"], "first_qualifying_observation")
+            payload = incident["payload"]
+            self.assertEqual(payload["taxonomy"], "person_lying_persistent")
+            self.assertEqual(payload["severity"], "high")
+            self.assertNotIn("vehicle_track_id", payload)
+            self.assertAlmostEqual(payload["anchor_time"], 0.7, delta=1e-6)
 
         with self.subTest("timestamp gap larger than max_observation_gap resets continuity"):
             engine = IncidentEngine(
@@ -324,10 +336,12 @@ class OnVehicleIncidentEngineTests(unittest.TestCase):
 
             self.assertEqual(len(emitted), 1)
             incident = emitted[0]
-            self.assertEqual(incident["taxonomy"], "person_lying_persistent")
-            self.assertEqual(incident["severity"], "high")
-            self.assertNotIn("vehicle_track_id", incident)
-            self.assertAlmostEqual(incident["anchor_time"], 2.0, delta=1e-6)
+            self.assertEqual(incident["anchor_kind"], "first_qualifying_observation")
+            payload = incident["payload"]
+            self.assertEqual(payload["taxonomy"], "person_lying_persistent")
+            self.assertEqual(payload["severity"], "high")
+            self.assertNotIn("vehicle_track_id", payload)
+            self.assertAlmostEqual(payload["anchor_time"], 2.0, delta=1e-6)
 
 
 class OnVehiclePipelineToServerTests(unittest.TestCase):
