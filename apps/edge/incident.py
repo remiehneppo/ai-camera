@@ -9,6 +9,7 @@ from typing import Any
 from apps.edge.geometry import is_normalized_polygon, point_in_polygon
 from apps.edge.tracker import Track, bbox_iou
 
+_PERSON_LABELS = frozenset({"person", "pedestrian"})
 _VEHICLE_LABELS = {"motorcycle", "bicycle"}
 _TWO_WHEELER_LABELS = {"motorcycle", "bicycle"}
 
@@ -411,7 +412,7 @@ class IncidentEngine:
         observed_ids = {
             track.track_id
             for track in tracks
-            if getattr(track, "label", None) == "person" and self._in_roi(track, frame_dimensions=dims)
+            if getattr(track, "label", None) in _PERSON_LABELS and self._in_roi(track, frame_dimensions=dims)
         }
         for tid, state in list(self._states.items()):
             if tid not in observed_ids:
@@ -422,7 +423,7 @@ class IncidentEngine:
                     last_alert_time=state.last_alert_time, triggered=state.triggered)
 
         for track in tracks:
-            if getattr(track, "label", None) != "person":
+            if getattr(track, "label", None) not in _PERSON_LABELS:
                 continue
             if not self._in_roi(track, frame_dimensions=dims):
                 continue

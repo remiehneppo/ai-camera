@@ -405,4 +405,33 @@ class TestPipelineRuntime(unittest.TestCase):
             self.assertEqual(payload["zone_tag"], "entry_gate")
             self.assertEqual(payload["detections"][0]["bbox"], [10.0, 10.0, 50.0, 80.0])
 
+    def test_pipeline_config_version_rotation_updates_default_person_down_snapshots(self):
+        """Rotating pipeline.config_version updates snapshots emitted by the default Person-down engine without explicit engine config_version."""
+        with tempfile.TemporaryDirectory() as root:
+            recorder = FileRecorder(Path(root) / "ring")
+            outbox = EventOutbox(Path(root) / "state" / "events.sqlite3")
+            pipeline = PerceptionPipeline(
+                recorder=recorder,
+                outbox=outbox,
+                config_version="pipeline-v1",
+            )
+            rgb = np.zeros((32, 32, 3), dtype=np.uint8)
+            pipeline.process_frame(rgb, timestamp=0.0, frame_id=1, detections=[])
+
+            pipeline.config_version = "pipeline-v2"
+            emitted = []
+            for i in range(1, 10):
+                dets = [{"bbox": [4.0, 10.0, 28.0, 20.0], "score": 0.9, "label": "person"}]
+                emitted.extend(
+                    pipeline.process_frame(
+                        rgb,
+                        timestamp=i * 0.5,
+                        frame_id=i + 1,
+                        detections=dets,
+                        observation_status="ok",
+                    )
+                )
+            self.assertEqual(len(emitted), 1)
+            self.assertEqual(emitted[0]["config_version"], "pipeline-v2")
+
 

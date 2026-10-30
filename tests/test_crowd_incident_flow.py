@@ -488,6 +488,52 @@ class TestHardNegativesRejection(unittest.TestCase):
             timestamp=12.8,
         )
         self.assertEqual(evs, [])
+
+    def test_custom_lower_dispersal_threshold_and_independent_clusters_both_emit(self) -> None:
+        """Lower configured disorder_dispersal_threshold is honored and two spatially distinct clusters in one ROI both emit without masking each other."""
+        engine = CrowdIncidentEngine(
+            min_crowd_count=10,
+            min_disorder_count=3,
+            disorder_dispersal_threshold=10.0,
+            cooldown_seconds=10.0,
+        )
+        engine.process_tracks(
+            [
+                _make_track(1, 150.0, 150.0, 0.0),
+                _make_track(2, 165.0, 150.0, 0.0),
+                _make_track(3, 157.0, 165.0, 0.0),
+                _make_track(11, 900.0, 700.0, 0.0),
+                _make_track(12, 915.0, 700.0, 0.0),
+                _make_track(13, 907.0, 715.0, 0.0),
+            ],
+            timestamp=0.0,
+        )
+        evs = engine.process_tracks(
+            [
+                _make_track(1, 136.0, 146.0, 1.0),
+                _make_track(2, 179.0, 146.0, 1.0),
+                _make_track(3, 157.0, 180.0, 1.0),
+                _make_track(11, 886.0, 696.0, 1.0),
+                _make_track(12, 929.0, 696.0, 1.0),
+                _make_track(13, 907.0, 730.0, 1.0),
+            ],
+            timestamp=1.0,
+        )
+        self.assertEqual(len(evs), 2)
+        emitted_sets = [set(e["payload"]["track_ids"]) for e in evs]
+        self.assertIn({1, 2, 3}, emitted_sets)
+        self.assertIn({11, 12, 13}, emitted_sets)
+
+        # Re-evaluating the same clusters inside cooldown suppresses duplicate alerts
+        evs_cooldown = engine.process_tracks(
+            [
+                _make_track(1, 122.0, 142.0, 2.0),
+                _make_track(2, 193.0, 142.0, 2.0),
+                _make_track(3, 157.0, 195.0, 2.0),
+            ],
+            timestamp=2.0,
+        )
+        self.assertEqual(evs_cooldown, [])
     def test_hard_negative_3_transient_crossing(self) -> None:
         """Transient pedestrian crossing / walking past: brief crossing (T < min_duration_seconds) does NOT trigger crowd concentration."""
         engine = CrowdIncidentEngine(

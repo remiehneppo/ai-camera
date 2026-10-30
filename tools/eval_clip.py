@@ -8,6 +8,7 @@ pipeline produced, not precision/recall.
 from __future__ import annotations
 
 import argparse
+from fractions import Fraction
 import json
 from pathlib import Path
 import statistics
@@ -194,9 +195,12 @@ def evaluate(
                 if max_frames and processed >= max_frames:
                     break
                 rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                raw_ts = frame_idx / native_fps
+                pts = round(raw_ts * 1_000_000)
+                ts = float(pts * Fraction("1/1000000"))
                 started = time.perf_counter()
                 emitted_events = pipeline.process_frame(
-                    rgb, timestamp=frame_idx / native_fps, frame_id=frame_idx
+                    rgb, timestamp=ts, frame_id=frame_idx
                 )
                 latencies.append((time.perf_counter() - started) * 1000.0)
 

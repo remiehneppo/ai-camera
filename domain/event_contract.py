@@ -41,6 +41,7 @@ _FIELDS = {
     "quality_state",
     "payload",
 }
+ENVELOPE_FIELDS = frozenset(_FIELDS)
 _STRING_LIMITS = {
     "message_id": 128,
     "device_id": 128,

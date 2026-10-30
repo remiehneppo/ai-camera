@@ -197,6 +197,8 @@ class VehicleIncidentEngine:
                 initial_is_upright=is_upright,
             )
             self._tracks[tid] = state
+        else:
+            state.label = track.label
         return state
 
     def _get_or_create_pair(self, id1: int | str, id2: int | str) -> _PairState:

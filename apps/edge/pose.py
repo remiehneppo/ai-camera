@@ -334,7 +334,7 @@ class PoseScheduler:
 
     def classify_track(self, track: Track, current_time: float) -> str | None:
         """Classify track into fast_fall, slow_collapse, or persistent_lying branch."""
-        if getattr(track, "label", None) != "person":
+        if getattr(track, "label", None) not in ("person", "pedestrian"):
             return None
 
         v_y = track.vertical_velocity(window_seconds=1.0)

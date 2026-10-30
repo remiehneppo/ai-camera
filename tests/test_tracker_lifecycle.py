@@ -157,6 +157,7 @@ class TestTrackerLifecycle(unittest.TestCase):
         active_person = tracker.update([{"bbox": box, "score": 0.42, "label": "person"}], timestamp=18.2)
         person_tracks = [t for t in active_person if t.label == "person"]
         self.assertEqual(len(person_tracks), 1)
+        self.assertEqual([t.label for t in tracker.get_all_tracks()], ["person"])
 
         # Coarse motor-vehicle labels ('truck' <-> 'bus') continue to associate onto the same track
         v_box = [200.0, 200.0, 360.0, 320.0]
@@ -164,3 +165,51 @@ class TestTrackerLifecycle(unittest.TestCase):
         v_active = tracker.update([{"bbox": v_box, "score": 0.8, "label": "bus"}], timestamp=20.1)
         motor_tracks = [t for t in v_active if t.label == "truck"]
         self.assertEqual(len(motor_tracks), 1)
+
+    def test_coarse_group_label_voting_and_none_label_normalization(self) -> None:
+        """Sustained detections within a coarse group update track.label for downstream engines; None and missing labels both normalize to 'unknown'."""
+        from apps.edge.incident import IncidentEngine
+        from apps.edge.parking_incident import ParkingIncidentEngine
+        from apps.edge.pose import PoseScheduler
+
+        tracker = ByteTracker(high_threshold=0.25, low_threshold=0.08, match_threshold=0.3)
+        parking = ParkingIncidentEngine(max_dwell_seconds=3.0)
+        moto_box = [200.0, 300.0, 280.0, 420.0]
+        parking_events = []
+        for i in range(12):
+            lbl = "bicycle" if i == 0 else "motorcycle"
+            tracks = tracker.update([{"bbox": moto_box, "score": 0.85, "label": lbl}], timestamp=i * 0.5)
+            parking_events.extend(parking.process_tracks(tracks, timestamp=i * 0.5))
+        self.assertEqual(tracks[0].label, "motorcycle")
+        self.assertEqual(len(parking_events), 1)
+        self.assertEqual(parking_events[0]["payload"]["vehicle_label"], "motorcycle")
+
+        tracker_person = ByteTracker(high_threshold=0.25, low_threshold=0.08, match_threshold=0.3)
+        incident_engine = IncidentEngine(min_lying_duration=2.0, persistent_lying_duration=2.0)
+        scheduler = PoseScheduler()
+        lie_box = [100.0, 400.0, 350.0, 520.0]
+        incident_events = []
+        pose_requests = []
+        for i in range(8):
+            lbl = "pedestrian" if i == 0 else "person"
+            p_tracks = tracker_person.update([{"bbox": lie_box, "score": 0.9, "label": lbl}], timestamp=i * 0.5)
+            incident_events.extend(incident_engine.process_tracks(p_tracks, timestamp=i * 0.5))
+            pose_requests.extend(
+                scheduler.schedule_tracks(
+                    p_tracks,
+                    current_time=i * 0.5,
+                    frame_id=i + 1,
+                    camera_id="cam-1",
+                    stream_session_id="sess-1",
+                    core_epoch=1,
+                )
+            )
+        self.assertGreaterEqual(len(incident_events), 1)
+        self.assertGreaterEqual(len(pose_requests), 1)
+
+        tracker_unk = ByteTracker(high_threshold=0.3, low_threshold=0.1, match_threshold=0.2)
+        unk_box = [40.0, 40.0, 120.0, 120.0]
+        tracker_unk.update([{"bbox": unk_box, "score": 0.8, "label": None}], timestamp=1.0)
+        active_unk = tracker_unk.update([{"bbox": unk_box, "score": 0.8}], timestamp=1.1)
+        self.assertEqual(len(active_unk), 1)
+        self.assertEqual(active_unk[0].label, "unknown")

@@ -420,17 +420,6 @@ class PerceptionPipeline:
         if self.incident_engine is not None and getattr(self.incident_engine, "roi_polygon", None) is None:
             self.incident_engine.roi_polygon = self.roi_polygon
 
-        for engine in self.incident_engines:
-            if hasattr(engine, "camera_id"):
-                engine.camera_id = self.camera_id
-            if hasattr(engine, "device_id"):
-                engine.device_id = self.device_id
-            if hasattr(engine, "stream_session_id"):
-                engine.stream_session_id = self.stream_session_id
-            if hasattr(engine, "origin"):
-                engine.origin = self.origin
-            if hasattr(engine, "config_version") and not getattr(engine, "config_version", None):
-                engine.config_version = self.config_version
         provenance = self.execution.provenance
         self.model_lineage = [{"role": "detector", "version": provenance.get("model_id", "unknown")}]
         self.model_artifact_hash = provenance.get("model_sha256", "unknown_artifact")
@@ -519,16 +508,6 @@ class PerceptionPipeline:
         if lineage != self._lineage:
             self.tracker.reset()
             for engine in self.incident_engines:
-                if hasattr(engine, "camera_id"):
-                    engine.camera_id = self.camera_id
-                if hasattr(engine, "device_id"):
-                    engine.device_id = self.device_id
-                if hasattr(engine, "stream_session_id"):
-                    engine.stream_session_id = self.stream_session_id
-                if hasattr(engine, "origin"):
-                    engine.origin = self.origin
-                if hasattr(engine, "config_version") and not getattr(engine, "config_version", None):
-                    engine.config_version = self.config_version
                 engine.reset()
             if self.pose_manager is not None:
                 self.pose_manager.set_epoch(self.core_epoch)
@@ -636,20 +615,36 @@ class PerceptionPipeline:
                 pose_outcomes=pose_outcomes,
                 frame_dimensions=frame_dims,
             )
-            for facts in (incidents or ()):
-                cap_name = str(getattr(engine, "factory", getattr(engine, "module", "person_down")))
-                quality = self.quality
-                scope = None
-                if cap_name in self.capability_policies:
-                    scoped = assess_capability_quality(
-                        rgb,
-                        capability=cap_name,
-                        camera_id=self.camera_id,
-                        site_id=self.site_id,
-                        policy=self.capability_policies[cap_name],
-                    )
-                    quality = scoped["quality"]
-                    scope = scoped["scope"]
+            if not incidents:
+                continue
+            cap_name = str(getattr(engine, "factory", getattr(engine, "module", "person_down")))
+            quality = self.quality
+            scope = None
+            if cap_name in self.capability_policies:
+                scoped = assess_capability_quality(
+                    rgb,
+                    capability=cap_name,
+                    camera_id=self.camera_id,
+                    site_id=self.site_id,
+                    policy=self.capability_policies[cap_name],
+                )
+                quality = scoped["quality"]
+                scope = scoped["scope"]
+            feature = {
+                "pipeline_id": (
+                    self.pipeline_id
+                    if cap_name == "person_down"
+                    else getattr(engine, "pipeline_id", self.pipeline_id)
+                ),
+                "pipeline_version": (
+                    self.pipeline_version
+                    if cap_name == "person_down"
+                    else getattr(engine, "pipeline_version", self.pipeline_version)
+                ),
+                "config_version": getattr(engine, "config_version", None) or self.config_version,
+                "rule_lineage": getattr(engine, "rule_lineage", []),
+            }
+            for facts in incidents:
                 context = {
                     "camera_id": self.camera_id,
                     "device_id": self.device_id,
@@ -661,16 +656,9 @@ class PerceptionPipeline:
                     "quality": quality,
                     "capability_scope": scope,
                 }
-                feature = {
-                    "pipeline_id": self.pipeline_id if cap_name == "person_down" else engine.pipeline_id,
-                    "pipeline_version": self.pipeline_version if cap_name == "person_down" else engine.pipeline_version,
-                    "config_version": getattr(engine, "config_version", None) or self.config_version,
-                    "rule_lineage": getattr(engine, "rule_lineage", []),
-                }
                 snapshot = build_incident_snapshot(facts, context=context, feature=feature)
                 self.evidence.persist(snapshot)
                 emitted_events.append(snapshot)
-
         return emitted_events
 
     def _set_unknown_quality(self, reason: str) -> None:

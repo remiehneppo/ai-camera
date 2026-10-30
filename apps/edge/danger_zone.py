@@ -259,6 +259,7 @@ class DangerZoneIncidentEngine:
                 )
                 self._tracks[tid] = state
             else:
+                state.label = label
                 if state.first_entered_time is None:
                     state.first_entered_time = ts
                     state.consecutive_frames = 1

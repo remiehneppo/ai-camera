@@ -14,6 +14,7 @@ class TrackObservation:
     cx: float
     cy: float
     aspect_ratio: float
+    label: str = "unknown"
 
 
 def bbox_iou(box1: list[float], box2: list[float]) -> float:
@@ -52,14 +53,14 @@ class Track:
         self.track_id: int = track_id
         self.bbox: list[float] = [float(x) for x in bbox]
         self.score: float = float(score)
-        self.label: str = str(label)
+        self.label: str = _normalize_label(label)
         self.state: str = str(state)
         self.start_time: float = float(timestamp)
         self.last_time: float = float(timestamp)
         self.consecutive_hits: int = 1
         self.activate_after: int | None = None
         self.history: list[TrackObservation] = []
-        self._record_observation(self.bbox, self.score, timestamp)
+        self._record_observation(self.bbox, self.score, timestamp, self.label)
 
     @property
     def width(self) -> float:
@@ -82,12 +83,19 @@ class Track:
         h = self.height
         return self.width / max(h, 1e-6)
 
-    def _record_observation(self, bbox: list[float], score: float, timestamp: float) -> None:
+    def _record_observation(
+        self,
+        bbox: list[float],
+        score: float,
+        timestamp: float,
+        label: str | None = None,
+    ) -> None:
         cx = (bbox[0] + bbox[2]) / 2.0
         cy = (bbox[1] + bbox[3]) / 2.0
         w = max(0.0, bbox[2] - bbox[0])
         h = max(0.0, bbox[3] - bbox[1])
         ar = w / max(h, 1e-6)
+        obs_label = _normalize_label(label) if label is not None else self.label
         self.history.append(
             TrackObservation(
                 timestamp=float(timestamp),
@@ -96,12 +104,31 @@ class Track:
                 cx=cx,
                 cy=cy,
                 aspect_ratio=ar,
+                label=obs_label,
             )
         )
         # shortcut: five seconds/256 observations cover lab sampling; resize before high-FPS acceptance.
         self.history[:] = [obs for obs in self.history if obs.timestamp >= float(timestamp) - 5][-256:]
 
-    def update(self, bbox: list[float], score: float, timestamp: float) -> None:
+    def _refresh_voted_label(self) -> None:
+        totals: dict[str, float] = {}
+        for obs in self.history:
+            totals[obs.label] = totals.get(obs.label, 0.0) + obs.score
+        best_label = self.label
+        best_score = totals.get(best_label, -1.0)
+        for cand_label, cand_score in totals.items():
+            if cand_score > best_score:
+                best_label = cand_label
+                best_score = cand_score
+        self.label = best_label
+
+    def update(
+        self,
+        bbox: list[float],
+        score: float,
+        timestamp: float,
+        label: str | None = None,
+    ) -> None:
         ts = float(timestamp)
         if ts < self.last_time or ts - self.last_time > self.max_gap:
             # Gap or clock jump: pre-gap motion/hit evidence must not bridge to this observation.
@@ -119,8 +146,9 @@ class Track:
         else:
             self.state = "active"
             self.consecutive_hits += 1
-        self._record_observation(self.bbox, self.score, timestamp)
-
+        self._record_observation(self.bbox, self.score, timestamp, label)
+        if label is not None:
+            self._refresh_voted_label()
     def mark_lost(self) -> None:
         self.state = "lost"
 
@@ -181,6 +209,13 @@ class Track:
         return latest.aspect_ratio - earliest_in_window.aspect_ratio
 
 
+def _normalize_label(raw: Any) -> str:
+    if raw is None:
+        return "unknown"
+    text = str(raw).strip()
+    return text if text else "unknown"
+
+
 def _coarse_label_group(label: str) -> str:
     if label in ("person", "pedestrian"):
         return "person"
@@ -233,7 +268,7 @@ class ByteTracker:
             t_group = _coarse_label_group(t.label)
             box = t.predict_bbox(timestamp) if timestamp is not None else t.bbox
             for d_idx, d in enumerate(detections):
-                if _coarse_label_group(str(d.get("label", "unknown"))) != t_group:
+                if _coarse_label_group(_normalize_label(d.get("label"))) != t_group:
                     continue
                 iou = bbox_iou(box, d["bbox"])
                 if iou >= threshold:
@@ -279,14 +314,14 @@ class ByteTracker:
             active_tracks, high_dets, self.match_threshold, timestamp=ts
         )
         for track, det in matches_1:
-            track.update(det["bbox"], float(det["score"]), ts)
+            track.update(det["bbox"], float(det["score"]), ts, label=det.get("label"))
 
         # Stage 1b: Match tentative tracks with remaining high-score detections
         matches_tentative, unmatched_tentative, remaining_high_2 = self._match_iou(
             tentative_tracks, remaining_high_1, self.match_threshold, timestamp=ts
         )
         for track, det in matches_tentative:
-            track.update(det["bbox"], float(det["score"]), ts)
+            track.update(det["bbox"], float(det["score"]), ts, label=det.get("label"))
             if track.consecutive_hits >= self.activate_after:
                 track.state = "active"
 
@@ -299,14 +334,14 @@ class ByteTracker:
             unmatched_active, low_dets, self.match_threshold_low, timestamp=ts
         )
         for track, det in matches_2:
-            track.update(det["bbox"], float(det["score"]), ts)
+            track.update(det["bbox"], float(det["score"]), ts, label=det.get("label"))
 
         # Stage 3: Match remaining high-score detections with lost tracks
         matches_3, remaining_lost, unmatched_high_dets = self._match_iou(
             lost_tracks, remaining_high_2, self.match_threshold, timestamp=ts
         )
         for track, det in matches_3:
-            track.update(det["bbox"], float(det["score"]), ts)
+            track.update(det["bbox"], float(det["score"]), ts, label=det.get("label"))
             track.state = "active"
 
         # Initialize new tracks for unmatched high-score detections
@@ -316,7 +351,7 @@ class ByteTracker:
                 track_id=self._next_track_id,
                 bbox=det["bbox"],
                 score=float(det["score"]),
-                label=str(det.get("label", "unknown")),
+                label=_normalize_label(det.get("label")),
                 timestamp=ts,
                 state=initial_state,
                 max_gap=self.max_observation_gap,
@@ -326,19 +361,28 @@ class ByteTracker:
             self.tracks.append(new_track)
 
         # Mark unmatched active tracks as lost or removed if expired
+        confirmed_active = [t for t in self.tracks if t.state == "active"]
+
+        def _superseded_by_incompatible_active(candidate: Track) -> bool:
+            cand_group = _coarse_label_group(candidate.label)
+            return any(
+                _coarse_label_group(act.label) != cand_group
+                and bbox_iou(candidate.bbox, act.bbox) >= 0.85
+                for act in confirmed_active
+            )
+
         for track in unmatched_active_2:
             track.consecutive_hits = 0
-            if (ts - track.last_time) > self.max_lost_time:
+            if (ts - track.last_time) > self.max_lost_time or _superseded_by_incompatible_active(track):
                 track.mark_removed()
             else:
                 track.mark_lost()
 
-        # Update remaining lost tracks (remove if expired)
+        # Update remaining lost tracks (remove if expired or superseded at identical box)
         for track in remaining_lost:
             track.consecutive_hits = 0
-            if (ts - track.last_time) > self.max_lost_time:
+            if (ts - track.last_time) > self.max_lost_time or _superseded_by_incompatible_active(track):
                 track.mark_removed()
-
         self.tracks[:] = [t for t in self.tracks if t.state != "removed"]
         return [t for t in self.tracks if t.state == "active"]
 

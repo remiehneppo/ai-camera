@@ -102,14 +102,33 @@ class CrowdEventContext:
 
 def _pedestrian_scale(p: _PedestrianState) -> float:
     if len(p.last_bbox) == 4:
-        return max(1.0, abs(p.last_bbox[2] - p.last_bbox[0]), abs(p.last_bbox[3] - p.last_bbox[1]))
+        return max(1e-3, abs(p.last_bbox[2] - p.last_bbox[0]), abs(p.last_bbox[3] - p.last_bbox[1]))
     return 100.0
 
 
-def _spatial_clusters(pedestrians: list[_PedestrianState]) -> list[list[_PedestrianState]]:
-    """Group pedestrians into perspective-aware spatial connected components."""
+def _min_cluster_link_distance(
+    valid: list[_PedestrianState],
+    frame_dimensions: tuple[float, float] | None = None,
+) -> float:
+    if frame_dimensions is not None and frame_dimensions[0] > 1.0 and frame_dimensions[1] > 1.0:
+        res_scale = min(float(frame_dimensions[0]) / 1920.0, float(frame_dimensions[1]) / 1080.0)
+        return 120.0 * max(0.25, res_scale)
+    if valid and all(
+        len(p.last_bbox) == 4 and max(abs(c) for c in p.last_bbox) <= 1.5
+        for p in valid
+    ):
+        return 0.10
+    return 120.0
+
+
+def _spatial_clusters(
+    pedestrians: list[_PedestrianState],
+    frame_dimensions: tuple[float, float] | None = None,
+) -> list[list[_PedestrianState]]:
+    """Group pedestrians into perspective- and resolution-aware spatial connected components."""
     valid = [p for p in pedestrians if p.kinematics is not None]
     scales = [_pedestrian_scale(p) for p in valid]
+    min_link_dist = _min_cluster_link_distance(valid, frame_dimensions)
     visited = [False] * len(valid)
     clusters: list[list[_PedestrianState]] = []
     for idx in range(len(valid)):
@@ -130,7 +149,7 @@ def _spatial_clusters(pedestrians: list[_PedestrianState]) -> list[list[_Pedestr
                 if k_nxt is None:
                     continue
                 # Link radius scales with the smaller bbox to prevent foreground actors from swallowing distant background
-                max_dist = max(120.0, 2.5 * min(scales[cur], scales[nxt]))
+                max_dist = max(min_link_dist, 2.5 * min(scales[cur], scales[nxt]))
                 if math.hypot(k_cur.cx - k_nxt.cx, k_cur.cy - k_nxt.cy) <= max_dist:
                     visited[nxt] = True
                     queue.append(nxt)
@@ -218,6 +237,7 @@ class CrowdIncidentEngine:
         self._crowd_start_time: float | None = None
         self._last_crowd_alert_time: float | None = None
         self._last_disorder_alert_time: float | None = None
+        self._track_disorder_alert_time: dict[int | str, float] = {}
         self._last_timestamp: float | None = None
         self._current_crowd_count: int = 0
 
@@ -244,6 +264,7 @@ class CrowdIncidentEngine:
         self._crowd_start_time = None
         self._last_crowd_alert_time = None
         self._last_disorder_alert_time = None
+        self._track_disorder_alert_time.clear()
         self._last_timestamp = None
         self._current_crowd_count = 0
 
@@ -361,7 +382,8 @@ class CrowdIncidentEngine:
                 radial_velocities.append(0.0)
 
         mean_dispersal = sum(radial_velocities) / len(radial_velocities) if radial_velocities else 0.0
-        dispersing_count = sum(1 for v in radial_velocities if v >= 15.0)
+        min_actor_radial = min(15.0, 0.6 * self.disorder_dispersal_threshold)
+        dispersing_count = sum(1 for v in radial_velocities if v >= min_actor_radial)
 
         # 2. Direction variance (circular variance = 1 - R)
         moving_kin = [k for k in kin_list if k.speed >= 10.0]
@@ -376,13 +398,14 @@ class CrowdIncidentEngine:
         # Dispersal requires >= 2 people scattering outward so 1 fast individual cannot trigger a crowd alert
         is_dispersal = (
             mean_dispersal >= self.disorder_dispersal_threshold
-            and mean_speed >= 25.0
+            and mean_speed >= min(25.0, self.disorder_dispersal_threshold)
             and dispersing_count >= 2
-            and any(s >= 30.0 for s in speeds)
+            and any(s >= min(30.0, 1.2 * self.disorder_dispersal_threshold) for s in speeds)
         )
 
+        min_surge_acc = min(40.0, (2.0 / 3.0) * self.disorder_acceleration_threshold)
         surging_count = sum(
-            1 for k in kin_list if k.speed >= self.disorder_speed_threshold and abs(k.acceleration) >= 40.0
+            1 for k in kin_list if k.speed >= self.disorder_speed_threshold and abs(k.acceleration) >= min_surge_acc
         )
         is_surge = (
             mean_speed >= self.disorder_speed_threshold
@@ -392,7 +415,7 @@ class CrowdIncidentEngine:
 
         is_chaotic = (
             dir_variance >= self.disorder_direction_variance_threshold
-            and mean_speed >= 30.0
+            and mean_speed >= min(30.0, (2.0 / 3.0) * self.disorder_speed_threshold)
             and any(s >= self.disorder_speed_threshold for s in speeds)
             and len(moving_kin) >= self.min_disorder_count
         )
@@ -416,30 +439,21 @@ class CrowdIncidentEngine:
         }
         return is_disorder, metrics
 
-    def _find_disorder_cluster(
+    def _find_disorder_clusters(
         self,
         pedestrians_in_roi: list[_PedestrianState],
-    ) -> tuple[bool, dict[str, Any], list[_PedestrianState]]:
+        frame_dimensions: tuple[float, float] | None = None,
+    ) -> list[tuple[dict[str, Any], list[_PedestrianState]]]:
         if len(pedestrians_in_roi) < self.min_disorder_count:
-            return False, {}, []
-        last_metrics: dict[str, Any] = {}
-        for cluster in _spatial_clusters(pedestrians_in_roi):
+            return []
+        matches: list[tuple[dict[str, Any], list[_PedestrianState]]] = []
+        for cluster in _spatial_clusters(pedestrians_in_roi, frame_dimensions=frame_dimensions):
             if len(cluster) < self.min_disorder_count:
                 continue
             is_disorder, metrics = self._evaluate_cluster_disorder(cluster)
             if is_disorder:
-                return True, metrics, cluster
-            last_metrics = metrics
-        return False, last_metrics, []
-
-    def _evaluate_disorder(
-        self,
-        pedestrians_in_roi: list[_PedestrianState],
-        ts: float,
-    ) -> tuple[bool, dict[str, Any]]:
-        """Evaluate Layer 2: Suspected Public Disorder across local spatial clusters."""
-        is_disorder, metrics, _ = self._find_disorder_cluster(pedestrians_in_roi)
-        return is_disorder, metrics
+                matches.append((metrics, cluster))
+        return matches
 
     def _create_facts(self, ctx: CrowdEventContext) -> dict[str, Any]:
         """Return rule facts (anchor kind and scenario payload); snapshot assembly belongs to the caller."""
@@ -511,6 +525,7 @@ class CrowdIncidentEngine:
                 state = _PedestrianState(track_id=tid, label=label)
                 self._tracks[tid] = state
 
+            state.label = label
             state.last_bbox = bbox
             state.last_score = score
             state.last_timestamp = ts
@@ -571,9 +586,18 @@ class CrowdIncidentEngine:
             self._crowd_start_time = None
 
         # 4. Layer 2: Suspected Public Disorder
-        is_disorder, metrics, disorder_cluster = self._find_disorder_cluster(pedestrians_in_roi)
-        if is_disorder:
-            if self._last_disorder_alert_time is None or (ts - self._last_disorder_alert_time) >= self.cooldown_seconds:
+        self._track_disorder_alert_time = {
+            tid: alert_ts
+            for tid, alert_ts in self._track_disorder_alert_time.items()
+            if (ts - alert_ts) < self.cooldown_seconds
+        }
+        for metrics, disorder_cluster in self._find_disorder_clusters(pedestrians_in_roi, frame_dimensions=dims):
+            in_cooldown = any(
+                (ts - self._track_disorder_alert_time[p.track_id]) < self.cooldown_seconds
+                for p in disorder_cluster
+                if p.track_id in self._track_disorder_alert_time
+            )
+            if not in_cooldown:
                 ctx = CrowdEventContext(
                     taxonomy="suspected_disorder",
                     severity=self.disorder_severity,
@@ -587,5 +611,6 @@ class CrowdIncidentEngine:
                 )
                 events.append(self._create_facts(ctx))
                 self._last_disorder_alert_time = ts
-
+                for p in disorder_cluster:
+                    self._track_disorder_alert_time[p.track_id] = ts
         return events

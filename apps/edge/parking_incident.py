@@ -205,6 +205,8 @@ class ParkingIncidentEngine:
                 label=track.label,
             )
             self._tracks[tid] = state
+        else:
+            state.label = track.label
         return state
 
     def _build_facts(

@@ -13,8 +13,7 @@ import math
 from typing import Any, NotRequired, TypedDict
 from uuid import uuid4
 
-from domain.event_contract import _FIELDS as _ENVELOPE_FIELDS
-from domain.event_contract import SCHEMA_VERSION, validate_event
+from domain.event_contract import ENVELOPE_FIELDS, SCHEMA_VERSION, validate_event
 from domain.evidence_contract import make_evidence_request
 
 
@@ -56,7 +55,7 @@ _FEATURE_KEYS = FeatureContext.__required_keys__
 # Semantic fields every payload must carry; none is defaulted, so missing input is never masked.
 _REQUIRED_PAYLOAD = ("taxonomy", "severity", "confidence", "anchor_time", "detection_time")
 # Owned by the snapshot module: facts may not supply or override them.
-_RESERVED_PAYLOAD = frozenset({"quality", "evidence_requests", "capability_scope"}) | _ENVELOPE_FIELDS
+_RESERVED_PAYLOAD = frozenset({"quality", "evidence_requests", "capability_scope"}) | ENVELOPE_FIELDS
 # Detector provenance comes from the runtime context, never from a feature's rule lineage.
 _DETECTOR_ROLES = frozenset({"detector", "person_detector", "vehicle_detector", "crowd_detector"})
 
