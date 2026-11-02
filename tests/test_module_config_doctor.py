@@ -27,13 +27,13 @@ DOCUMENT = {
             "config_version": "person-down-v1",
             "factory": "person_down",
             "required_fields": ["roi"],
-            "thresholds": ["min_score"],
+            "thresholds": ["min_drop_velocity"],
             "cameras": {
                 "cam-01": {
                     "version": 1,
                     "enabled": True,
                     "roi": [[[0.1, 0.1], [0.9, 0.1], [0.9, 0.9]]],
-                    "thresholds": {"min_score": 0.4},
+                    "thresholds": {"min_drop_velocity": 15.0},
                 },
                 "cam-02": {"version": 1, "enabled": False, "disabled_reason": "capability not cleared for site"},
             },
@@ -71,6 +71,34 @@ class ModuleDocumentTests(unittest.TestCase):
         self.assertEqual((cameras[1]["capability"], cameras[1]["reason"]), ("disabled", "capability not cleared for site"))
         self.assertNotIn("effective", entry)
         self.assertNotIn("session", entry)
+
+    def test_factory_untunable_threshold_fails_capabilities_report(self):
+        """Domain-valid document with factory-untunable threshold reports status=error."""
+        invalid_doc = {
+            "modules": [
+                {
+                    "module": "person_down",
+                    "config_version": "person-down-v1",
+                    "factory": "person_down",
+                    "required_fields": ["roi"],
+                    "thresholds": ["min_score"],
+                    "cameras": {
+                        "cam-01": {
+                            "version": 1,
+                            "enabled": True,
+                            "roi": [[[0.1, 0.1], [0.9, 0.1], [0.9, 0.9]]],
+                            "thresholds": {"min_score": 0.4},
+                        },
+                    },
+                }
+            ]
+        }
+        path = self.write(invalid_doc, name="invalid_threshold.json")
+        report = module_capabilities([path])
+        self.assertEqual(report["status"], "error")
+        self.assertEqual(report["reason"], "invalid module configuration")
+        self.assertEqual(report["errors"][0]["code"], "unknown_threshold")
+        self.assertEqual(report["errors"][0]["field"], "thresholds.min_score")
 
     def test_declared_session_activates_and_reports_enabled_capability(self):
         path = self.write(activated_document())

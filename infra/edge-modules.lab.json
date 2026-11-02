@@ -1,0 +1,12 @@
+{"modules": [
+  {"module": "danger_zone", "config_version": "lab-danger-zone-v1", "factory": "danger_zone",
+   "required_fields": ["roi", "schedule"], "thresholds": ["consecutive_hits", "min_dwell_seconds", "cooldown_seconds"],
+   "cameras": {"lab-camera-01": {"version": 1, "enabled": true,
+     "roi": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]],
+     "schedule": [{"days": ["mon","tue","wed","thu","fri","sat","sun"], "start_second": 0, "end_second": 86400}],
+     "thresholds": {"consecutive_hits": 2, "min_dwell_seconds": 0.0, "cooldown_seconds": 30.0}}}},
+  {"module": "person_down", "config_version": "lab-person-down-v1", "factory": "person_down",
+   "required_fields": ["roi"], "thresholds": [],
+   "cameras": {"lab-camera-01": {"version": 1, "enabled": true,
+     "roi": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]]}}}
+]}

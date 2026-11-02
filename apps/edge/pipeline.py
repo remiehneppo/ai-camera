@@ -31,6 +31,8 @@ from domain.alert_module_config import (
     CameraModuleConfig,
     ConfigError,
     ERROR_FACTORY_NOT_ALLOWED,
+    ERROR_UNKNOWN_MODULE,
+    ERROR_UNKNOWN_THRESHOLD,
     WEEKDAYS,
 )
 from apps.edge.perception import PerceptionExecution
@@ -161,6 +163,65 @@ def evaluate_odd(rgb: np.ndarray) -> str:
     return "invalid_frame" if q["state"] == "unknown" else q["state"]
 
 
+_TUNABLE_THRESHOLDS: dict[str, frozenset[str]] = {
+    "person_down": frozenset({
+        "standing_aspect_ratio",
+        "lying_aspect_ratio",
+        "min_drop_velocity",
+        "min_lying_duration",
+        "cooldown_seconds",
+        "max_motion_speed",
+        "persistent_lying_duration",
+        "max_observation_gap",
+        "vehicle_upright_aspect_ratio",
+        "vehicle_fallen_aspect_ratio",
+        "vehicle_stable_duration",
+        "vehicle_min_stable_frames",
+        "vehicle_overlap_iou",
+    }),
+    "danger_zone": frozenset({
+        "min_dwell_seconds",
+        "consecutive_hits",
+        "max_observation_gap",
+        "cooldown_seconds",
+        "min_score",
+    }),
+    "illegal_parking": frozenset({
+        "max_dwell_seconds",
+        "stationary_speed_threshold",
+        "stationary_displacement_threshold",
+        "max_observation_gap",
+        "cooldown_seconds",
+        "min_score",
+    }),
+    "crowd_incident": frozenset({
+        "min_crowd_count",
+        "min_duration_seconds",
+        "min_disorder_count",
+        "disorder_speed_threshold",
+        "disorder_acceleration_threshold",
+        "disorder_dispersal_threshold",
+        "disorder_direction_variance_threshold",
+        "max_observation_gap",
+        "cooldown_seconds",
+    }),
+    "vehicle_incident": frozenset({
+        "max_observation_gap",
+        "cooldown_seconds",
+        "min_moving_speed",
+        "stationary_speed",
+        "impact_deceleration_threshold",
+        "deflection_threshold",
+        "two_wheeler_rollover_ar",
+        "two_wheeler_upright_ar",
+        "car_rollover_ar_delta",
+        "pedestrian_drop_velocity",
+        "pedestrian_lying_ar",
+        "proximity_distance",
+    }),
+}
+
+
 def create_incident_engine(
     factory: str | None = None,
     *,
@@ -196,6 +257,16 @@ def create_incident_engine(
     exceptions = config.exceptions if config is not None else kwargs.pop("exceptions", None)
 
     thresholds: dict[str, Any] = dict(config.thresholds) if config is not None else {}
+    tunable = _TUNABLE_THRESHOLDS.get(actual_factory, frozenset())
+    for name in thresholds:
+        if name not in tunable:
+            raise ConfigError(
+                ERROR_UNKNOWN_THRESHOLD,
+                "threshold is not a tunable parameter of the module factory",
+                module=mod_name,
+                camera_id=camera_id,
+                field="thresholds." + name,
+            )
     params = {**thresholds, **kwargs}
     if cfg_version is not None:
         params["config_version"] = cfg_version
@@ -377,10 +448,7 @@ class PerceptionPipeline:
                     continue
                 defn: AlertModuleDefinition | None = None
                 if alert_registry is not None:
-                    try:
-                        defn = alert_registry.definition(mod_cfg.module)
-                    except Exception:
-                        defn = None
+                    defn = alert_registry.definition(mod_cfg.module)
                 factory_name = defn.factory if defn is not None else (mod_cfg.module if mod_cfg.module in ALLOWLISTED_FACTORIES else None)
                 if not factory_name or factory_name not in ALLOWLISTED_FACTORIES:
                     raise ConfigError(

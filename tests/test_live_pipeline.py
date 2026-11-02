@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 
 from apps.edge.incident import IncidentEngine
-from apps.edge.live_pipeline import LivePerceptionRunner
+from apps.edge.live_pipeline import LivePerceptionRunner, MetadataDeliveryWorker
 from apps.edge.outbox import EventOutbox
 from apps.edge.pipeline import PerceptionPipeline
 from apps.edge.recorder import FileRecorder
@@ -25,6 +25,95 @@ from apps.edge.rtsp_recorder import RtspRingRecorder
 from apps.edge.tracker import ByteTracker
 from domain.event_contract import validate_event
 
+
+class TestMetadataDeliveryWorker(unittest.TestCase):
+    def test_wake_triggers_callable_rapidly(self) -> None:
+        """(a) interval_seconds=60, start(), wake() -> callable is called within <= 1s."""
+        called_event = threading.Event()
+
+        def _deliver() -> None:
+            called_event.set()
+
+        worker = MetadataDeliveryWorker(_deliver, interval_seconds=60.0)
+        worker.start()
+        try:
+            worker.wake()
+            self.assertTrue(called_event.wait(timeout=1.0))
+        finally:
+            worker.stop()
+
+    def test_callable_exception_resilient_to_subsequent_wake(self) -> None:
+        """(b) callable raises on first invocation, second wake() still invokes callable."""
+        calls: list[int] = []
+
+        def _deliver() -> None:
+            calls.append(len(calls) + 1)
+            if len(calls) == 1:
+                raise RuntimeError("simulated delivery failure")
+
+        worker = MetadataDeliveryWorker(_deliver, interval_seconds=60.0)
+        worker.start()
+        try:
+            worker.wake()
+            time.sleep(0.1)
+            self.assertEqual(len(calls), 1)
+            worker.wake()
+            for _ in range(20):
+                if len(calls) >= 2:
+                    break
+                time.sleep(0.05)
+            self.assertGreaterEqual(len(calls), 2)
+        finally:
+            worker.stop()
+
+    def test_stop_returns_and_thread_terminates(self) -> None:
+        """(c) stop() returns and the background thread is no longer alive."""
+        worker = MetadataDeliveryWorker(lambda: None, interval_seconds=60.0)
+        worker.start()
+        thread = worker._thread
+        self.assertIsNotNone(thread)
+        self.assertTrue(thread.is_alive())
+        worker.stop(timeout=2.0)
+        self.assertIsNone(worker._thread)
+        self.assertFalse(thread.is_alive())
+
+    def test_stop_timeout_keeps_worker_owned_until_delivery_returns(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+        restarted = threading.Event()
+        calls = []
+
+        def deliver() -> None:
+            calls.append(threading.current_thread())
+            if len(calls) == 1:
+                entered.set()
+                release.wait()
+            else:
+                restarted.set()
+
+        worker = MetadataDeliveryWorker(deliver, interval_seconds=60.0)
+        worker.start()
+        try:
+            worker.wake()
+            self.assertTrue(entered.wait(timeout=1.0))
+            thread = worker._thread
+            with self.assertLogs("apps.edge.live_pipeline", level="WARNING"):
+                worker.stop(timeout=0.0)
+            self.assertIs(worker._thread, thread)
+            self.assertTrue(thread.is_alive())
+            worker.start()
+            self.assertIs(worker._thread, thread)
+            release.set()
+            worker.stop(timeout=1.0)
+            self.assertFalse(thread.is_alive())
+            self.assertIsNone(worker._thread)
+            worker.start()
+            worker.wake()
+            self.assertTrue(restarted.wait(timeout=1.0))
+            self.assertEqual(len(calls), 2)
+        finally:
+            release.set()
+            worker.stop()
 
 class TestLiveRuntimeHealth(unittest.TestCase):
     def test_recorder_start_failure_never_reports_running_or_healthy(self):

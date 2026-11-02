@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 from uuid import uuid4
 
 import cv2
@@ -31,7 +31,73 @@ from apps.edge.rtsp_recorder import RtspRingRecorder
 from apps.edge.tracker import ByteTracker
 from apps.edge.uploader import EdgeUploader
 
+from domain.alert_module_config import AlertModuleRegistry, CameraModuleConfig
 logger = logging.getLogger(__name__)
+
+
+class MetadataDeliveryWorker:
+    """Run edge delivery off the perception thread: on wake after a durable commit, else every interval."""
+
+    def __init__(
+        self,
+        deliver: Callable[[], object],
+        *,
+        interval_seconds: float,
+        name: str = "edge-delivery",
+    ) -> None:
+        if interval_seconds <= 0:
+            raise ValueError("interval_seconds must be positive")
+        self._deliver = deliver
+        self._interval_seconds = float(interval_seconds)
+        self._name = name
+        self._wake_event = threading.Event()
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+
+    def wake(self) -> None:
+        self._wake_event.set()
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._wake_event.clear()
+            self._thread = threading.Thread(
+                target=self._loop,
+                daemon=True,
+                name=self._name,
+            )
+            self._thread.start()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        with self._lock:
+            self._stop_event.set()
+            self._wake_event.set()
+            thread = self._thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=timeout)
+        with self._lock:
+            if thread is not None and thread.is_alive():
+                logger.warning(
+                    "Metadata delivery worker %s did not stop within %gs",
+                    self._name,
+                    timeout,
+                )
+            elif self._thread is thread:
+                self._thread = None
+
+    def _loop(self) -> None:
+        while not self._stop_event.is_set():
+            self._wake_event.wait(self._interval_seconds)
+            self._wake_event.clear()
+            if self._stop_event.is_set():
+                break
+            try:
+                self._deliver()
+            except Exception as exc:
+                logger.warning("Edge delivery pass failed: %s", exc)
 
 
 class LivePerceptionRunner:
@@ -55,6 +121,10 @@ class LivePerceptionRunner:
         incident_engine: IncidentEngine | None = None,
         uploader: EdgeUploader | None = None,
         pipeline: PerceptionPipeline | None = None,
+        module_configs: Sequence[CameraModuleConfig] | None = None,
+        alert_registry: AlertModuleRegistry | None = None,
+        manifest_path: str | Path | None = None,
+        model_path: str | Path | None = None,
         ring_recorder: RtspRingRecorder | None = None,
         upload_interval_seconds: float | None = None,
         health: EdgeHealthMonitor | None = None,
@@ -65,6 +135,11 @@ class LivePerceptionRunner:
         clock: Callable[[], float] = time.monotonic,
         sleeper: Callable[[float], None] | None = None,
     ) -> None:
+        if detector is not None and (manifest_path or model_path):
+            raise ValueError("provide detector or manifest_path/model_path, not both")
+        if pipeline is not None and (module_configs is not None or manifest_path or model_path):
+            raise ValueError("module_configs and model artifacts apply only when the runner builds its pipeline")
+
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.sample_fps = float(sample_fps)
@@ -185,6 +260,10 @@ class LivePerceptionRunner:
                 stream_session_id=self.session_id,
                 origin=origin,
                 health=health,
+                module_configs=module_configs,
+                alert_registry=alert_registry,
+                manifest_path=manifest_path,
+                model_path=model_path,
             )
 
         # 7. Health monitor
@@ -225,7 +304,17 @@ class LivePerceptionRunner:
         self._reconnect_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._ready_event = threading.Event()
-        self._last_upload_time: float = 0.0
+        self._delivery: MetadataDeliveryWorker | None = (
+            MetadataDeliveryWorker(
+                self.pipeline.trigger_upload,
+                interval_seconds=upload_interval_seconds,
+                name=f"live-delivery-{self.session_id}",
+            )
+            if self.pipeline.uploader is not None
+            and upload_interval_seconds is not None
+            and upload_interval_seconds > 0
+            else None
+        )
 
     @property
     def current_source(self) -> str:
@@ -465,9 +554,10 @@ class LivePerceptionRunner:
 
             self.frames_processed += 1
             if events:
+                if self._delivery is not None:
+                    self._delivery.wake()
                 self.incidents_emitted += len(events)
                 self.last_emitted_events.extend(events)
-
             return events
 
     def _read_next_frame(self) -> tuple[np.ndarray | None, str | None]:
@@ -518,7 +608,8 @@ class LivePerceptionRunner:
             try:
                 if self.ring_recorder is not None:
                     self.ring_recorder.start()
-
+                if self._delivery is not None:
+                    self._delivery.start()
                 if self.rtsp_url:
                     self._reconnect_thread = threading.Thread(
                         target=self._reconnect_loop,
@@ -537,6 +628,8 @@ class LivePerceptionRunner:
                 self._is_running = False
                 self._stop_event.set()
                 self.health.mark_stopped()
+                if self._delivery is not None:
+                    self._delivery.stop()
                 if self.ring_recorder is not None:
                     self.ring_recorder.stop()
                 raise
@@ -569,15 +662,6 @@ class LivePerceptionRunner:
                 except Exception as exc:
                     logger.warning("Error in live perception step: %s", exc)
 
-                # Periodic background evidence upload if enabled
-                if self.upload_interval_seconds and self.upload_interval_seconds > 0:
-                    if loop_start - self._last_upload_time >= self.upload_interval_seconds:
-                        try:
-                            self.trigger_upload()
-                            self._last_upload_time = loop_start
-                        except Exception as up_exc:
-                            logger.warning("Periodic upload trigger failed: %s", up_exc)
-
                 elapsed = time.monotonic() - loop_start
                 sleep_time = target_period - elapsed
                 if sleep_time > 0:
@@ -591,28 +675,28 @@ class LivePerceptionRunner:
         with self._lock:
             self.health.mark_stopped()
             recon_alive = self._reconnect_thread is not None and self._reconnect_thread.is_alive()
-            if not self._is_running and not recon_alive and (self._thread is None or not self._thread.is_alive()):
-                if self.ring_recorder is not None:
-                    self.ring_recorder.stop()
-                return
-
-            self._stop_event.set()
-            if self._cap is not None:
-                self._cap.release()
-                self._cap = None
+            is_running = self._is_running
             thread = self._thread
+            recon_thread = self._reconnect_thread
+            early_return = not is_running and not recon_alive and (thread is None or not thread.is_alive())
+            if not early_return:
+                self._stop_event.set()
+                if self._cap is not None:
+                    self._cap.release()
+                    self._cap = None
 
-        if thread and thread.is_alive():
-            thread.join(timeout=timeout)
+        if not early_return:
+            if thread and thread.is_alive():
+                thread.join(timeout=timeout)
+            if recon_thread and recon_thread.is_alive():
+                recon_thread.join(timeout=timeout)
 
-        recon_thread = self._reconnect_thread
-        if recon_thread and recon_thread.is_alive():
-            recon_thread.join(timeout=timeout)
+        if self._delivery is not None:
+            self._delivery.stop(timeout=timeout)
 
         with self._lock:
             if self.ring_recorder is not None:
                 self.ring_recorder.stop()
-
             self._is_running = False
 
     def trigger_upload(self, *, reconcile: bool = True, finish_sessions=()) -> int:

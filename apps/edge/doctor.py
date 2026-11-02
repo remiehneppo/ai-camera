@@ -142,12 +142,24 @@ def module_capabilities(paths: str | Path | Iterable[str | Path] | None) -> dict
     for path in _as_paths(paths):
         try:
             loaded = load_module_registry([path])
+            capabilities = loaded.registry.capabilities()
+            from apps.edge.pipeline import create_incident_engine
+            for module in loaded.registry.modules():
+                defn = loaded.registry.definition(module)
+                for camera in _camera_ids(capabilities):
+                    cfg = loaded.registry.config(module, camera)
+                    if cfg is not None and cfg.enabled:
+                        create_incident_engine(
+                            config=cfg,
+                            definition=defn,
+                            camera_id=cfg.camera_id,
+                            module_name=module,
+                        )
         except ConfigError as error:
             report['status'] = 'error'
             report['reason'] = 'invalid module configuration'
             report.setdefault('errors', []).append({**error.describe(), 'document': str(path)})
             continue
-        capabilities = loaded.registry.capabilities()
         entry: dict[str, Any] = {
             'document': str(path),
             **capabilities,

@@ -19,6 +19,7 @@ from domain.alert_module_config import (
     AlertModuleDefinition,
     AlertModuleRegistry,
     CameraModuleConfig,
+    ConfigError,
     RegionOfInterest,
     ScheduleWindow,
 )
@@ -770,6 +771,69 @@ class TestMultiModuleCarrierPipelineE2E(unittest.TestCase):
         # Center: (200, 200) inside ROI. Foot: (200, 350) outside ROI.
         track = Track(track_id=1, bbox=[150.0, 50.0, 250.0, 350.0], score=0.9, label="person", timestamp=1.0)
         self.assertTrue(engine._in_roi(track))
+
+    def test_pipeline_failfast_unknown_module_in_registry(self) -> None:
+        """Pipeline raises ConfigError(unknown_module) when a module in module_configs is not registered."""
+        registry = AlertModuleRegistry()
+        registry.register(
+            AlertModuleDefinition(
+                module="danger_zone",
+                config_version="v1",
+                factory="danger_zone",
+                required_fields=frozenset({"roi", "schedule"}),
+                thresholds=frozenset({"consecutive_hits"}),
+            )
+        )
+        cfg = CameraModuleConfig(
+            module="not_registered",
+            camera_id="cam-01",
+            version=1,
+            enabled=True,
+            roi=(RegionOfInterest(points=((0.1, 0.1), (0.9, 0.1), (0.9, 0.9))),),
+        )
+        with self.assertRaises(ConfigError) as ctx:
+            PerceptionPipeline(
+                recorder=self.recorder,
+                outbox=self.outbox,
+                camera_id="cam-01",
+                device_id="edge-01",
+                module_configs=[cfg],
+                alert_registry=registry,
+            )
+        self.assertEqual(ctx.exception.code, "unknown_module")
+
+    def test_pipeline_failfast_unknown_threshold(self) -> None:
+        """Pipeline raises ConfigError(unknown_threshold) when config specifies an untunable threshold."""
+        registry = AlertModuleRegistry()
+        registry.register(
+            AlertModuleDefinition(
+                module="danger_zone",
+                config_version="v1",
+                factory="danger_zone",
+                required_fields=frozenset({"roi", "schedule"}),
+                thresholds=frozenset({"consecutive_hits", "min_lying_duration"}),
+            )
+        )
+        cfg = CameraModuleConfig(
+            module="danger_zone",
+            camera_id="cam-01",
+            version=1,
+            enabled=True,
+            roi=(RegionOfInterest(points=((0.1, 0.1), (0.9, 0.1), (0.9, 0.9))),),
+            schedule=(ScheduleWindow(days=("mon",), start_second=0, end_second=86400),),
+            thresholds=(("min_lying_duration", 1.0),),
+        )
+        with self.assertRaises(ConfigError) as ctx:
+            PerceptionPipeline(
+                recorder=self.recorder,
+                outbox=self.outbox,
+                camera_id="cam-01",
+                device_id="edge-01",
+                module_configs=[cfg],
+                alert_registry=registry,
+            )
+        self.assertEqual(ctx.exception.code, "unknown_threshold")
+        self.assertEqual(ctx.exception.field, "thresholds.min_lying_duration")
 
 
 if __name__ == "__main__":
