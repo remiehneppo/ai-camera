@@ -23,9 +23,9 @@ class EvidenceLifecycle:
         self.quota_manager = quota_manager
 
     @contextmanager
-    def _worker(self):
+    def _worker(self, lock_name=".evidence-worker.lock"):
         # One coordinator per recorder store, including threads and other processes.
-        with (self.recorder.root / ".evidence-worker.lock").open("a") as lock:
+        with (self.recorder.root / lock_name).open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             try:
                 yield
@@ -181,109 +181,114 @@ class EvidenceLifecycle:
         return "fulfilled" if receipt.get("completeness") == "complete" else "partial"
 
     def upload_single_request(self, request_id):
-        with self._worker():
+        with self._worker(".evidence-upload.lock"):
             return self._upload(request_id)
 
     def _upload(self, request_id):
-        from apps.edge.uploader import _calculate_file_sha256
-        if self.transport is None:
-            return None
-        pin_status = self.recorder.pin_status(request_id)
-        if pin_status and pin_status.get("transfer_state") == "acknowledged":
-            self.outbox.update_evidence(request_id, state="acknowledged", receipt=pin_status)
-            return pin_status["transfer_receipt"]
-        all_requests = {req["request_id"]: req for req in self.outbox.evidence_requests()}
-        req_entry = all_requests.get(request_id)
-        if not req_entry:
-            logger.warning("evidence request %s not found in outbox", request_id)
-            return None
+        with self._worker():
+            from apps.edge.uploader import _calculate_file_sha256
+            if self.transport is None:
+                return None
+            pin_status = self.recorder.pin_status(request_id)
+            if pin_status and pin_status.get("transfer_state") == "acknowledged":
+                self.outbox.update_evidence(request_id, state="acknowledged", receipt=pin_status)
+                return pin_status["transfer_receipt"]
+            all_requests = {req["request_id"]: req for req in self.outbox.evidence_requests()}
+            req_entry = all_requests.get(request_id)
+            if not req_entry:
+                logger.warning("evidence request %s not found in outbox", request_id)
+                return None
 
-        device_id = req_entry.get("device_id")
-        event_id = req_entry.get("event_id")
-        receipt = req_entry.get("receipt") or {}
-        if pin_status:
-            receipt = {**receipt, **pin_status}
+            device_id = req_entry.get("device_id")
+            event_id = req_entry.get("event_id")
+            receipt = req_entry.get("receipt") or {}
+            if pin_status:
+                receipt = {**receipt, **pin_status}
 
-        artifact = receipt.get("artifact")
-        if not artifact or not isinstance(artifact, dict):
-            self.outbox.update_evidence(request_id, error="missing artifact metadata in receipt")
-            return None
+            artifact = receipt.get("artifact")
+            if not artifact or not isinstance(artifact, dict):
+                self.outbox.update_evidence(request_id, error="missing artifact metadata in receipt")
+                return None
 
-        artifact_path = Path(artifact["path"])
-        if not artifact_path.is_file():
-            logger.warning("evidence clip file missing on disk: %s", artifact_path)
-            self.outbox.update_evidence(request_id, state="failed", error=f"clip file missing: {artifact_path}")
-            return None
+            artifact_path = Path(artifact["path"])
+            if not artifact_path.is_file():
+                logger.warning("evidence clip file missing on disk: %s", artifact_path)
+                self.outbox.update_evidence(request_id, state="failed", error=f"clip file missing: {artifact_path}")
+                return None
 
-        # Verify size and SHA-256 before upload
-        actual_size = artifact_path.stat().st_size
-        if actual_size != artifact["size_bytes"]:
-            logger.warning("evidence clip size mismatch for %s: %d != %d", request_id, actual_size, artifact["size_bytes"])
-            self.outbox.update_evidence(request_id, error=f"size mismatch: {actual_size} != {artifact['size_bytes']}")
-            return None
+            # Verify size and SHA-256 before upload
+            actual_size = artifact_path.stat().st_size
+            if actual_size != artifact["size_bytes"]:
+                logger.warning("evidence clip size mismatch for %s: %d != %d", request_id, actual_size, artifact["size_bytes"])
+                self.outbox.update_evidence(request_id, error=f"size mismatch: {actual_size} != {artifact['size_bytes']}")
+                return None
 
-        actual_sha256 = _calculate_file_sha256(artifact_path)
-        if actual_sha256 != artifact["sha256"]:
-            logger.warning("evidence clip sha256 mismatch for %s", request_id)
-            self.outbox.update_evidence(request_id, error="sha256 integrity mismatch")
-            return None
+            actual_sha256 = _calculate_file_sha256(artifact_path)
+            if actual_sha256 != artifact["sha256"]:
+                logger.warning("evidence clip sha256 mismatch for %s", request_id)
+                self.outbox.update_evidence(request_id, error="sha256 integrity mismatch")
+                return None
 
-        # Prepare headers & metadata
-        metadata = {
-            "request_id": request_id,
-            "session_id": receipt.get("session_id"),
-            "owner": receipt.get("owner"),
-            "requested_start": receipt.get("requested_start"),
-            "requested_end": receipt.get("requested_end"),
-            "actual_start": receipt.get("actual_start"),
-            "actual_end": receipt.get("actual_end"),
-            "actual_range": [receipt.get("actual_start"), receipt.get("actual_end")],
-            "actual_ranges": receipt.get("actual_ranges", []),
-            "completeness": receipt.get("completeness"),
-            "reason": receipt.get("reason"),
-            "codec": artifact.get("codec"),
-            "sha256": artifact["sha256"],
-            "size_bytes": artifact["size_bytes"],
-        }
-        for k in (
-            "evidence_anchor_kind",
-            "evidence_anchor_time",
-            "mapping_uncertainty",
-            "policy_version",
-            "supersedes_request_id",
-        ):
-            if receipt.get(k) is not None:
-                metadata[k] = receipt[k]
+            # Prepare headers & metadata
+            metadata = {
+                "request_id": request_id,
+                "session_id": receipt.get("session_id"),
+                "owner": receipt.get("owner"),
+                "requested_start": receipt.get("requested_start"),
+                "requested_end": receipt.get("requested_end"),
+                "actual_start": receipt.get("actual_start"),
+                "actual_end": receipt.get("actual_end"),
+                "actual_range": [receipt.get("actual_start"), receipt.get("actual_end")],
+                "actual_ranges": receipt.get("actual_ranges", []),
+                "completeness": receipt.get("completeness"),
+                "reason": receipt.get("reason"),
+                "codec": artifact.get("codec"),
+                "sha256": artifact["sha256"],
+                "size_bytes": artifact["size_bytes"],
+            }
+            for k in (
+                "evidence_anchor_kind",
+                "evidence_anchor_time",
+                "mapping_uncertainty",
+                "policy_version",
+                "supersedes_request_id",
+            ):
+                if receipt.get(k) is not None:
+                    metadata[k] = receipt[k]
 
-        endpoint = f"{self.transport.server_url}/v1/evidence/{device_id}/{event_id}/{request_id}"
-        headers = {
-            "Authorization": f"Bearer {self.transport.device_token}",
-            "X-Evidence-Sha256": artifact["sha256"],
-            "X-Evidence-Metadata": json.dumps(metadata, separators=(",", ":")),
-            "Content-Type": artifact.get("content_type", "video/x-matroska"),
-            "Content-Length": str(artifact["size_bytes"]),
-        }
+            endpoint = f"{self.transport.server_url}/v1/evidence/{device_id}/{event_id}/{request_id}"
+            headers = {
+                "Authorization": f"Bearer {self.transport.device_token}",
+                "X-Evidence-Sha256": artifact["sha256"],
+                "X-Evidence-Metadata": json.dumps(metadata, separators=(",", ":")),
+                "Content-Type": artifact.get("content_type", "video/x-matroska"),
+                "Content-Length": str(artifact["size_bytes"]),
+            }
 
         try:
             server_receipt = self.transport.transfer(endpoint, artifact, headers)
-            self.recorder.acknowledge_transfer(request_id, server_receipt)
-            self.outbox.update_evidence(request_id, state="acknowledged", receipt={
-                **receipt, "transfer_state": "acknowledged", "transfer_receipt": server_receipt})
+            with self._worker():
+                self.recorder.acknowledge_transfer(request_id, server_receipt)
+                self.outbox.update_evidence(request_id, state="acknowledged", receipt={
+                    **receipt, "transfer_state": "acknowledged", "transfer_receipt": server_receipt})
             return server_receipt
         except UploadPayloadTooLarge as exc:
             # Operational fault, not a transient error: keep the pin (local clip is the only copy),
             # never retry blindly, and never acknowledge/release.
             logger.error("evidence %s rejected with 413; local pin kept", request_id)
-            self.outbox.update_evidence(request_id, state="failed", receipt={
-                **receipt, "operational_fault": "upload_413_payload_too_large"}, error=f"operational_fault: {exc}")
+            with self._worker():
+                self.outbox.update_evidence(request_id, state="failed", receipt={
+                    **receipt, "operational_fault": "upload_413_payload_too_large"}, error=f"operational_fault: {exc}")
             return None
         except (OSError, ValueError) as exc:
-            self.outbox.update_evidence(request_id, error=exc)
+            with self._worker():
+                self.outbox.update_evidence(request_id, error=exc)
             return None
 
     def upload_pending(self, batch_size=10, *, reconcile=False):
-        with self._worker():
+        # Serialize senders separately; held pins protect files during network I/O.
+        with self._worker(".evidence-upload.lock"):
             if reconcile:
-                self._reconcile()
+                self.reconcile()
             requests = [r for r in self.outbox.evidence_requests() if r["state"] in {"fulfilled", "partial"}]
             return sum(self._upload(r["request_id"]) is not None for r in requests[:batch_size])

@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 import subprocess
 import sys
-import time
 
 from apps.edge.rtsp import load_rtsp_config, probe_rtsp_stream, sanitize_probe_output
 
@@ -62,37 +62,32 @@ def main(argv: list[str] | None = None) -> int:
             "-",
         ]
 
-        procs: list[subprocess.Popen[str]] = []
-        for _ in range(k):
-            p = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            procs.append(p)
-
-        results: list[dict] = []
-        for p in procs:
-            try:
-                out, err = p.communicate(timeout=timeout_seconds)
-                code: int | None = p.returncode
-            except subprocess.TimeoutExpired:
-                p.kill()
-                out, err = p.communicate()
-                code = None
+        def probe_session(_: int) -> dict:
+            with subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            ) as p:
+                try:
+                    out, err = p.communicate(timeout=timeout_seconds)
+                    code: int | None = p.returncode
+                except subprocess.TimeoutExpired:
+                    p.kill()
+                    out, err = p.communicate()
+                    code = None
 
             packets = len([line for line in out.splitlines() if line.strip() and not line.strip().startswith("#")])
             ok = (code == 0) and (packets >= 0.95 * expected_packets)
             sanitized_err = sanitize_probe_output(err, config.stream_url)
 
-            results.append({
+            return {
                 "exit_code": code,
                 "packets": packets,
                 "expected": expected_packets,
                 "ok": ok,
                 "stderr": sanitized_err,
-            })
+            }
+
+        with ThreadPoolExecutor(max_workers=k) as executor:
+            results = list(executor.map(probe_session, range(k)))
 
         levels.append({
             "sessions": k,

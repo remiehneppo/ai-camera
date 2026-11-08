@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import http.server
 import json
@@ -10,8 +11,10 @@ import threading
 import time
 from typing import Any
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
+from apps.edge.evidence import EvidenceLifecycle
 from apps.edge.outbox import EventOutbox
 from apps.edge.recorder import FileRecorder
 from apps.edge.uploader import EdgeUploader
@@ -195,6 +198,69 @@ class EdgeUploaderTests(unittest.TestCase):
             )
 
         return {"event": event, "receipt": receipt, "clip_path": clip_path, "clip_bytes": clip_bytes}
+
+    def test_slow_transfer_allows_persist_and_reconcile(self) -> None:
+        for single in (False, True):
+            with self.subTest(single=single):
+                request_id = f"slow-{single}"
+                data = self._create_evidence(request_id)
+                uploader = EdgeUploader(self.outbox, self.recorder, self.server_url, self.device_token)
+                lifecycle = EvidenceLifecycle(self.outbox, self.recorder, uploader)
+                entered, release = threading.Event(), threading.Event()
+
+                def transfer(*args):
+                    entered.set()
+                    if not release.wait(5):
+                        raise TimeoutError("test transfer not released")
+                    return {"request_id": request_id, "sha256": data["receipt"]["artifact"]["sha256"],
+                            "size_bytes": len(data["clip_bytes"]), "location": "/stored", "status": "committed"}
+
+                def persist_and_reconcile():
+                    event = event_fixture()
+                    event["message_id"] = f"new-{single}"
+                    event["event_id"] = f"00000000-0000-4000-8000-00000000000{3 + single}"
+                    lifecycle.persist(event)
+                    lifecycle.reconcile()
+                    self.assertTrue(data["clip_path"].is_file())
+                    self.assertNotEqual(self.recorder.pin_status(request_id).get("transfer_state"), "acknowledged")
+
+                with patch.object(uploader, "transfer", side_effect=transfer), ThreadPoolExecutor(2) as executor:
+                    upload = executor.submit(lifecycle.upload_single_request, request_id) if single else executor.submit(lifecycle.upload_pending)
+                    try:
+                        self.assertTrue(entered.wait(2))
+                        executor.submit(persist_and_reconcile).result(timeout=2)
+                    finally:
+                        release.set()
+                    self.assertTrue(upload.result(timeout=2))
+                self.assertEqual(self.recorder.pin_status(request_id)["transfer_state"], "acknowledged")
+
+    def test_concurrent_coordinators_do_not_upload_twice(self) -> None:
+        data = self._create_evidence("serialized")
+        uploader = EdgeUploader(self.outbox, self.recorder, self.server_url, self.device_token)
+        entered, release, attempted = threading.Event(), threading.Event(), threading.Event()
+
+        def transfer(*args):
+            entered.set()
+            if not release.wait(5):
+                raise TimeoutError("test transfer not released")
+            return {"request_id": "serialized", "sha256": data["receipt"]["artifact"]["sha256"],
+                    "size_bytes": len(data["clip_bytes"]), "location": "/stored", "status": "committed"}
+
+        def second_upload():
+            attempted.set()
+            return EvidenceLifecycle(self.outbox, self.recorder, uploader).upload_single_request("serialized")
+
+        with patch.object(uploader, "transfer", side_effect=transfer) as send, ThreadPoolExecutor(2) as executor:
+            first = executor.submit(uploader.upload_pending)
+            try:
+                self.assertTrue(entered.wait(2))
+                second = executor.submit(second_upload)
+                self.assertTrue(attempted.wait(2))
+            finally:
+                release.set()
+            self.assertEqual(first.result(timeout=2), 1)
+            self.assertEqual(second.result(timeout=2)["request_id"], "serialized")
+            self.assertEqual(send.call_count, 1)
 
     def test_successful_upload(self) -> None:
         data = self._create_evidence("req-success")
