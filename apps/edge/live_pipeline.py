@@ -16,6 +16,7 @@ import numpy as np
 
 from apps.edge.health import EdgeHealthMonitor
 from apps.edge.incident import IncidentEngine
+from apps.edge.media_engine import Go2RtcMediaEngine
 from apps.edge.oracle_detector import OnnxDetector
 from apps.edge.outbox import EventOutbox
 from apps.edge.pipeline import PerceptionPipeline
@@ -266,7 +267,8 @@ class LivePerceptionRunner:
                 model_path=model_path,
             )
 
-        # 7. Health monitor
+        # 7. Health monitor & Media Engine
+        self.media_engine = Go2RtcMediaEngine(fallback_recorder=self.recorder)
         self.health = health or getattr(self.pipeline, "health", None) or EdgeHealthMonitor(
             recorder=self.recorder,
             recorder_session_id=self.session_id,

@@ -2,7 +2,7 @@ schema: spec-driven
 
 context: |
   Language: Vietnamese with diacritics. Keep OpenSpec structural headings and SHALL/MUST in English.
-  This repository is AI-Camera-OC, not a workspace monorepo.
+  This repository is civi-watch (CiviWatch), not a workspace monorepo.
   Domain vocabulary lives in CONTEXT.md; accepted constraints live in docs/adr/0001-0006.
   New architecture drafts remain proposed until explicitly accepted; specifications are not runtime evidence.
   Keep independent alert feature rules/state/config and shared compatible perception.

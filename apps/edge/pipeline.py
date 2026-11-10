@@ -20,10 +20,14 @@ from apps.edge.danger_zone import DangerZoneIncidentEngine
 from apps.edge.evidence import EvidenceLifecycle
 from apps.edge.geometry import is_normalized_polygon, scale_roi_to_pixels
 from apps.edge.health import EdgeHealthMonitor
+from apps.edge.homography import GroundPlaneHomography
 from apps.edge.incident import IncidentEngine, point_in_polygon
 from apps.edge.oracle_detector import OnnxDetector
 from apps.edge.parking_incident import ParkingIncidentEngine
+from apps.edge.urban_safety_engine import UrbanSafetyScenarioEngine, extract_environmental_signals
 from apps.edge.vehicle_incident import VehicleIncidentEngine
+from apps.edge.vlm_verifier import StoryboardBuilder, VLMVerifier
+from domain.urban_scenarios import SCENARIO_BY_FACTORY
 from domain.alert_module_config import (
     ALLOWLISTED_FACTORIES,
     AlertModuleDefinition,
@@ -219,7 +223,17 @@ _TUNABLE_THRESHOLDS: dict[str, frozenset[str]] = {
         "pedestrian_lying_ar",
         "proximity_distance",
     }),
+    "urban_safety_vlm": frozenset({
+        "min_score",
+        "cooldown_seconds",
+        "max_observation_gap",
+        "min_persistence_seconds",
+    }),
 }
+
+for _spec in SCENARIO_BY_FACTORY.values():
+    if _spec.factory not in _TUNABLE_THRESHOLDS:
+        _TUNABLE_THRESHOLDS[_spec.factory] = _spec.tunable_thresholds
 
 
 def create_incident_engine(
@@ -333,12 +347,30 @@ def create_incident_engine(
             **params,
         )
     elif actual_factory == "vehicle_incident":
+        if "homography" not in params and frame_dimensions is not None and frame_dimensions[0] > 0 and frame_dimensions[1] > 0:
+            params["homography"] = GroundPlaneHomography.default_urban_cctv(
+                int(frame_dimensions[0]),
+                int(frame_dimensions[1]),
+            )
         return VehicleIncidentEngine(
             camera_id=camera_id,
             device_id=device_id,
             stream_session_id=stream_session_id,
             module_name=mod_name,
             roi_polygon=roi_poly,
+            **params,
+        )
+    elif actual_factory in ALLOWLISTED_FACTORIES:
+        return UrbanSafetyScenarioEngine(
+            factory=actual_factory,
+            module_name=mod_name,
+            camera_id=camera_id,
+            device_id=device_id,
+            stream_session_id=stream_session_id,
+            roi_polygon=roi_poly,
+            schedule=schedule,
+            exceptions=exceptions,
+            frame_dimensions=frame_dimensions,
             **params,
         )
     raise ConfigError(ERROR_FACTORY_NOT_ALLOWED, f"unsupported factory '{actual_factory}'", field="factory")
@@ -378,8 +410,11 @@ class PerceptionPipeline:
         module_configs: Sequence[CameraModuleConfig] | None = None,
         alert_registry: AlertModuleRegistry | None = None,
         capability_policies: Mapping[str, dict[str, Any]] | None = None,
+        vlm_verifier: VLMVerifier | None = None,
     ) -> None:
         self.alert_registry = alert_registry
+        self.vlm_verifier = vlm_verifier
+        self.storyboard = StoryboardBuilder()
         self.recorder = recorder
         self.outbox = outbox
         self.uploader = uploader
@@ -513,7 +548,7 @@ class PerceptionPipeline:
         self.health.quota_manager = self.quota_manager
         self._cached_roi_key: tuple[Any, int, int] | None = None
         self._cached_pixel_roi: list[list[float]] | None = None
-        self._engine_param_cache: dict[int, tuple[bool, bool]] = {}
+        self._engine_param_cache: dict[int, tuple[bool, bool, bool]] = {}
     def _get_pixel_roi(self, width: int, height: int) -> list[list[float]] | None:
         """Retrieve or compute cached pixel-scaled ROI polygon for current frame dimensions."""
         if self.roi_polygon is None:
@@ -533,8 +568,9 @@ class PerceptionPipeline:
         timestamp: float,
         pose_outcomes: list[Any],
         frame_dimensions: tuple[float, float],
+        rgb: np.ndarray | None = None,
     ) -> list[dict[str, Any]]:
-        """Dispatch track evaluation to an incident engine matching its supported signature."""
+        """Dispatch track evaluation to an incident engine matching its supported signature (metadata only)."""
         engine_id = id(engine)
         params_info = self._engine_param_cache.get(engine_id)
         if params_info is None:
@@ -544,17 +580,21 @@ class PerceptionPipeline:
                 has_varkw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
                 has_pose = has_varkw or ("pose_outcomes" in params)
                 has_dims = has_varkw or ("frame_dimensions" in params)
-                params_info = (has_pose, has_dims)
+                has_env = has_varkw or ("environmental_signals" in params)
+                params_info = (has_pose, has_dims, has_env)
             except Exception:
-                params_info = (True, True)
+                params_info = (True, True, False)
             self._engine_param_cache[engine_id] = params_info
 
-        has_pose, has_dims = params_info
+        has_pose, has_dims, has_env = params_info
         kwargs: dict[str, Any] = {}
         if has_pose:
             kwargs["pose_outcomes"] = pose_outcomes
         if has_dims:
             kwargs["frame_dimensions"] = frame_dimensions
+        if has_env and rgb is not None:
+            roi_poly = getattr(engine, "roi_polygon", None) or self.roi_polygon
+            kwargs["environmental_signals"] = extract_environmental_signals(rgb, roi_poly, frame_dimensions)
 
         return engine.process_tracks(tracks, timestamp=timestamp, **kwargs)
     def get_engine(self, name_or_factory: str) -> Any | None:
@@ -600,6 +640,7 @@ class PerceptionPipeline:
                 engine.reset()
             if self.pose_manager is not None:
                 self.pose_manager.set_epoch(self.core_epoch)
+            self.storyboard.clear()
             self._last_frame_id = -1
             self._last_timestamp = None
             self._lineage = lineage
@@ -696,6 +737,9 @@ class PerceptionPipeline:
         # 3. Assess incident engines
         emitted_events: list[dict[str, Any]] = []
         frame_dims = (float(rgb.shape[1]), float(rgb.shape[0]))
+        if self.vlm_verifier is not None or any(getattr(e, "vlm_verifier", None) is not None for e in self.incident_engines):
+            det_dicts = [{"bbox": list(t.bbox), "label": t.label, "score": t.score} for t in tracks]
+            self.storyboard.record_frame(rgb, ts, fid, det_dicts)
         for engine in self.incident_engines:
             incidents = self._dispatch_engine_process_tracks(
                 engine,
@@ -703,8 +747,17 @@ class PerceptionPipeline:
                 timestamp=ts,
                 pose_outcomes=pose_outcomes,
                 frame_dimensions=frame_dims,
+                rgb=rgb,
             )
             for facts in (incidents or ()):
+                if isinstance(facts, dict) and isinstance(facts.get("payload"), dict):
+                    verifier = self.vlm_verifier or getattr(engine, "vlm_verifier", None)
+                    if verifier is not None and "vlm_verification" not in facts["payload"]:
+                        sb = self.storyboard.build_grid(ts, original_dimensions=frame_dims) if len(self.storyboard) > 0 else None
+                        verdict = verifier.verify(facts, storyboard=sb)
+                        facts["payload"]["vlm_verification"] = verdict.to_dict()
+                        if not verdict.verified:
+                            continue
                 cap_name = str(getattr(engine, "factory", getattr(engine, "module", "person_down")))
                 quality = self.quality
                 scope = None

@@ -11,7 +11,7 @@ Updated: 2026-10-11
 
 ## Phạm vi và bàn giao
 
-- Ownership dự kiến: `src/traffic_camera/domain/motion/, adapters/geometry/, tools/calibration/`. Chỉ tạo phần cần cho phase đang làm; đường dẫn source chưa tồn tại là vị trí dự kiến.
+- Ownership thực tế (CiviWatch v2): `domain/vehicle_motion.py`, `apps/edge/geometry.py`, `apps/edge/homography.py`, `apps/edge/vehicle_incident.py`.
 - Contract: Calibration + tracks/time → ground/motion/risk + vehicle acceptance.
 - SOLID cần kiểm: SRP: projection khác derivatives và incident decisions; ISP: person-down không bị buộc cần calibrated speed.
 - Consumers/callers cần rà: các task có dependency tới task trong module này; xem dependency map tại mục lục. Trước sửa source dùng CodeGraph context/impact và kiểm producer/consumer cùng contract.

@@ -1,0 +1,17 @@
+# CiviWatch v2 — go2rtc Zero-Plumbing Media & WebRTC Engine Configuration
+api:
+  listen: ":1984"
+  origin: "*"
+
+rtsp:
+  listen: ":8554"
+
+webrtc:
+  listen: ":8555"
+
+streams:
+  civi-cam-01:
+    - rtsp://127.0.0.1:8554/raw-cam-01
+    - ffmpeg:data/benchmark/intersection_traffic_1080p.mp4#video=copy
+  civi-cam-02:
+    - ffmpeg:data/benchmark/shibuya_crossing_1080p.mp4#video=copy

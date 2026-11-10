@@ -1,6 +1,6 @@
-# Tài liệu hệ thống AI Camera
+# Tài liệu hệ thống CiviWatch (`civi-watch`)
 
-**Cập nhật hệ thống: 2026-10-30.** Toàn bộ 893 unit & integration tests (188 subtests) và kiểm tra kiểu tĩnh `mypy` (72 source files) toàn dự án xanh. Hiện tại 29 tickets đã hoàn thành (`done`) và 10 tickets đạt mức thử nghiệm (`partial`) trong software lab. 5 nhóm tính năng nhận diện trên Edge đã hoạt động trong software lab: Person-down (US09), Tai nạn giao thông (US08), Xâm nhập vùng nguy hiểm (US10 / #57), Đỗ xe sai vùng/giờ (US05), và Tập trung đông người / gây rối (US06).
+**Cập nhật hệ thống: 2026-11-09 (Kiến trúc CiviWatch v2 — Nhánh `civi-watch`).** Toàn bộ **918 unit & integration tests (190 subtests)** và kiểm tra kiểu tĩnh `mypy` (**79 source files**) toàn dự án xanh 100%. Hệ thống đã được rebrand cứng sang **CiviWatch (`civi-watch`)** và nâng cấp lên kiến trúc 4 tầng CiviWatch v2, triển khai đầy đủ **14/14 nhóm kịch bản an toàn đô thị (US01–US14)** trên Edge trong software lab kèm bộ hậu kiểm **Tier-2 VLM Temporal Storyboard (`2×3` Set-of-Mark Grid)**, **Ground-Plane Homography ($3\times 3$)**, **Batched RTMPose** và **Go2RTC Media Engine**.
 
 ODD phần cứng được khóa cứng: **100% camera CCTV giao thông cố định, độ nét từ HD (720p) đến 2MP (1080p)**; loại bỏ camera hành trình (dashcam) và camera độ nét thấp (< 720p).
 
@@ -9,11 +9,11 @@ ODD phần cứng được khóa cứng: **100% camera CCTV giao thông cố đ�
 | Cần biết | Tài liệu chuẩn |
 |---|---|
 | Hệ thống làm gì, các thuật ngữ domain chuẩn | [CONTEXT](../CONTEXT.md) |
-| Định nghĩa các nhóm an toàn đô thị, tham số, hard negatives và gates | [Requirement tình huống](requirements/urban-safety-scenarios.md) |
-| Module, dependency, ODD camera cố định và fault boundary | [Kiến trúc hệ thống](architecture/system-architecture.md) |
-| Hợp đồng API, anchor alert_condition, signed config, rollback, WAN outage và retention | [Hợp đồng tích hợp](architecture/contracts.md) |
-| Quyết định kiến trúc cốt lõi | [ADR-0001 pipeline](adr/0001-feature-pipeline-boundaries.md), [ADR-0002 downstream](adr/0002-server-downstream-event-publishing.md), [ADR-0003 backend](adr/0003-fastapi-mongodb-backend.md), [ADR-0004 contracts](adr/0004-integration-contracts.md) |
-| Snapshot và semantic replay Python reference | [ADR-0005 snapshot](adr/0005-incident-snapshot-ownership.md), [ADR-0006 replay](adr/0006-semantic-replay-pipeline-reuse.md), [OpenSpec design](../openspec/changes/deepen-incident-snapshots-and-replay/design.md), [Tiến độ và kiểm chứng](../openspec/changes/deepen-incident-snapshots-and-replay/tasks.md), [Log triển khai](logs/2026-10-29-architecture-deepening-review.md#implementation-authorized--2026-10-30) |
+| Định nghĩa 14 nhóm an toàn đô thị (US01–US14), tham số, hard negatives và gates | [Requirement tình huống](requirements/urban-safety-scenarios.md) |
+| Kiến trúc 4 tầng CiviWatch v2, 14 kịch bản Edge, Homography, VLM Verifier & Go2RTC | [Kiến trúc hệ thống](architecture/system-architecture.md), [ADR-0008 CiviWatch v2](adr/0008-civiwatch-v2-hybrid-vlm-architecture.md) |
+| Hợp đồng API, `vlm_verification`, anchor alert_condition, signed config, rollback, WAN outage và retention | [Hợp đồng tích hợp](architecture/contracts.md) |
+| Quyết định kiến trúc cốt lõi | [ADR-0001 pipeline](adr/0001-feature-pipeline-boundaries.md), [ADR-0002 downstream](adr/0002-server-downstream-event-publishing.md), [ADR-0003 backend](adr/0003-fastapi-mongodb-backend.md), [ADR-0004 contracts](adr/0004-integration-contracts.md), [ADR-0007 RTSP](adr/0007-rtsp-stream-ownership.md), [ADR-0008 CiviWatch v2](adr/0008-civiwatch-v2-hybrid-vlm-architecture.md) |
+| Snapshot và semantic replay Python reference | [ADR-0005 snapshot](adr/0005-incident-snapshot-ownership.md), [ADR-0006 replay](adr/0006-semantic-replay-pipeline-reuse.md), [Log CiviWatch v2](logs/2026-11-09-civi-watch-v2-implementation.md) |
 | Phase, ownership, phân bổ trách nhiệm | [Plan triển khai](architecture/implementation-plan.md) |
 | Theo dõi tiến độ và chọn việc | [Tracker thực thi](../.scratch/system-build-slices/PRD.md) và [Index mở rộng](../.scratch/system-build-slices/requirements-expansion-index.md) |
 | Sổ đăng ký dataset video (CCTV 720p–1080p, quy tắc loại bỏ dashcam) | [Sổ đăng ký dataset](datasets/video-datasets.md) |

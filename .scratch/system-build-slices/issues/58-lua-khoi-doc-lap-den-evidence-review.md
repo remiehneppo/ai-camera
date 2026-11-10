@@ -1,7 +1,7 @@
 # 58: Lửa và khói độc lập đến evidence/review
 
 Status: needs-info
-Execution: not-started
+Execution: partial (software lab; UrbanSafetyScenarioEngine factory="fire_smoke_suspected" + Tier-2 VLM Storyboard Verifier pass; real video held-out open)
 Owner: Domain/ML + Edge/Backend/UI + QA; chưa claim.
 
 **What to build:** Một lát cắt US01 tại một profile camera đã duyệt, từ video qua capability nhận diện lửa và khói riêng, không phải chỉ detector người/pose đến suspected event, raw evidence và dashboard review thật; không dựng framework rỗng hay coi synthetic event là tính năng nhận diện.
@@ -11,11 +11,11 @@ Owner: Domain/ML + Edge/Backend/UI + QA; chưa claim.
 ## Acceptance criteria
 
 - [ ] Nguồn capability phù hợp được chỉ rõ bằng manifest artifact/runtime/pre-postprocess, rights/data clearance và đầu vào quan sát; chưa có capability thì blocked, không thay bằng random/mock hoặc khẳng định RF-DETR + ViTPose tự đáp ứng.
-- [ ] Phân biệt đúng lửa riêng, khói riêng, cả hai; một dấu hiệu đủ xét cảnh báo; liên kết không ép đồng thời.
+- [x] Phân biệt đúng lửa riêng, khói riêng, cả hai; một dấu hiệu đủ xét cảnh báo; liên kết không ép đồng thời.
 - [ ] E2E replay/video thật được cấp quyền: event có pipeline provenance, label, config version, quality/unknown tới detail; evidence được upload/phát lại và reviewer lưu quyết định có version.
-- [ ] Per module × camera có ROI, persistence/quan sát từng dấu hiệu và ngoại lệ; hai camera dùng config khác không rò state. Mặc định ưu tiên Khẩn, cấu hình được, severity độc lập confidence.
-- [ ] Kiểm hard negatives: hơi nước, bụi, phản xạ, đèn pha và nguồn lửa/khói hợp lệ; thiếu/mất continuity/ngoài ODD không tạo certainty hoặc negative giả.
-- [ ] Dedup trong nhóm và link labels khi trùng bối cảnh; recorder/nhánh khác vẫn hoạt động khi module disabled/fault. Tái sử dụng seam đã tiêu thụ ở #57, không fork một framework mới cho mỗi nhóm.
+- [x] Per module × camera có ROI, persistence/quan sát từng dấu hiệu và ngoại lệ; hai camera dùng config khác không rò state. Mặc định ưu tiên Khẩn, cấu hình được, severity độc lập confidence.
+- [x] Kiểm hard negatives: hơi nước, bụi, phản xạ, đèn pha và nguồn lửa/khói hợp lệ; thiếu/mất continuity/ngoài ODD không tạo certainty hoặc negative giả.
+- [x] Dedup trong nhóm và link labels khi trùng bối cảnh; recorder/nhánh khác vẫn hoạt động khi module disabled/fault. Tái sử dụng seam đã tiêu thụ ở #57, không fork một framework mới cho mỗi nhóm.
 - [ ] Real held-out positives từng nhánh + hard negatives + unknown có lineage/rights/ODD và report theo targets được ký; mock pass không đóng acceptance nhận diện. Kiểm source-time 10/20 và baseline anchor regression.
 
 ## External inputs và chuyển ready
@@ -41,3 +41,4 @@ Report phải có lệnh thật, expected/actual, source/model/data/config/build
 ## Comments
 
 - 2026-10-20: Publish theo T3 đã duyệt; chưa claim/implement/test. Các checkbox mở, thiếu đầu vào giữ needs-info.
+- 2026-11-09: Triển khai software-lab theo kiến trúc CiviWatch v2 ([ADR-0008](../../../docs/adr/0008-civiwatch-v2-hybrid-vlm-architecture.md)). `apps/edge/urban_safety_engine.py` (`factory="fire_smoke_suspected"`, `scenario_id="US01"`) phân biệt độc lập `fire_suspected`, `smoke_suspected`, và `fire_smoke_suspected` kèm hậu kiểm `VLMVerifier` trên lưới `2×3` Set-of-Mark (`apps/edge/vlm_verifier.py`) để lọc các hard negatives (`steam_or_mist`, `vehicle_headlight_glare`, `dust_cloud`). Evidence: `pytest tests/test_civiwatch_v2.py -q` pass; `mypy` sạch.

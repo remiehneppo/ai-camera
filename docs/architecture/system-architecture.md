@@ -1,9 +1,9 @@
-# Kiến trúc hệ thống AI Camera giao thông tại edge
+# Kiến trúc hệ thống CiviWatch (`civi-watch`) tại Edge
 
-**Trạng thái:** Thiết kế tham chiếu; đã có software-lab implementation từng phần (xem mục lục/tracker), không phải tuyên bố mọi API/runtime đã implement hoặc cam kết hiệu năng.
-**Cập nhật nghiệp vụ & kiến trúc:** 2026-10-30. [Mục lục tài liệu](../README.md) · [Hợp đồng tích hợp chuẩn](contracts.md) · [Plan triển khai](implementation-plan.md).
-**Phạm vi:** Edge analytics, evidence, server cảnh báo/truy hồi và quản trị thiết bị.  
-**Cơ sở:** Các quyết định kỹ thuật trong hội thoại và [báo cáo nghiên cứu](../../traffic-ai-camera-research/report.md).
+**Trạng thái:** Thiết kế chuẩn CiviWatch v2 ([ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md)); đã triển khai đầy đủ trên software lab (918 tests pass, 79 source files `mypy` clean), chưa tuyên bố nghiệm thu phần cứng nhúng đích hoặc field pilot.
+**Cập nhật nghiệp vụ & kiến trúc:** 2026-11-09. [Mục lục tài liệu](../README.md) · [Hợp đồng tích hợp chuẩn](contracts.md) · [Plan triển khai](implementation-plan.md).
+**Phạm vi:** Edge analytics (4 tầng CiviWatch v2), 14 kịch bản an toàn đô thị (`US01`–`US14`), hậu kiểm VLM Storyboard, evidence, server cảnh báo/truy hồi và quản trị thiết bị.  
+**Cơ sở:** Các quyết định kỹ thuật trong [ADR-0001](../adr/0001-feature-pipeline-boundaries.md)–[ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md) và [báo cáo nghiên cứu](../../traffic-ai-camera-research/report.md).
 
 ## 1. Mục tiêu và giới hạn
 
@@ -15,16 +15,25 @@
 - Đảm bảo kết quả có provenance, timestamp, chất lượng quan sát và trạng thái xác minh; không báo im lặng khi hệ thống mất năng lực.
 - Cho phép kiểm thử offline/replay cùng pipeline realtime, benchmark toàn hệ thống trước mở rộng.
 
-### 1.1a Danh mục an toàn đô thị và trạng thái thực thi trên Edge
+### 1.1a Danh mục 14 kịch bản an toàn đô thị và trạng thái thực thi trên Edge (CiviWatch v2)
 
-[Requirement tình huống](../requirements/urban-safety-scenarios.md) xác định danh mục mục tiêu an toàn đô thị. Hiện tại, **5 nhóm nghiệp vụ nhận diện cốt lõi đã được triển khai trên Edge trong software lab**:
-1. **US09 — Person-down**: `person_fall` (có onset quan sát), `person_lying_persistent` (người nằm lòng đường), `person_on_stationary_vehicle` (người nằm/ngả trên xe đứng yên với độ ưu tiên review riêng), tích hợp RTMPose-Tiny keypoints 17 điểm.
-2. **US08 — Tai nạn có xe**: `vehicle_vehicle` (đâm va giữa các xe), `vehicle_pedestrian` (xe va chạm người đi bộ), `vehicle_rollover_or_barrier` (xe tự lật/ngã đâm dải phân cách) qua phân tích động học mượt hóa trajectory và rủi ro va chạm TTC / IoU không gian ảnh.
-3. **US10 — Vào vùng nguy hiểm**: `danger_zone_intrusion` theo dõi xâm nhập và thời gian duy trì liên tục (`dwell_seconds`) của người trong vùng ROI chuẩn hóa theo lịch hoạt động, làm carrier E2E cho kiến trúc `module × camera` (#57).
-4. **US05 — Đỗ xe sai vùng/giờ**: `illegal_parking` với cơ chế đo thời gian dừng đỗ liên tục (`dwell_seconds`) trong ROI cấm và khung giờ hạn chế (`ScheduleWindow`), loại bỏ 5 hard negatives.
-5. **US06 — Đông người & Nghi ngờ gây rối**: Phân tách 2 tầng độc lập: Tầng 1 `crowd_concentration` (tụ tập đông người theo số lượng và thời gian duy trì) và Tầng 2 `suspected_disorder` (gom cụm không gian theo kích thước phối cảnh, yêu cầu đa tác nhân phân tán hoảng loạn, xung đột động học vận tốc cao, hoặc biến thiên hướng hỗn loạn).
+[Requirement tình huống](../requirements/urban-safety-scenarios.md) và [`domain/urban_scenarios.py`](../../domain/urban_scenarios.py) xác định danh mục 14 nhóm an toàn đô thị (`US01`–`US14`). Trong kiến trúc **CiviWatch v2**, **toàn bộ 14/14 nhóm nghiệp vụ đã được triển khai trên Edge trong software lab** thông qua 5 engine chuyên biệt kết hợp với `UrbanSafetyScenarioEngine` ([`apps/edge/urban_safety_engine.py`](../../apps/edge/urban_safety_engine.py)) và bộ hậu kiểm **Tier-2 VLM Storyboard Verifier** ([`apps/edge/vlm_verifier.py`](../../apps/edge/vlm_verifier.py)):
+1. **US01 — Cháy / khói nghi ngờ (`fire_smoke_suspected`)**: Phát hiện độc lập `fire_suspected`, `smoke_suspected` và `fire_smoke_suspected`, hậu kiểm chống báo giả hơi nước/đèn pha.
+2. **US02 — Ngập nước đô thị (`urban_flooding`)**: Giám sát độ phủ mặt nước vượt mốc cảnh báo theo thời gian duy trì, lọc phản chiếu/đường ướt.
+3. **US03 — Đổ trộm / tồn lưu rác (`illegal_dumping`)**: Phân tách hành vi bỏ rác có diễn biến (`illegal_dumping_action`) và tồn lưu rác (`unlawful_waste_accumulation`).
+4. **US04 — Lấn chiếm vỉa hè (`sidewalk_encroachment`)**: Phát hiện xe/vật cản chiếm dụng vùng cần thông thoáng vượt thời gian cấu hình.
+5. **US05 — Đỗ xe sai vùng/giờ (`illegal_parking`)**: Đo thời gian dừng đỗ liên tục (`dwell_seconds`) trong ROI cấm và khung giờ hạn chế (`ScheduleWindow`), loại bỏ 5 hard negatives.
+6. **US06 — Đông người & Nghi ngờ gây rối (`crowd_incident`)**: Phân tách 2 tầng độc lập: Tầng 1 `crowd_concentration` và Tầng 2 `suspected_disorder` (gom cụm không gian theo kích thước phối cảnh, phân tán hoảng loạn, xung đột động học).
+7. **US07 — Ẩu đả / xô xát (`violent_altercation`)**: Phát hiện chuỗi tương tác động năng cao giữa ít nhất 2 người trong khoảng cách gần duy trì theo thời gian.
+8. **US08 — Tai nạn có xe (`vehicle_incident`)**: `vehicle_vehicle`, `vehicle_pedestrian`, `vehicle_rollover_or_barrier` qua phân tích động học mượt hóa trajectory và rủi ro va chạm TTC / IoU.
+9. **US09 — Person-down (`person_down`)**: `person_fall` (có onset quan sát), `person_lying_persistent` (người nằm lòng đường), `person_on_stationary_vehicle` (người nằm/ngả trên xe đứng yên với độ ưu tiên review riêng), tích hợp RTMPose-Tiny 17 keypoints chạy theo lô (`estimate_batch`).
+10. **US10 — Vào vùng nguy hiểm (`danger_zone`)**: `danger_zone_intrusion` theo dõi xâm nhập và thời gian duy trì liên tục (`dwell_seconds`) trong vùng ROI chuẩn hóa theo lịch hoạt động (#57).
+11. **US11 — Vật bỏ quên (`abandoned_object`)**: Phân tách vật có người đặt rồi rời xa (`abandoned_object_dropped`) và vật tồn lưu không rõ chủ (`unattended_object_persistent`).
+12. **US12 — Cây đổ chắn đường (`fallen_tree`)**: Phát hiện cây/cành lớn đã đổ chiếm diện tích cản trở trong ROI đường bộ.
+13. **US13 — Đèn đường hỏng (`streetlight_outage`)**: Giám sát độ sáng vùng đèn trong khung giờ bật sau khoảng chuyển tiếp.
+14. **US14 — Phá hoại tài sản (`property_vandalism`)**: Phát hiện chuỗi tác động động năng cao vào vùng tài sản công cộng, độc lập với ẩu đả.
 
-Mỗi tính năng là một pipeline engine độc lập được đăng ký qua allowlisted factory (`ALLOWLISTED_FACTORIES = frozenset({"person_down", "vehicle_incident", "danger_zone", "illegal_parking", "crowd_incident"})`), chia sẻ chung nguồn video, detector YOLOX-Tiny và ByteTracker mà không trùng lặp inference.
+Mỗi tính năng là một pipeline engine độc lập được đăng ký qua allowlisted factory (`ALLOWLISTED_FACTORIES` trong [`domain/alert_module_config.py`](../../domain/alert_module_config.py) gồm 14 factory kịch bản và `urban_safety_vlm`), chia sẻ chung nguồn video, detector YOLOX-Tiny vector hóa, ByteTracker và Ground-Plane Homography mà không trùng lặp inference.
 
 Camera cố định ngoài trời đường phố/vỉa hè; vùng/lịch/ngoại lệ cấu hình theo camera, không yêu cầu AI tự suy mọi quy định. AI tạo nghi ngờ, dashboard và người trực xác minh; không tự suy pháp lý, y tế, nguyên nhân/trách nhiệm hoặc điều phối cứu hộ. Ngày/đêm/mưa chỉ hỗ trợ trong ODD đã kiểm thử riêng từng nhóm. Severity cấu hình theo site và độc lập confidence; priority mặc định, ranh giới nhãn, hard negatives và ngưỡng pending theo requirement. Nhiều nhãn có thể liên kết một diễn biến, dedup riêng nhóm; không bắt buộc hợp nhất liên camera chính xác.
 
@@ -58,11 +67,13 @@ Camera cố định ngoài trời đường phố/vỉa hè; vùng/lịch/ngoạ
 | Provenance là contract bắt buộc | Mọi event/alert phải truy được camera/session/frame, config, model artifact hash, calibration version, capability/quality state và evidence còn tồn tại. Trường bắt buộc *hiện diện*, nhưng giá trị tường minh như `uncalibrated`/`unknown_artifact` hợp lệ. Event vi phạm schema vào forensic journal bounded ở trạng thái `malformed`, compact bản lặp và fault alert theo §6.17; không drop im lặng, không hứa lưu vô hạn khi disk lỗi/đầy |
 | Recorder ưu tiên hơn analytics | Khi tài nguyên thiếu, giảm analysis FPS/pose trước; không để inference backpressure làm mất video đã mã hóa |
 | Hai tầng ngôn ngữ: C++ perception core + Python control | Đường per-frame (decode→preprocess→inference→postprocess→track) là C++ (§6.7a); Python giữ phần tần suất thấp (orchestration, IncidentEngine, evidence, delivery, control). Pixel không đi qua Python trên hot path; chỉ metadata (detections/tracks/pose) vượt ranh giới |
-| Danh mục Allowlisted Factories | Đăng ký module cấu hình biên qua danh mục đóng an toàn `{"person_down", "vehicle_incident", "danger_zone", "illegal_parking", "crowd_incident"}`; từ chối các factory ngoài danh mục |
-| Chia sẻ Hình học Biên (`apps/edge/geometry.py`) | Thuật toán ray-casting `point_in_polygon` tập trung duy nhất tại module dùng chung; không sao chép trùng lặp trong từng engine |
-| Lưu trữ Trạng thái Biên Bền vững | SQLite WAL mode (`synchronous=FULL`) bảo đảm `high_water_mark` và cấu hình LKG không bị lùi hay mất sau crash/reboot |
+| Danh mục Allowlisted Factories | Đăng ký module cấu hình biên qua danh mục đóng an toàn `ALLOWLISTED_FACTORIES` gồm đủ 14 nhóm kịch bản `US01`–`US14` và `urban_safety_vlm` ([`domain/urban_scenarios.py`](../../domain/urban_scenarios.py)); từ chối các factory ngoài danh mục |
+| Chia sẻ Hình học Biên & Homography (`apps/edge/geometry.py`, `apps/edge/homography.py`) | Thuật toán ray-casting `point_in_polygon` và ma trận phối cảnh mặt đường $3\times 3$ (`GroundPlaneHomography`) tập trung tại module dùng chung, cung cấp tọa độ mét `(X_m, Y_m)` và vận tốc thực ($\text{m/s}$) |
+| Hậu kiểm Tier-2 VLM Storyboard (`apps/edge/vlm_verifier.py`, [ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md)) | Ghép 6 keyframes quanh sự kiện thành lưới `2×3` Set-of-Mark (`StoryboardBuilder`) để hậu kiểm qua VLM JSON Schema hoặc `LocalVisualVerifier`, lọc báo giả mà không bao giờ chặn luồng cảnh báo khi VLM offline |
+| Zero-Plumbing Media Engine (`infra/go2rtc.yaml`, `apps/edge/media_engine.py`) | Tích hợp `go2rtc` (`Go2RtcMediaEngine`) phục vụ WebRTC/MSE/MP4 stream-copy và snapshot tức thời, kèm fallback `FileRecorder` cục bộ |
+| Lưu trữ Trạng thái Biên Bền vững | SQLite WAL mode bảo đảm `high_water_mark` và cấu hình LKG không bị lùi hay mất sau crash/reboot |
 | Điều phối Mạng WAN & Ưu tiên Metadata | `WanOutageCoordinator` đảm bảo tự chủ 24h, bảo vệ 50MB reserve, không xóa TTL unACK, ưu tiên metadata trước clips và giải tỏa backlog theo $B / (U - G)$ |
-| Tập trung quyền tạo Snapshot ([ADR-0005](../adr/0005-incident-snapshot-ownership.md)) | 5 feature engine chỉ trả dữ kiện `{anchor_kind, payload}`; `apps/edge/snapshot.py:build_incident_snapshot` sở hữu duy nhất việc dựng, gắn ngữ cảnh/lineage/quality và validate full snapshot trước khi persist |
+| Tập trung quyền tạo Snapshot ([ADR-0005](../adr/0005-incident-snapshot-ownership.md)) | Các feature engine chỉ trả dữ kiện `{anchor_kind, payload}`; `apps/edge/snapshot.py:build_incident_snapshot` sở hữu duy nhất việc dựng, gắn ngữ cảnh/lineage/quality và validate full snapshot trước khi persist |
 | Tái sử dụng Pipeline cho Semantic Replay ([ADR-0006](../adr/0006-semantic-replay-pipeline-reuse.md)) | Các evaluator (`eval_clip`, `eval_vehicle`, `eval_all_scenarios`) gọi chung `PerceptionPipeline.process_frame` với `origin="replay"` và storage tạm độc lập, loại bỏ vòng điều phối trùng lặp |
 | Ghép nối Track theo Nhóm Nhãn Thô (`ByteTracker`) | Liên kết IoU chỉ thực hiện trong cùng nhóm ngữ nghĩa thô (`person`, `two_wheeler`, `motor_vehicle`), chặn nhãn nhiễu (`bird`, `cat`, `bench`) nuốt track người mà vẫn giữ liên tục khi xe nháy `bus`/`truck` |
 

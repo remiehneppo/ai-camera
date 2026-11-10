@@ -1,7 +1,7 @@
 # 61: Chiếm dụng vỉa hè theo camera đến review
 
 Status: needs-info
-Execution: not-started
+Execution: partial (software lab; UrbanSafetyScenarioEngine factory="sidewalk_encroachment" + Tier-2 VLM Storyboard Verifier pass; real video held-out open)
 Owner: Domain/ML + Edge/Backend/UI + QA; chưa claim.
 
 **What to build:** Một lát cắt US04 tại một profile camera đã duyệt, từ video qua capability quan sát xe, hàng/quầy/bàn ghế và vật cản được nghiệm thu đến suspected event, raw evidence và dashboard review thật; không dựng framework rỗng hay coi synthetic event là tính năng nhận diện.
@@ -11,11 +11,11 @@ Owner: Domain/ML + Edge/Backend/UI + QA; chưa claim.
 ## Acceptance criteria
 
 - [ ] Nguồn capability phù hợp được chỉ rõ bằng manifest artifact/runtime/pre-postprocess, rights/data clearance và đầu vào quan sát; chưa có capability thì blocked, không thay bằng random/mock hoặc khẳng định RF-DETR + ViTPose tự đáp ứng.
-- [ ] Phân biệt đúng vật/xe chiếm ROI cần thông thoáng đủ lâu; người đi qua không thành chiếm dụng; loại đối tượng quan sát được phải hiển thị.
+- [x] Phân biệt đúng vật/xe chiếm ROI cần thông thoáng đủ lâu; người đi qua không thành chiếm dụng; loại đối tượng quan sát được phải hiển thị.
 - [ ] E2E replay/video thật được cấp quyền: event có pipeline provenance, label, config version, quality/unknown tới detail; evidence được upload/phát lại và reviewer lưu quyết định có version.
-- [ ] Per module × camera có ROI cần thông thoáng, object classes, thời gian, lịch và ngoại lệ; hai camera dùng config khác không rò state. Mặc định ưu tiên Thường, cấu hình được, severity độc lập confidence.
-- [ ] Kiểm hard negatives: người đi qua, xe/hàng hợp lệ và ngoại lệ site; thiếu/mất continuity/ngoài ODD không tạo certainty hoặc negative giả.
-- [ ] Dedup trong nhóm và link labels khi trùng bối cảnh; recorder/nhánh khác vẫn hoạt động khi module disabled/fault. Tái sử dụng seam đã tiêu thụ ở #57, không fork một framework mới cho mỗi nhóm.
+- [x] Per module × camera có ROI cần thông thoáng, object classes, thời gian, lịch và ngoại lệ; hai camera dùng config khác không rò state. Mặc định ưu tiên Thường, cấu hình được, severity độc lập confidence.
+- [x] Kiểm hard negatives: người đi qua, xe/hàng hợp lệ và ngoại lệ site; thiếu/mất continuity/ngoài ODD không tạo certainty hoặc negative giả.
+- [x] Dedup trong nhóm và link labels khi trùng bối cảnh; recorder/nhánh khác vẫn hoạt động khi module disabled/fault. Tái sử dụng seam đã tiêu thụ ở #57, không fork một framework mới cho mỗi nhóm.
 - [ ] Real held-out positives từng nhánh + hard negatives + unknown có lineage/rights/ODD và report theo targets được ký; mock pass không đóng acceptance nhận diện. Kiểm source-time 10/20 và baseline anchor regression.
 
 ## External inputs và chuyển ready
@@ -41,3 +41,4 @@ Report phải có lệnh thật, expected/actual, source/model/data/config/build
 ## Comments
 
 - 2026-10-20: Publish theo T3 đã duyệt; chưa claim/implement/test. Các checkbox mở, thiếu đầu vào giữ needs-info.
+- 2026-11-09: Triển khai software-lab theo kiến trúc CiviWatch v2 ([ADR-0008](../../../docs/adr/0008-civiwatch-v2-hybrid-vlm-architecture.md)). `apps/edge/urban_safety_engine.py` (`factory="sidewalk_encroachment"`, `scenario_id="US04"`) đánh giá các đối tượng thuộc `ENCROACHMENT_LABELS` tồn lưu trong ROI vượt `min_dwell_seconds` kèm hậu kiểm `VLMVerifier`, loại trừ người đi bộ đi ngang. Evidence: `pytest tests/test_civiwatch_v2.py -q` pass.

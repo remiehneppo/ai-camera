@@ -76,7 +76,8 @@ class ServerEvidenceConfigTests(unittest.TestCase):
             "MONGO_URI": "mongodb://mongo:27017/?replicaSet=rs0",
         }
         cfg_default = load_server_config(base_env)
-        self.assertEqual(cfg_default.evidence_dir, "/tmp/ai-camera-evidence")
+        self.assertEqual(cfg_default.evidence_dir, "/tmp/civi-watch-evidence")
+        self.assertEqual(cfg_default.mongo_database, "civi_watch")
 
         env_custom = dict(base_env, EVIDENCE_DIR="/custom/evidence/dir")
         cfg_custom = load_server_config(env_custom)

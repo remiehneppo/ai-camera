@@ -1,6 +1,6 @@
 # Requirement tình huống an toàn đô thị
 
-**Ngày xác nhận:** 2026-10-20, Q35 và làm rõ anchor Q36. **Trạng thái:** requirement nghiệp vụ đã xác nhận; không phải capability đã triển khai hoặc nghiệm thu. Nguồn quyết định: [phỏng vấn Q1–Q36](../logs/2026-10-20-requirements-expansion.md). Tài liệu này là nguồn chuẩn cho định nghĩa tình huống, tham số cần chốt và giới hạn quan sát; [contracts](../architecture/contracts.md) giữ hợp đồng tích hợp, [plan](../architecture/implementation-plan.md) giữ phân kỳ, [readiness](../architecture/deployment-readiness.md) giữ bằng chứng/gate triển khai.
+**Ngày xác nhận:** 2026-10-20, Q35 và làm rõ anchor Q36; **cập nhật triển khai CiviWatch v2:** 2026-11-09 ([ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md)). **Trạng thái:** requirement nghiệp vụ đã xác nhận; toàn bộ 14 nhóm (`US01`–`US14`) đã có implementation trên Edge trong software lab (`domain/urban_scenarios.py`, `apps/edge/urban_safety_engine.py`, `apps/edge/vlm_verifier.py`), còn nghiệm thu thực địa (field acceptance) vẫn mở theo từng site/ODD. Nguồn quyết định: [phỏng vấn Q1–Q36](../logs/2026-10-20-requirements-expansion.md) và [ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md). Tài liệu này là nguồn chuẩn cho định nghĩa tình huống, tham số cần chốt và giới hạn quan sát; [contracts](../architecture/contracts.md) giữ hợp đồng tích hợp, [plan](../architecture/implementation-plan.md) giữ phân kỳ, [readiness](../architecture/deployment-readiness.md) giữ bằng chứng/gate triển khai.
 
 ## 1. Phạm vi và nguyên tắc chung
 

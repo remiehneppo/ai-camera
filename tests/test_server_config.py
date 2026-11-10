@@ -9,7 +9,7 @@ def valid_environment() -> dict[str, str]:
         "DEVICE_TOKENS": '{"device-secret":"lab-edge-01"}',
         "DASHBOARD_TOKEN": "dashboard-secret",
         "MONGO_URI": "mongodb://mongo:27017/?replicaSet=rs0",
-        "MONGO_DATABASE": "camera_lab",
+        "MONGO_DATABASE": "civi_watch",
     }
 
 

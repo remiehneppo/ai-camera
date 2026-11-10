@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "model_id": "civiwatch-yolox-s-640",
+  "artifact": {
+    "sha256": "af05e840372362a8957665cc74745531b968bcd36214d6ac85f3e1ed621fcad6",
+    "size_bytes": 35782750,
+    "source_url": "local:yolox_s_civiwatch_640.onnx",
+    "source_commit": "civi-watch-v2",
+    "release": "v2.0"
+  },
+  "input": {
+    "name": "images",
+    "shape": [
+      1,
+      3,
+      640,
+      640
+    ],
+    "dtype": "float32"
+  },
+  "output": {
+    "name": "output",
+    "shape": [
+      1,
+      8400,
+      11
+    ],
+    "dtype": "float32"
+  },
+  "labels": [
+    "person",
+    "two_wheeler",
+    "car",
+    "bus",
+    "truck",
+    "obstacle_object"
+  ],
+  "preprocess": {
+    "color": "BGR",
+    "layout": "NCHW",
+    "resize": "bilinear",
+    "letterbox": "top_left",
+    "pad_value": 114,
+    "scale": 1.0,
+    "mean": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "std": [
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  "postprocess": {
+    "decode": "yolox_grid",
+    "strides": [
+      8,
+      16,
+      32
+    ],
+    "score": "objectness_times_class",
+    "confidence_threshold": 0.25,
+    "nms_threshold": 0.45,
+    "nms": "per_class",
+    "box_format": "xyxy",
+    "person_class_id": 0,
+    "candidate_threshold": 0.1
+  },
+  "runtime": {
+    "onnxruntime": "1.20.1",
+    "numpy": "1.26.4",
+    "provider": "CPUExecutionProvider",
+    "opencv_python_headless": "4.10.0.84"
+  },
+  "rights": {
+    "source_license": "Apache-2.0",
+    "weights_license": "internal-lab-civiwatch",
+    "lab_use_approved": true,
+    "production_use_approved": true
+  }
+}

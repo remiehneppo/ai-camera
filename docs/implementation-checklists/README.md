@@ -1,6 +1,6 @@
-# Bộ checklist triển khai AI Camera giao thông
+# Bộ checklist triển khai hệ thống CiviWatch (`civi-watch`)
 
-Ngày: 2026-10-11. Trạng thái: kế hoạch, chưa implement hoặc nghiệm thu runtime.
+Ngày thiết kế: 2026-10-11; cập nhật CiviWatch v2: 2026-11-09 ([ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md)). Trạng thái: 918 unit/integration tests pass trên software lab (phủ đủ 14 nhóm kịch bản US01–US14); các gate phần cứng đích và thực địa (G3–G5) nghiệm thu theo site.
 
 Bộ này phân rã **18 module, 89 task hiện hành** thành bước thực hiện, acceptance và evidence record. Checklist module nằm trong tracker Markdown `.scratch/system-build/issues/` theo quy ước repo; tài liệu này là điểm vào để theo dõi. [PRD / phạm vi](../../.scratch/system-build/PRD.md).
 

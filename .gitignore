@@ -6,3 +6,9 @@ data/
 .env.local
 *.log
 .codegraph/
+.omp/
+runs/
+models/**/runs/
+*.pth
+*.pt
+

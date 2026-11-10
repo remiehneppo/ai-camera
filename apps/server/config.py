@@ -102,10 +102,10 @@ def load_server_config(environ: Mapping[str, str] | None = None) -> ServerConfig
     except (ValueError, TypeError):
         raise ValueError("MONGO_URI must be a valid MongoDB URI") from None
 
-    mongo_database = values.get("MONGO_DATABASE", "camera_lab")
+    mongo_database = values.get("MONGO_DATABASE", "civi_watch")
     if not mongo_database:
         raise ValueError("MONGO_DATABASE must not be empty")
-    evidence_dir = values.get("EVIDENCE_DIR", "/tmp/ai-camera-evidence")
+    evidence_dir = values.get("EVIDENCE_DIR", "/tmp/civi-watch-evidence")
     if not evidence_dir:
         raise ValueError("EVIDENCE_DIR must not be empty")
     public_config = {

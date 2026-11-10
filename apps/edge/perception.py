@@ -1,17 +1,30 @@
 """Shared observation execution and lineage validation, without incident state."""
 from copy import deepcopy
 from fractions import Fraction
+import json
 import math
+from pathlib import Path
 import threading
 
-from apps.edge.oracle_detector import LiveDetector, OracleDetector
+from apps.edge.oracle_detector import CiviWatchDetector, LiveDetector, OracleDetector
 
 
 class PerceptionExecution:
     def __init__(self, detector=None, *, manifest_path=None, model_path=None, origin="replay"):
         if detector is None and manifest_path and model_path:
-            adapter = LiveDetector if origin == "live" else OracleDetector
-            detector = adapter(manifest_path, model_path)
+            is_civiwatch_custom = False
+            try:
+                raw_manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+                model_id = str(raw_manifest.get("model_id", ""))
+                is_civiwatch_custom = model_id.startswith("civiwatch-") or raw_manifest.get("postprocess", {}).get("decode") == "nms_free"
+            except Exception:
+                is_civiwatch_custom = False
+
+            if is_civiwatch_custom:
+                detector = CiviWatchDetector(manifest_path, model_path, strict_runtime=False)
+            else:
+                adapter = LiveDetector if origin == "live" else OracleDetector
+                detector = adapter(manifest_path, model_path)
         self.detector = detector
         self._lock = threading.Lock()
         self._cached_frame = None

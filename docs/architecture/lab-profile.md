@@ -42,7 +42,7 @@ Nguồn: read-only probes `uname -a`, `lscpu`, `free -h`, `lsblk -o NAME,SIZE,TY
   - **Baseline Pipeline (YOLOX-Tiny + ByteTrack + IncidentEngine + FileRecorder):** Thông lượng đạt **16.35 – 20.10 FPS**, độ trễ trung vị P50 từ **44.79 – 56.25 ms**, bộ nhớ RAM đỉnh **266.7 – 334.9 MB**.
   - **Full Pipeline + RTMPose-Tiny (17 keypoints SimCC):** Thông lượng đạt **8.84 – 10.56 FPS**, trích xuất pose trung vị P50 từ **3.73 – 3.84 ms / người**, bộ nhớ RAM đỉnh **519.8 – 530.4 MB**.
   - Báo cáo chi tiết và bảng latency breakdown: [Báo cáo Benchmark Pipeline](../reports/2026-10-21-pipeline-benchmark-report.md).
-- Toàn bộ test suite phần mềm đạt **445 passed** (100% test xanh trên toàn bộ các gói: perception, health, quota, tracker, incident engine, ODD quality/freeze, review server, event contracts).
+- Toàn bộ test suite phần mềm trên nhánh `civi-watch` đạt **918 passed (190 subtests)** và `mypy` sạch trên **79 source files** (100% test xanh trên toàn bộ các gói: perception, batched pose, homography, 14 kịch bản đô thị US01–US14, VLM Storyboard Verifier, Go2RTC media engine, health, quota, tracker, ODD quality/freeze, CiviWatch review server, event contracts).
 - **Giới hạn:** Đây là số đo thực tế trên workstation CPU x86 làm căn cứ tham chiếu kỹ thuật; chưa phải nghiệm thu target capacity hay thermal soak trên phần cứng nhúng đích (Jetson Orin NX) hoặc thử nghiệm thực địa (G3/G5).
 
 ## Scope, workload và ODD

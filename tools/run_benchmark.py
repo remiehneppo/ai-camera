@@ -1,4 +1,4 @@
-"""Edge AI Camera Pipeline Benchmark Suite.
+"""CiviWatch Edge Perception Pipeline Benchmark Suite.
 
 Benchmarks the edge perception pipeline on real 1080p surveillance video footage:
 1. Baseline: Video Decode -> YOLOX-Tiny (ONNX) -> ByteTrack -> IncidentEngine -> FileRecorder
@@ -50,10 +50,15 @@ def run_single_benchmark(
     with_pose: bool = False,
     max_frames: int = 100,
     sample_fps: float = 10.0,
+    manifest_path: Path | None = None,
+    model_path: Path | None = None,
 ) -> dict[str, Any]:
     """Execute pipeline benchmark on a video file with or without pose estimation."""
     if not video_path.is_file():
         raise FileNotFoundError(f"Video file not found: {video_path}")
+
+    effective_manifest = manifest_path or (ROOT / "models/yolox-tiny/manifest.json")
+    effective_model = model_path or (ROOT / "data/oracle/yolox_tiny.onnx")
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -85,8 +90,8 @@ def run_single_benchmark(
         pipeline = PerceptionPipeline(
             recorder=recorder,
             outbox=outbox,
-            manifest_path=ROOT / "models/yolox-tiny/manifest.json",
-            model_path=ROOT / "data/oracle/yolox_tiny.onnx",
+            manifest_path=effective_manifest,
+            model_path=effective_model,
             pose_manager=pose_mgr,
             pose_scheduler=scheduler,
             origin="replay",
@@ -200,7 +205,7 @@ def run_single_benchmark(
 def format_markdown_report(results: list[dict[str, Any]]) -> str:
     """Format benchmark results into comprehensive Markdown report."""
     lines: list[str] = [
-        "# Báo cáo Benchmark Hiệu năng Edge AI Camera Pipeline",
+        "# Báo cáo Benchmark Hiệu năng CiviWatch Edge Pipeline",
         "",
         f"**Ngày thực hiện:** {time.strftime('%Y-%m-%d %H:%M:%S')}",
         "**Môi trường:** Ubuntu Linux x86_64, Intel Core i5-12400F, ONNX Runtime (CPUExecutionProvider)",
@@ -296,8 +301,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-frames", type=int, default=120, help="maximum frames to evaluate per video (default: 120)")
     parser.add_argument("--sample-fps", type=float, default=10.0, help="analysis sampling FPS (default: 10.0)")
-    parser.add_argument("--output-report", type=str, default="docs/reports/2026-10-21-pipeline-benchmark-report.md", help="path to output markdown report")
-    parser.add_argument("--output-json", type=str, default="data/benchmark/benchmark_results.json", help="path to output json results")
+    parser.add_argument("--manifest", type=Path, default=None, help="detector manifest.json path")
+    parser.add_argument("--model", type=Path, default=None, help="detector ONNX model path")
+    parser.add_argument("--output-report", type=str, default="docs/reports/2026-11-10-civiwatch-benchmark-report.md", help="path to output markdown report")
+    parser.add_argument("--output-json", type=str, default="data/benchmark/civiwatch_benchmark_results.json", help="path to output json results")
     parser.add_argument(
         "--video",
         action="append",
@@ -321,7 +328,7 @@ def main() -> int:
             return 1
 
     print("=" * 70)
-    print("      AI CAMERA EDGE PIPELINE BENCHMARK SUITE")
+    print("      CIVIWATCH EDGE PIPELINE BENCHMARK SUITE")
     print("=" * 70)
     print(f"Max frames per video: {args.max_frames} (at {args.sample_fps} analysis FPS)")
     print()
@@ -331,14 +338,28 @@ def main() -> int:
     for video_path in videos:
         print(f">>> Running Scenario: {video_path.name}")
         # 1. Baseline
-        print("  [1/2] Benchmarking Baseline Pipeline (YOLOX-Tiny + ByteTrack + IncidentEngine) ...")
-        res_base = run_single_benchmark(video_path, with_pose=False, max_frames=args.max_frames, sample_fps=args.sample_fps)
+        print("  [1/2] Benchmarking Baseline Pipeline (Detector + ByteTrack + IncidentEngine) ...")
+        res_base = run_single_benchmark(
+            video_path,
+            with_pose=False,
+            max_frames=args.max_frames,
+            sample_fps=args.sample_fps,
+            manifest_path=args.manifest,
+            model_path=args.model,
+        )
         print(f"        Result: {res_base['analysis_fps']} FPS | Median latency: {res_base['latencies']['pipeline_ms']['p50']} ms | Peak RAM: {res_base['rss_peak_mb']} MB")
         all_results.append(res_base)
 
         # 2. With Pose
         print("  [2/2] Benchmarking Full Pipeline + RTMPose-Tiny (17 keypoints SimCC) ...")
-        res_pose = run_single_benchmark(video_path, with_pose=True, max_frames=args.max_frames, sample_fps=args.sample_fps)
+        res_pose = run_single_benchmark(
+            video_path,
+            with_pose=True,
+            max_frames=args.max_frames,
+            sample_fps=args.sample_fps,
+            manifest_path=args.manifest,
+            model_path=args.model,
+        )
         p_lat = res_pose['latencies'].get('person_pose_ms')
         pose_str = f"Pose/person: {p_lat['p50']} ms" if p_lat else "No persons"
         print(f"        Result: {res_pose['analysis_fps']} FPS | Median latency: {res_pose['latencies']['pipeline_ms']['p50']} ms | {pose_str}")

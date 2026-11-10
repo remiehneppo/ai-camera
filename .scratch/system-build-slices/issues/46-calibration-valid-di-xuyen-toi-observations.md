@@ -1,7 +1,7 @@
 # 46: Calibration valid đi xuyên tới observations
 
 Status: ready-for-human
-Execution: not-started
+Execution: partial (software lab; GroundPlaneHomography 3x3 pixel↔meter + metric kinematics m/s, m/s^2 pass; site survey open)
 Owner: Site operations + Domain/ML; chưa claim.
 
 **What to build:** Khi mở nhánh vehicle dùng metric geometry, survey/calibrate contact-point projection và xuất validity/uncertainty tới pipeline/detail; không ép nhánh quan sát ảnh phụ thuộc calibration.
@@ -37,3 +37,4 @@ Khi hoàn tất, ghi command/fixture thật, expected/actual, commit/config/mode
 - 2026-10-11: Người dùng đã duyệt breakdown 50 ticket; publish vào local Markdown tracker. Chưa claim/implement/test, các acceptance vẫn mở.
 
 - 2026-10-20: Đồng bộ breakdown T3 theo [requirement tình huống/Q36](../../../docs/requirements/urban-safety-scenarios.md) và [ứng viên công nghệ](../../../docs/requirements/technology-candidates.md). Chỉ bổ sung phạm vi/acceptance/gates và dependency được duyệt; giữ Status/Execution, checked criteria, evidence và lịch sử cũ. Không có evidence implementation/benchmark/nghiệm thu mới; mọi acceptance bổ sung còn unchecked.
+- 2026-11-09: Triển khai mô-đun `GroundPlaneHomography` trong `apps/edge/homography.py` theo kiến trúc CiviWatch v2 ([ADR-0008](../../../docs/adr/0008-civiwatch-v2-hybrid-vlm-architecture.md)). Hỗ trợ biến đổi phối cảnh $3\times 3$ hai chiều giữa điểm tiếp đất `(foot_u, foot_v)` và mặt phẳng đường bộ `(X_m, Y_m)` tính bằng mét, từ chối cấu hình suy biến/collinear, và ước lượng vận tốc (`m/s`) / gia tốc (`m/s^2`) thực tế. Phần khảo sát mốc đo thực địa (`site survey`) giữ `ready-for-human`. Evidence: `pytest tests/test_civiwatch_v2.py -q` pass.

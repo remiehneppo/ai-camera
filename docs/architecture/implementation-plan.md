@@ -1,6 +1,6 @@
-# Plan xây dựng hệ thống AI Camera giao thông
+# Plan xây dựng hệ thống CiviWatch (`civi-watch`)
 
-**Ngày thiết kế:** 2026-10-11; **cập nhật nghiệp vụ:** 2026-10-20. **Trạng thái:** Thiết kế/backlog đã được duyệt và cập nhật theo review; tracker slices là đơn vị thực thi. Đã có software-lab implementation từng phần; trạng thái runtime/partial/blockers theo tracker, chưa có nghiệm thu hardware/quality/pilot từ bản cập nhật tài liệu này. Facts, targets theo site và quyết định production được xử lý ở các gate tương ứng.
+**Ngày thiết kế:** 2026-10-11; **cập nhật nghiệp vụ:** 2026-10-20; **cập nhật kiến trúc CiviWatch v2:** 2026-11-09 ([ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md)). **Trạng thái:** Hệ thống đã được rebrand cứng sang **CiviWatch (`civi-watch`)** và hoàn thành triển khai software-lab cho kiến trúc 4 tầng CiviWatch v2 (bao phủ toàn bộ 14 nhóm kịch bản `US01`–`US14`, hậu kiểm VLM Storyboard `2×3`, Ground-Plane Homography, Batched RTMPose, Go2RTC Media Engine; 918 tests pass, 79 source files `mypy` clean). Các gate nghiệm thu phần cứng đích (G3) và field pilot (G4/G5) được xử lý theo site thực tế.
 
 Nguồn chuẩn: [kiến trúc hệ thống](system-architecture.md), [deployment readiness](deployment-readiness.md), [hợp đồng tích hợp](contracts.md) và [tracker thực thi](../../.scratch/system-build-slices/PRD.md). [Mục lục docs](../README.md) xác định nguồn chuẩn; log/research không ghi đè thiết kế hiện hành. Các đường dẫn source dưới đây là vị trí dự kiến, chỉ tạo khi task tương ứng bắt đầu.
 

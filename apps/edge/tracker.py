@@ -184,7 +184,7 @@ class Track:
 def _coarse_label_group(label: str) -> str:
     if label in ("person", "pedestrian"):
         return "person"
-    if label in ("bicycle", "motorcycle"):
+    if label in ("bicycle", "motorcycle", "two_wheeler"):
         return "two_wheeler"
     if label in ("car", "bus", "truck"):
         return "motor_vehicle"

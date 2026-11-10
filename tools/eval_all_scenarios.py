@@ -35,15 +35,19 @@ if str(ROOT) not in sys.path:
 import tempfile
 
 from apps.edge.crowd_incident import CrowdIncidentEngine
+from apps.edge.homography import GroundPlaneHomography
 from apps.edge.incident import IncidentEngine
 from apps.edge.oracle_detector import OracleDetector
 from apps.edge.outbox import EventOutbox
 from apps.edge.parking_incident import ParkingIncidentEngine
+from apps.edge.perception import PerceptionExecution
 from apps.edge.pipeline import PerceptionPipeline
 from apps.edge.pose import PoseManager, RtmposeEstimator
 from apps.edge.recorder import FileRecorder
 from apps.edge.tracker import ByteTracker
+from apps.edge.urban_safety_engine import UrbanSafetyScenarioEngine
 from apps.edge.vehicle_incident import VehicleIncidentEngine
+from domain.urban_scenarios import SCENARIO_SPECS
 from tools.eval_clip import LATENCY_SCOPE, extract_effective_config
 
 TAXONOMY_ENGINE_MAP: dict[str, str] = {
@@ -58,6 +62,10 @@ TAXONOMY_ENGINE_MAP: dict[str, str] = {
     "crowd_concentration": "crowd_incident",
     "suspected_disorder": "crowd_incident",
 }
+for _spec in SCENARIO_SPECS:
+    for _tax in _spec.taxonomies:
+        if _tax not in TAXONOMY_ENGINE_MAP:
+            TAXONOMY_ENGINE_MAP[_tax] = _spec.factory
 
 def evaluate_video(
     video_path: Path,
@@ -70,6 +78,7 @@ def evaluate_video(
     crowd_min_count: int = 5,
     crowd_min_duration: float = 3.0,
     impact_deceleration: float = 120.0,
+    extended_scenarios: bool = False,
 ) -> dict[str, Any]:
     if not video_path.is_file():
         raise FileNotFoundError(f"video not found: {video_path}")
@@ -103,21 +112,26 @@ def evaluate_video(
                 min_lying_duration=3.0,
                 cooldown_seconds=30.0,
             )
+            hom = GroundPlaneHomography.default_urban_cctv(width, height)
             vehicle_engine = VehicleIncidentEngine(
                 impact_deceleration_threshold=impact_deceleration,
                 min_moving_speed=15.0,
+                homography=hom,
             )
             parking_engine = ParkingIncidentEngine(max_dwell_seconds=parking_max_dwell)
             crowd_engine = CrowdIncidentEngine(
                 min_crowd_count=crowd_min_count,
                 min_duration_seconds=crowd_min_duration,
             )
+            engines = [fall_engine, vehicle_engine, parking_engine, crowd_engine]
+            if extended_scenarios:
+                engines.append(UrbanSafetyScenarioEngine(factory="urban_safety_vlm"))
             pipeline = PerceptionPipeline(
                 recorder=recorder,
                 outbox=outbox,
                 detector=detector,
                 tracker=tracker,
-                incident_engines=[fall_engine, vehicle_engine, parking_engine, crowd_engine],
+                incident_engines=engines,
                 pose_manager=pose_mgr,
                 origin="replay",
             )
@@ -262,10 +276,16 @@ def main():
     parser.add_argument("--sample-fps", type=float, default=10.0)
     parser.add_argument("--max-frames", type=int, default=200)
     parser.add_argument("--no-pose", action="store_true", help="Disable pose estimation")
+    parser.add_argument("--extended-scenarios", action="store_true", help="Enable extended 14 urban safety scenarios with VLM")
+    parser.add_argument("--manifest", type=Path, default=ROOT / "models/yolox-tiny/manifest.json", help="Detector manifest path")
+    parser.add_argument("--model", type=Path, default=ROOT / "data/oracle/yolox_tiny.onnx", help="Detector model path")
     parser.add_argument("--json-out", type=str, default="", help="Path to write JSON output")
     args = parser.parse_args()
 
-    detector = OracleDetector(ROOT / "models/yolox-tiny/manifest.json", ROOT / "data/oracle/yolox_tiny.onnx")
+    pe = PerceptionExecution(manifest_path=args.manifest, model_path=args.model, origin="replay")
+    detector = pe.detector
+    if detector is None:
+        raise RuntimeError(f"Failed to initialize detector from {args.manifest} and {args.model}")
 
     targets = args.videos
     if not targets:
@@ -288,7 +308,7 @@ def main():
 
     all_results = []
     print(f"\n=======================================================")
-    print(f"   AI CAMERA MULTI-SCENARIO EDGE PERCEPTION BENCHMARK")
+    print(f"   CIVIWATCH MULTI-SCENARIO EDGE PERCEPTION BENCHMARK")
     print(f"=======================================================")
     print(f"Evaluating {len(targets)} test video clips (sample_fps={args.sample_fps}, max_frames={args.max_frames})...\n")
 
@@ -305,6 +325,7 @@ def main():
                 sample_fps=args.sample_fps,
                 max_frames=args.max_frames,
                 with_pose=not args.no_pose,
+                extended_scenarios=args.extended_scenarios,
             )
         except Exception as exc:
             print(f"Evaluation failed on {vpath_str}: {exc}", file=sys.stderr)

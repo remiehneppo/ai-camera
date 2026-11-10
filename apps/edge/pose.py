@@ -18,7 +18,7 @@ import logging
 from pathlib import Path
 import threading
 import time
-from typing import Any
+from typing import Any, Sequence
 
 import cv2
 import numpy as np
@@ -256,6 +256,35 @@ class RtmposeEstimator:
         simcc_x = outputs[0][0]
         simcc_y = outputs[1][0]
         return self.decode_simcc(simcc_x, simcc_y, inv_trans)
+
+    def estimate_batch(
+        self, rgb: np.ndarray, bboxes: Sequence[list[float] | tuple[float, ...]]
+    ) -> list[list[dict[str, Any]]]:
+        """Run batched RTMPose inference [N, 3, 256, 192] across multiple bounding boxes in one pass."""
+        if not bboxes:
+            return []
+        if len(bboxes) == 1:
+            return [self.estimate(rgb, bboxes[0])]
+
+        tensors: list[np.ndarray] = []
+        inv_transforms: list[np.ndarray] = []
+        for bbox in bboxes:
+            tensor, inv_trans = self.preprocess(rgb, bbox)
+            tensors.append(tensor)
+            inv_transforms.append(inv_trans)
+
+        batch_tensor = np.concatenate(tensors, axis=0)
+        try:
+            outputs = self.session.run(self.output_names, {self.input_name: batch_tensor})
+            simcc_x_batch = outputs[0]
+            simcc_y_batch = outputs[1]
+            return [
+                self.decode_simcc(simcc_x_batch[idx], simcc_y_batch[idx], inv_transforms[idx])
+                for idx in range(len(bboxes))
+            ]
+        except Exception:
+            # Fallback to sequential execution if the ONNX graph has a static batch_size=1 axis
+            return [self.estimate(rgb, bbox) for bbox in bboxes]
 
 
 BRANCH_PRIORITIES = {
@@ -780,9 +809,9 @@ class PoseManager:
             self._terminal_outcomes.clear()
 
         outcomes: list[PoseOutcome] = terminal_outcomes + list(shed_outcomes)
-        for req in requests_to_process:
-            start_t = time.perf_counter()
+        ready_by_frame: dict[tuple[str, str, int, int], list[tuple[PoseRequest, np.ndarray]]] = {}
 
+        for req in requests_to_process:
             # 1. Epoch check
             if req.core_epoch < self.current_epoch:
                 outcome = PoseOutcome(
@@ -841,7 +870,7 @@ class PoseManager:
                 outcomes.append(outcome)
                 continue
 
-            # 4. Estimation
+            # 4. Estimator availability
             if self.estimator is None:
                 outcome = PoseOutcome(
                     request_id=req.request_id,
@@ -859,38 +888,74 @@ class PoseManager:
                 outcomes.append(outcome)
                 continue
 
-            try:
-                kps = self.estimator.estimate(frame_rgb, req.bbox)
-                latency = (time.perf_counter() - start_t) * 1000.0
-                outcome = PoseOutcome(
-                    request_id=req.request_id,
-                    camera_id=req.camera_id,
-                    stream_session_id=req.stream_session_id,
-                    core_epoch=req.core_epoch,
-                    frame_id=req.frame_id,
-                    track_id=req.track_id,
-                    status="ok",
-                    reason=None,
-                    keypoints=kps,
-                    latency_ms=latency,
-                    executed_at=_resolve_executed_at(req, current_time),
-                    branch=req.branch,
-                )
-            except Exception as exc:
-                outcome = PoseOutcome(
-                    request_id=req.request_id,
-                    camera_id=req.camera_id,
-                    stream_session_id=req.stream_session_id,
-                    core_epoch=req.core_epoch,
-                    frame_id=req.frame_id,
-                    track_id=req.track_id,
-                    status="failed",
-                    reason=str(exc),
-                    executed_at=_resolve_executed_at(req, current_time),
-                    branch=req.branch,
-                )
-            self.scheduler.record_outcome(outcome)
-            outcomes.append(outcome)
+            ready_by_frame.setdefault(key, []).append((req, frame_rgb))
+
+        # 5. Batched estimation per frame (with per-request fallback if one bbox is invalid)
+        if self.estimator is not None:
+            est_batch = getattr(self.estimator, "estimate_batch", None)
+            for _frame_key, group in ready_by_frame.items():
+                frame_rgb = group[0][1]
+                reqs = [item[0] for item in group]
+                if len(reqs) > 1 and callable(est_batch):
+                    start_t = time.perf_counter()
+                    try:
+                        batch_kps = est_batch(frame_rgb, [r.bbox for r in reqs])
+                        per_req_latency = ((time.perf_counter() - start_t) * 1000.0) / float(len(reqs))
+                        for req, kps in zip(reqs, batch_kps):
+                            outcome = PoseOutcome(
+                                request_id=req.request_id,
+                                camera_id=req.camera_id,
+                                stream_session_id=req.stream_session_id,
+                                core_epoch=req.core_epoch,
+                                frame_id=req.frame_id,
+                                track_id=req.track_id,
+                                status="ok",
+                                reason=None,
+                                keypoints=kps,
+                                latency_ms=per_req_latency,
+                                executed_at=_resolve_executed_at(req, current_time),
+                                branch=req.branch,
+                            )
+                            self.scheduler.record_outcome(outcome)
+                            outcomes.append(outcome)
+                        continue
+                    except Exception:
+                        pass
+
+                for req in reqs:
+                    start_t = time.perf_counter()
+                    try:
+                        kps = self.estimator.estimate(frame_rgb, req.bbox)
+                        latency = (time.perf_counter() - start_t) * 1000.0
+                        outcome = PoseOutcome(
+                            request_id=req.request_id,
+                            camera_id=req.camera_id,
+                            stream_session_id=req.stream_session_id,
+                            core_epoch=req.core_epoch,
+                            frame_id=req.frame_id,
+                            track_id=req.track_id,
+                            status="ok",
+                            reason=None,
+                            keypoints=kps,
+                            latency_ms=latency,
+                            executed_at=_resolve_executed_at(req, current_time),
+                            branch=req.branch,
+                        )
+                    except Exception as exc:
+                        outcome = PoseOutcome(
+                            request_id=req.request_id,
+                            camera_id=req.camera_id,
+                            stream_session_id=req.stream_session_id,
+                            core_epoch=req.core_epoch,
+                            frame_id=req.frame_id,
+                            track_id=req.track_id,
+                            status="failed",
+                            reason=str(exc),
+                            executed_at=_resolve_executed_at(req, current_time),
+                            branch=req.branch,
+                        )
+                    self.scheduler.record_outcome(outcome)
+                    outcomes.append(outcome)
 
         return outcomes
 

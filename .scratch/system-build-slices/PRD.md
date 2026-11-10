@@ -1,6 +1,6 @@
-# Tracker triển khai theo tracer-bullet slices
+# Tracker triển khai CiviWatch (`civi-watch`) theo tracer-bullet slices
 
-Breakdown 50 ticket ban đầu được duyệt và publish ngày 2026-10-11; ticket #51 được bổ sung ngày 2026-10-12 theo quyết định tách live-ring prerequisite. Từng issue là nguồn execution/blocker chuẩn, không dùng trạng thái lúc publish làm tiến độ hiện tại.
+Breakdown 50 ticket ban đầu được duyệt và publish ngày 2026-10-11; ticket #51 được bổ sung ngày 2026-10-12; các ticket mở rộng #53–#68 được bổ sung ngày 2026-10-20 và đồng bộ theo kiến trúc **CiviWatch v2 ([ADR-0008](../../docs/adr/0008-civiwatch-v2-hybrid-vlm-architecture.md))** ngày 2026-11-09. Từng issue là nguồn execution/blocker chuẩn.
 
 ## Phạm vi và nguồn chuẩn
 
@@ -14,7 +14,7 @@ Ticket trong tracker này là đơn vị claim/thực hiện và nguồn duy nh�
 
 ## Cách chọn việc
 
-Frontier lúc publish là #01/#02. Tiến độ cập nhật 2026-10-27: 29 tickets hoàn thành trong software lab (#01, #02, #04, #05, #08, #09, #11, #13, #14, #16, #17, #18, #20, #22, #24, #25, #26, #27, #28, #32, #33, #34, #35, #36, #40, #41, #43, #47, #53); 9 tickets đạt partial (#03, #06, #07, #15, #21, #23, #51, #62, #63). 823 unit & integration tests toàn dự án xanh. Các ticket mở rộng #53–#68 theo requirement an toàn đô thị được quản lý tại [Index mở rộng](requirements-expansion-index.md). Các gate target deployment, hardware decode và field pilot (G3–G5) vẫn mở; ODD phần cứng camera cố định HD–2MP được khóa vĩnh viễn (không dashcam, không <720p).
+Frontier lúc publish là #01/#02. Tiến độ cập nhật 2026-11-09 (CiviWatch v2 — nhánh `civi-watch`): **30 tickets hoàn thành (`done`)** trong software lab (#01, #02, #03, #04, #05, #08, #09, #11, #13, #14, #16, #17, #18, #20, #22, #24, #25, #26, #27, #28, #32, #33, #34, #35, #36, #40, #41, #43, #47, #53); **20 tickets đạt `partial`** trong software lab (gồm #06, #07, #15, #21, #23, #46, #51, #57 và toàn bộ 11 kịch bản mở rộng #58–#68 đã hoàn tất triển khai `UrbanSafetyScenarioEngine` + `VLMVerifier` 2×3 Storyboard Grid, chờ tập dữ liệu thực địa held-out). Toàn bộ **918 unit & integration tests (190 subtests)** và `mypy` trên **79 source files** xanh 100%. Các ticket mở rộng #53–#68 theo requirement an toàn đô thị được quản lý tại [Index mở rộng](requirements-expansion-index.md). Các gate target deployment, hardware decode và field pilot (G3–G5) vẫn mở; ODD phần cứng camera cố định HD–2MP được khóa vĩnh viễn (không dashcam, không <720p).
 
 Status là triage role; Execution theo not-started/in-progress/partial/blocked/done. ready-for-agent không có nghĩa dependencies đã xong. needs-info chỉ dùng facts/provider/target còn thiếu (#15/#29/#42); ready-for-human cho power-cut/survey/field/sign-off (#37/#46/#48/#49/#50). Ghi rõ lý do trong ticket; sau khi có dữ liệu cập nhật triage, không bỏ gate.
 
@@ -71,7 +71,7 @@ Không có lệnh implementation/hardware nào được chạy trong lần publi
 | [43: Central retention và backup/restore có proof](issues/43-central-retention-va-backup-restore-co-proof.md) | ready-for-agent | #08, #33 | — | done (software lab; central retention manager + backup/restore reconciliation proof pass) |
 | [44: UI sản phẩm cho review và annotation](issues/44-ui-san-pham-cho-review-va-annotation.md) | ready-for-agent | #20, #27, #28 | — | not-started |
 | [45: UI fleet, retrieval và audit](issues/45-ui-fleet-retrieval-va-audit.md) | ready-for-agent | #32, #33, #34 | — | not-started |
-| [46: Calibration valid đi xuyên tới observations](issues/46-calibration-valid-di-xuyen-toi-observations.md) | ready-for-human | #28 | — | not-started |
+| [46: Calibration valid đi xuyên tới observations](issues/46-calibration-valid-di-xuyen-toi-observations.md) | ready-for-human | #28 | — | partial (software lab; `GroundPlaneHomography` 3x3 pixel↔meter + metric kinematics `m/s`, `m/s^2` pass; site survey open) |
 | [47: Vehicle motion và suspected-incident flow](issues/47-vehicle-motion-va-suspected-incident-flow.md) | ready-for-agent | #14, #07 | — | done (software lab; M01 kinematics/smoothing + M02 TTC/overlap risk + I06 US08 3 branches & hard negatives pass) |
 | [48: Nghiệm thu vehicle riêng G4b](issues/48-nghiem-thu-vehicle-rieng-g4b.md) | ready-for-human | #47 | — | not-started |
 | [49: Nghiệm thu person-down pilot readiness G4a](issues/49-nghiem-thu-person-down-pilot-readiness-g4a.md) | ready-for-human | #19, #28, #31, #36, #37, #39, #40, #41, #43, #44, #45 | — | not-started |
@@ -182,3 +182,4 @@ Một task có thể được hoàn thiện dần qua nhiều ticket; task mappi
 - 2026-10-11: Publish 50 tickets theo breakdown đã duyệt, kiểm blockers-first DAG và coverage 89 task. Không claim/implement/đóng parent issues hoặc commit/push.
 - 2026-10-12: Bổ sung #51 live-ring sau khi phân tích #15 cho thấy recorder hiện chỉ publish segment sau EOF, nên không thể query/pin trong lúc ingest. #51 phụ thuộc #06; #15 phụ thuộc thêm #51. Chưa claim implementation hoặc nghiệm thu live RTSP.
 - 2026-10-13: #51 software ingest/reconcile/replay và probe-failure hardening đã implement qua `e747b55` và `ea3c808`; Execution giữ partial. Full numerical suite 138 tests OK; replay CSV đo callback trước EOF trong 12/12 runs của fixture envelope. Storage-stall cancellation, process-wide memory bound và RTSP/G1 chưa đạt; #06/#07 vẫn partial, #15 vẫn gated. Evidence: [hardening log](../../docs/logs/2026-10-13-ticket-51-hardening.md).
+- 2026-11-09: Đồng bộ toàn bộ hệ thống sang kiến trúc **CiviWatch v2 ([ADR-0008](../../docs/adr/0008-civiwatch-v2-hybrid-vlm-architecture.md))** trên nhánh `civi-watch`. Hoàn tất triển khai software-lab cho toàn bộ 14 nhóm kịch bản an toàn đô thị (`US01`–`US14`, tickets #58–#68), bộ hậu kiểm Tier-2 VLM Storyboard `2×3` (`apps/edge/vlm_verifier.py`), Ground-Plane Homography (`apps/edge/homography.py`, ticket #46), Batched RTMPose (`apps/edge/pose.py`, ticket #22), và Go2RTC Media Engine (`apps/edge/media_engine.py`). Toàn bộ test suite đạt **918 passed** và `mypy` sạch trên **79 source files**. Evidence: [log CiviWatch v2](../../docs/logs/2026-11-09-civi-watch-v2-implementation.md).

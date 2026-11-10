@@ -1,6 +1,6 @@
-# Index đối chiếu requirements expansion — T3 ngày 2026-10-20
+# Index đối chiếu requirements expansion — CiviWatch v2 (Cập nhật 2026-11-09)
 
-**Phạm vi publish:** 12 issue cũ cập nhật acceptance/dependency, 16 issue mới #53–68, 7 issue cũ được chủ ý giữ nguyên. Đây là index **phạm vi thay đổi**, không thay PRD cha hoặc tạo nguồn tiến độ thứ hai. Không có implementation/benchmark/field acceptance từ việc publish backlog.
+**Phạm vi publish & cập nhật:** 12 issue cũ cập nhật acceptance/dependency, 16 issue mới #53–68. Ngày 2026-11-09, toàn bộ các nhóm kịch bản mở rộng **#58–#68 (`US01`–`US14`)** đã hoàn tất triển khai software-lab trên nhánh `civi-watch` thông qua kiến trúc **CiviWatch v2 ([ADR-0008](../../docs/adr/0008-civiwatch-v2-hybrid-vlm-architecture.md))**: `domain/urban_scenarios.py`, `apps/edge/urban_safety_engine.py`, và bộ hậu kiểm **Tier-2 VLM Storyboard `2×3`** (`apps/edge/vlm_verifier.py`). Các ticket #58–#68 chuyển sang `Execution: partial (software lab)` — chỉ còn mở gate dữ liệu thực địa held-out và sign-off vận hành theo từng site.
 
 Nguồn chuẩn: [requirement tình huống](../../docs/requirements/urban-safety-scenarios.md), [ứng viên công nghệ](../../docs/requirements/technology-candidates.md), [contracts/Q36](../../docs/architecture/contracts.md), [quyết định T1–T3](../../docs/logs/2026-10-20-requirements-tickets.md), [CONTEXT](../../CONTEXT.md). Cả 13 nhóm gốc + nhánh phá hoại có mapping dưới đây. Giá trị Status/Execution/Owner/checkbox/report **đọc trực tiếp trong từng issue được link**; không sao chép snapshot vào bảng này. `ready-for-agent` là triage của scope specified, không chứng minh blockers/gates đã đạt.
 

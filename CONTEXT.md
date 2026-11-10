@@ -1,6 +1,6 @@
-# AI Camera giao thông
+# CiviWatch (`civi-watch`) — Giám sát An toàn Đô thị
 
-Hệ thống quan sát sự kiện an toàn đô thị từ video, giữ bằng chứng và hỗ trợ người trực xác minh. Ngôn ngữ dưới đây phản ánh [thiết kế hiện hành](docs/architecture/system-architecture.md); không ngụ ý đã triển khai.
+Hệ thống CiviWatch quan sát sự kiện an toàn đô thị từ video (14 nhóm US01–US14), hậu kiểm bằng VLM Storyboard, giữ bằng chứng và hỗ trợ người trực xác minh. Ngôn ngữ dưới đây phản ánh [thiết kế hiện hành](docs/architecture/system-architecture.md).
 
 ## Language
 

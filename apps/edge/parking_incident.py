@@ -39,7 +39,7 @@ from apps.edge.tracker import Track
 from domain.alert_module_config import ScheduleWindow, WEEKDAYS
 
 
-DEFAULT_VEHICLE_LABELS: frozenset[str] = frozenset({"car", "truck", "bus", "motorcycle"})
+DEFAULT_VEHICLE_LABELS: frozenset[str] = frozenset({"car", "truck", "bus", "motorcycle", "two_wheeler"})
 
 
 @dataclass

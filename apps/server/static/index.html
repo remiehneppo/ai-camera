@@ -1,45 +1,482 @@
 <!doctype html>
-<html lang="en">
+<html lang="vi">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI Camera Lab Events</title>
+  <title>CiviWatch · Trung tâm Giám sát An toàn Đô thị</title>
   <style>
-    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-    body { margin: 0 auto; max-width: 960px; padding: 2rem 1rem; }
-    h1 { margin-bottom: .25rem; }
-    .muted { opacity: .72; }
-    #status { min-height: 1.5rem; }
-    .event { border: 1px solid #8886; border-radius: .5rem; margin: .75rem 0; padding: 1rem; }
-    .event header { display: flex; gap: .6rem; flex-wrap: wrap; align-items: baseline; }
-    code, time { overflow-wrap: anywhere; }
-    button { font: inherit; padding: .35rem .7rem; }
-    .evidence-section { margin-top: .75rem; border-top: 1px solid #8883; padding-top: .5rem; }
-    .badge { display: inline-block; padding: .15rem .45rem; border-radius: .25rem; font-size: .85em; font-weight: 500; }
-    .badge-pending { background: #e0990033; color: #d97706; }
-    .badge-complete { background: #10b98133; color: #059669; }
-    .badge-partial { background: #3b82f633; color: #2563eb; }
-    .badge-available { background: #10b98133; color: #059669; }
-    .badge-rtsp { background: #10b98133; color: #059669; }
-    .badge-fallback { background: #e0990033; color: #d97706; }
-    .badge-priority-low { background: #6b728033; color: #4b5563; }
-    .badge-priority-standard { background: #3b82f633; color: #2563eb; }
-    .badge-priority-urgent { background: #dc262633; color: #dc2626; }
-    video { width: 100%; max-width: 640px; height: auto; border-radius: .35rem; display: block; margin: .5rem 0; background: #000; }
-    .evidence-item { margin: .5rem 0; }
-    .evidence-actions { display: flex; gap: .75rem; align-items: baseline; }
-    .live-card { border: 1px solid #8886; border-radius: .5rem; margin: 1rem 0; padding: 1rem; }
-    .live-card header { display: flex; gap: .75rem; flex-wrap: wrap; align-items: center; justify-content: space-between; margin-bottom: .75rem; }
-    .live-card h2 { margin: 0; font-size: 1.25rem; }
-    .live-controls { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
-    .live-feed-wrapper { position: relative; width: 100%; max-width: 720px; min-height: 220px; background: #111; border-radius: .35rem; overflow: hidden; display: flex; align-items: center; justify-content: center; }
-    #live-feed { width: 100%; height: auto; display: block; border-radius: .35rem; }
+    :root {
+      color-scheme: light dark;
+      --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --surface-raised: #f1f5f9;
+      --border: #e2e8f0;
+      --border-strong: #cbd5e1;
+      --text: #0f172a;
+      --text-muted: #64748b;
+      --primary: #0284c7;
+      --primary-hover: #0369a1;
+      --primary-light: #e0f2fe;
+      --primary-text: #0369a1;
+      --danger: #ef4444;
+      --danger-light: #fee2e2;
+      --danger-text: #b91c1c;
+      --warning: #f59e0b;
+      --warning-light: #fef3c7;
+      --warning-text: #b45309;
+      --success: #10b981;
+      --success-light: #d1fae5;
+      --success-text: #047857;
+      --purple: #8b5cf6;
+      --purple-light: #ede9fe;
+      --purple-text: #6d28d9;
+      --gray: #6b7280;
+      --gray-light: #f3f4f6;
+      --gray-text: #374151;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0b0f17;
+        --surface: #111827;
+        --surface-raised: #1f2937;
+        --border: #374151;
+        --border-strong: #4b5563;
+        --text: #f9fafb;
+        --text-muted: #9ca3af;
+        --primary: #38bdf8;
+        --primary-hover: #7dd3fc;
+        --primary-light: #0c4a6e;
+        --primary-text: #bae6fd;
+        --danger: #f87171;
+        --danger-light: #450a0a;
+        --danger-text: #fca5a5;
+        --warning: #fbbf24;
+        --warning-light: #451a03;
+        --warning-text: #fde68a;
+        --success: #34d399;
+        --success-light: #064e3b;
+        --success-text: #a7f3d0;
+        --purple: #a78bfa;
+        --purple-light: #2e1065;
+        --purple-text: #ddd6fe;
+        --gray: #9ca3af;
+        --gray-light: #1f2937;
+        --gray-text: #e5e7eb;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0 auto;
+      max-width: 1040px;
+      padding: 1.5rem 1rem 3rem;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-sans);
+      line-height: 1.5;
+    }
+    header.app-header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 1rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 1rem;
+    }
+    h1 {
+      margin: 0 0 0.25rem;
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    h2 {
+      margin: 0;
+      font-size: 1.15rem;
+      font-weight: 600;
+    }
+    .muted {
+      color: var(--text-muted);
+      font-size: 0.9em;
+    }
+    .system-status-pills {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    button {
+      font: inherit;
+      font-size: 0.875rem;
+      font-weight: 500;
+      padding: 0.4rem 0.8rem;
+      border-radius: 0.375rem;
+      border: 1px solid var(--border-strong);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    button:hover {
+      background: var(--surface-raised);
+    }
+    button.btn-primary {
+      background: var(--primary);
+      color: #fff;
+      border-color: var(--primary);
+    }
+    button.btn-primary:hover {
+      background: var(--primary-hover);
+    }
+    button.btn-danger {
+      background: var(--danger-light);
+      color: var(--danger-text);
+      border-color: var(--danger);
+    }
+    button.btn-warning {
+      background: var(--warning-light);
+      color: var(--warning-text);
+      border-color: var(--warning);
+    }
+    button.btn-success {
+      background: var(--success-light);
+      color: var(--success-text);
+      border-color: var(--success);
+    }
+    input, select, textarea {
+      font: inherit;
+      font-size: 0.875rem;
+      padding: 0.4rem 0.6rem;
+      border-radius: 0.375rem;
+      border: 1px solid var(--border-strong);
+      background: var(--surface);
+      color: var(--text);
+    }
+    input:focus, select:focus, textarea:focus {
+      outline: 2px solid var(--primary);
+      outline-offset: -1px;
+    }
+    .auth-toolbar, .filter-toolbar {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 0.75rem 1rem;
+      margin-bottom: 1rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      align-items: center;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+    }
+    .toolbar-group {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.875rem;
+    }
+    .toolbar-group label {
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+    .live-card {
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      background: var(--surface);
+      margin-bottom: 1.25rem;
+      padding: 1rem;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+    }
+    .live-card header {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.75rem;
+    }
+    .live-controls {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .live-feed-wrapper {
+      position: relative;
+      width: 100%;
+      max-width: 720px;
+      min-height: 220px;
+      background: #000;
+      border-radius: 0.375rem;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #live-feed {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+    #status {
+      min-height: 1.5rem;
+      font-size: 0.875rem;
+      margin: 0.5rem 0;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .badge {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      border-radius: 0.25rem;
+      font-size: 0.8em;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      white-space: nowrap;
+    }
+    .badge-pending { background: var(--warning-light); color: var(--warning-text); }
+    .badge-complete { background: var(--success-light); color: var(--success-text); }
+    .badge-partial { background: var(--primary-light); color: var(--primary-text); }
+    .badge-available { background: var(--success-light); color: var(--success-text); }
+    .badge-rtsp { background: var(--success-light); color: var(--success-text); }
+    .badge-fallback { background: var(--warning-light); color: var(--warning-text); }
+    .badge-priority-low { background: var(--gray-light); color: var(--gray-text); }
+    .badge-priority-standard { background: var(--primary-light); color: var(--primary-text); }
+    .badge-priority-urgent { background: var(--danger-light); color: var(--danger-text); font-weight: 700; }
+    .badge-critical { background: var(--danger-light); color: var(--danger-text); font-weight: 700; }
+    .badge-high { background: var(--warning-light); color: var(--warning-text); }
+    .badge-standard { background: var(--primary-light); color: var(--primary-text); }
+    .badge-low { background: var(--gray-light); color: var(--gray-text); }
+    .badge-review-unreviewed { background: var(--warning-light); color: var(--warning-text); }
+    .badge-review-confirmed { background: var(--success-light); color: var(--success-text); }
+    .badge-review-false_positive { background: var(--danger-light); color: var(--danger-text); }
+    .badge-review-resolved { background: var(--primary-light); color: var(--primary-text); }
+    .badge-re-review { background: var(--purple-light); color: var(--purple-text); }
+    .badge-origin-live { background: var(--success-light); color: var(--success-text); }
+    .badge-origin-replay { background: var(--primary-light); color: var(--primary-text); }
+    .badge-origin-synthetic { background: var(--gray-light); color: var(--gray-text); }
+    .event {
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      background: var(--surface);
+      margin: 1rem 0;
+      padding: 1.25rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .event header {
+      display: flex;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.6rem;
+    }
+    .event-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .event-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1.25rem;
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      background: var(--surface-raised);
+      padding: 0.6rem 0.8rem;
+      border-radius: 0.375rem;
+    }
+    .event-meta div {
+      display: flex;
+      gap: 0.35rem;
+    }
+    .event-meta strong {
+      color: var(--text);
+    }
+    .facts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 0.5rem 1rem;
+      font-size: 0.85rem;
+      padding: 0.6rem 0.8rem;
+      background: var(--surface-raised);
+      border-left: 3px solid var(--primary);
+      border-radius: 0 0.375rem 0.375rem 0;
+    }
+    .facts-item {
+      display: flex;
+      flex-direction: column;
+    }
+    .facts-label {
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .facts-val {
+      font-weight: 600;
+      color: var(--text);
+      word-break: break-word;
+    }
+    .review-box {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      padding: 0.75rem;
+      border: 1px dashed var(--border-strong);
+      border-radius: 0.375rem;
+      background: var(--surface);
+    }
+    .review-status-row {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      flex-wrap: wrap;
+      font-size: 0.875rem;
+    }
+    .evidence-section {
+      margin-top: 0.5rem;
+      border-top: 1px solid var(--border);
+      padding-top: 0.75rem;
+    }
+    .evidence-section h3 {
+      margin: 0 0 0.5rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+    }
+    .evidence-item {
+      margin: 0.6rem 0;
+      padding: 0.6rem;
+      background: var(--surface-raised);
+      border-radius: 0.375rem;
+    }
+    .evidence-actions {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      margin-top: 0.4rem;
+      font-size: 0.85rem;
+    }
+    video {
+      width: 100%;
+      max-width: 640px;
+      height: auto;
+      border-radius: 0.35rem;
+      display: block;
+      margin: 0.5rem 0;
+      background: #000;
+    }
+    details {
+      margin-top: 0.25rem;
+      border: 1px solid var(--border);
+      border-radius: 0.375rem;
+      padding: 0.4rem 0.6rem;
+      background: var(--surface);
+      font-size: 0.85rem;
+    }
+    details summary {
+      cursor: pointer;
+      font-weight: 600;
+      color: var(--text-muted);
+      user-select: none;
+    }
+    details summary:hover {
+      color: var(--text);
+    }
+    pre {
+      margin: 0.5rem 0 0;
+      padding: 0.5rem;
+      background: var(--surface-raised);
+      border-radius: 0.25rem;
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 3rem 1rem;
+      border: 2px dashed var(--border);
+      border-radius: 0.5rem;
+      background: var(--surface);
+      color: var(--text-muted);
+      margin: 1.5rem 0;
+    }
+    .empty-state h3 {
+      margin: 0 0 0.5rem;
+      color: var(--text);
+      font-size: 1.1rem;
+    }
+    dialog {
+      border: 1px solid var(--border-strong);
+      border-radius: 0.5rem;
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+      max-width: 480px;
+      width: 90%;
+      padding: 1.25rem;
+    }
+    dialog::backdrop {
+      background: rgba(0,0,0,0.5);
+      backdrop-filter: blur(2px);
+    }
+    .dialog-header {
+      margin-top: 0;
+      margin-bottom: 0.75rem;
+      font-size: 1.15rem;
+      font-weight: 600;
+    }
+    .dialog-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+      margin-top: 1rem;
+    }
   </style>
 </head>
 <body>
-  <h1>AI Camera Lab Events</h1>
-  <p class="muted">Metadata from committed event snapshots. Synthetic and replay events never notify.</p>
-  <button id="auth">Set dashboard token</button>
+  <header class="app-header">
+    <div>
+      <h1>CiviWatch Operations Center</h1>
+      <p class="muted">Hệ thống CiviWatch v2 giám sát 14 kịch bản an toàn đô thị (US01–US14), hậu kiểm VLM Storyboard và quản lý bằng chứng video.</p>
+    </div>
+    <div class="system-status-pills">
+      <span id="health-badge" class="badge">Health: --</span>
+      <span id="guard-badge" class="badge">Storm Guard: --</span>
+      <button id="auth" type="button">Set dashboard token</button>
+    </div>
+  </header>
+
+  <!-- Auth / Token Configuration Toolbar -->
+  <section class="auth-toolbar" aria-label="Cấu hình Token truy cập">
+    <div class="toolbar-group">
+      <label for="input-dash-token">Dashboard Token:</label>
+      <input id="input-dash-token" type="password" placeholder="DASHBOARD_TOKEN" autocomplete="off" style="width: 170px;">
+    </div>
+    <div class="toolbar-group">
+      <label for="input-rev-token">Reviewer Token:</label>
+      <input id="input-rev-token" type="password" placeholder="REVIEWER_TOKEN" autocomplete="off" style="width: 170px;">
+    </div>
+    <div class="toolbar-group">
+      <button id="btn-save-tokens" type="button" class="btn-primary">Lưu Tokens</button>
+      <button id="btn-clear-tokens" type="button">Xóa</button>
+      <span id="auth-status-badge" class="badge">Chưa xác thực</span>
+    </div>
+  </section>
+
+  <!-- Live Camera Stream -->
   <section class="live-card" aria-label="Live Camera Stream">
     <header>
       <h2>Live Camera Stream</h2>
@@ -55,21 +492,194 @@
       <p id="live-feed-placeholder" class="muted">Live stream idle. Click "Start Stream" to play.</p>
     </div>
   </section>
-  <p id="status" role="status" aria-live="polite">Loading…</p>
+
+  <!-- Queue Filters & Actions Toolbar -->
+  <section class="filter-toolbar" aria-label="Bộ lọc sự kiện">
+    <div class="toolbar-group">
+      <label for="filter-severity">Mức độ:</label>
+      <select id="filter-severity">
+        <option value="">Tất cả mức độ</option>
+        <option value="critical">Critical (Khẩn cấp)</option>
+        <option value="high">High (Cao)</option>
+        <option value="medium">Medium / Standard (Tiêu chuẩn)</option>
+        <option value="low">Low (Thấp)</option>
+      </select>
+    </div>
+    <div class="toolbar-group">
+      <label for="filter-taxonomy">Kịch bản:</label>
+      <select id="filter-taxonomy">
+        <option value="">Tất cả 14 nhóm kịch bản (US01–US14)</option>
+        <option value="fire_smoke_suspected">US01 · Fire &amp; Smoke (Cháy / khói nghi ngờ)</option>
+        <option value="urban_flooding">US02 · Urban Flooding (Ngập nước đô thị)</option>
+        <option value="illegal_dumping">US03 · Illegal Dumping (Đổ trộm / tồn lưu rác)</option>
+        <option value="sidewalk_encroachment">US04 · Sidewalk Encroachment (Lấn chiếm vỉa hè)</option>
+        <option value="illegal_parking">US05 · Illegal Parking (Đỗ xe sai quy định)</option>
+        <option value="crowd_concentration">US06a · Crowd (Tụ tập đông người)</option>
+        <option value="suspected_disorder">US06b · Disorder (Nghi gây rối trật tự)</option>
+        <option value="violent_altercation">US07 · Violent Altercation (Ẩu đả / xô xát)</option>
+        <option value="vehicle_incident">US08 · Vehicle Incident (Tai nạn giao thông)</option>
+        <option value="person_fall">US09a · Person Fall (Người ngã)</option>
+        <option value="person_lying_persistent">US09b · Person Lying (Nằm bất động)</option>
+        <option value="person_on_stationary_vehicle">US09c · Person on Vehicle (Người trên xe)</option>
+        <option value="danger_zone_intrusion">US10 · Danger Zone (Vào vùng nguy hiểm)</option>
+        <option value="abandoned_object">US11 · Abandoned Object (Vật bỏ quên)</option>
+        <option value="fallen_tree">US12 · Fallen Tree (Cây đổ chắn đường)</option>
+        <option value="streetlight_outage">US13 · Streetlight Outage (Đèn đường hỏng)</option>
+        <option value="property_vandalism">US14 · Property Vandalism (Phá hoại tài sản)</option>
+      </select>
+    </div>
+    <div class="toolbar-group">
+      <label for="filter-limit">Giới hạn:</label>
+      <select id="filter-limit">
+        <option value="25">25</option>
+        <option value="50" selected>50</option>
+        <option value="100">100</option>
+      </select>
+    </div>
+    <div class="toolbar-group">
+      <label>
+        <input id="chk-auto-refresh" type="checkbox" checked> Tự làm mới (3s)
+      </label>
+      <button id="btn-refresh-now" type="button">Làm mới ngay</button>
+    </div>
+  </section>
+
+  <div id="status" role="status" aria-live="polite">
+    <span id="status-text">Loading…</span>
+    <span id="events-count" class="muted"></span>
+  </div>
+
   <main id="events" aria-label="Events"></main>
+
+  <!-- Review Reason Dialog -->
+  <dialog id="review-dialog" aria-labelledby="dialog-title">
+    <form id="review-form" method="dialog">
+      <h3 id="dialog-title" class="dialog-header">Xác nhận Review Sự kiện</h3>
+      <p id="dialog-desc" class="muted" style="margin-top:0;"></p>
+      <label for="review-reason" style="display:block; margin-bottom: 0.35rem; font-weight: 500;">
+        Lý do xử lý (bắt buộc):
+      </label>
+      <textarea id="review-reason" rows="3" style="width: 100%; resize: vertical;" placeholder="Nhập lý do review rõ ràng..."></textarea>
+      <div class="dialog-footer">
+        <button id="btn-dialog-cancel" type="button">Hủy bỏ</button>
+        <button id="btn-dialog-submit" type="submit" class="btn-primary">Xác nhận</button>
+      </div>
+    </form>
+  </dialog>
+
   <script>
     (() => {
-      let token = "";
-      let reviewerToken = "";
+      // Storage keys & URL query parameters
+      const STORAGE_DASH_TOKEN = "civi_watch_dash_token";
+      const STORAGE_REV_TOKEN = "civi_watch_rev_token";
+      const urlParams = new URLSearchParams(window.location.search);
+
+      let token = urlParams.get("token") || sessionStorage.getItem(STORAGE_DASH_TOKEN) || localStorage.getItem(STORAGE_DASH_TOKEN) || "";
+      let reviewerToken = urlParams.get("reviewer_token") || sessionStorage.getItem(STORAGE_REV_TOKEN) || localStorage.getItem(STORAGE_REV_TOKEN) || "";
       let isStreaming = false;
-      const status = document.querySelector("#status");
+      let refreshing = false;
+
+      // Pending review action state
+      let pendingReviewRow = null;
+      let pendingReviewAction = null;
+
+      // DOM Elements
+      const statusText = document.querySelector("#status-text");
+      const eventsCount = document.querySelector("#events-count");
       const list = document.querySelector("#events");
+      const healthBadge = document.querySelector("#health-badge");
+      const guardBadge = document.querySelector("#guard-badge");
+      const authStatusBadge = document.querySelector("#auth-status-badge");
+      const inputDashToken = document.querySelector("#input-dash-token");
+      const inputRevToken = document.querySelector("#input-rev-token");
+      const btnSaveTokens = document.querySelector("#btn-save-tokens");
+      const btnClearTokens = document.querySelector("#btn-clear-tokens");
+      const filterSeverity = document.querySelector("#filter-severity");
+      const filterTaxonomy = document.querySelector("#filter-taxonomy");
+      const filterLimit = document.querySelector("#filter-limit");
+      const chkAutoRefresh = document.querySelector("#chk-auto-refresh");
+      const btnRefreshNow = document.querySelector("#btn-refresh-now");
+
       const liveToggle = document.querySelector("#live-toggle");
       const liveFeed = document.querySelector("#live-feed");
       const livePlaceholder = document.querySelector("#live-feed-placeholder");
       const liveSourceBadge = document.querySelector("#live-source-badge");
       const liveFpsBadge = document.querySelector("#live-fps-badge");
       const liveDetectionsBadge = document.querySelector("#live-detections-badge");
+
+      const reviewDialog = document.querySelector("#review-dialog");
+      const dialogDesc = document.querySelector("#dialog-desc");
+      const reviewReason = document.querySelector("#review-reason");
+      const btnDialogCancel = document.querySelector("#btn-dialog-cancel");
+      const reviewForm = document.querySelector("#review-form");
+
+      // DOM helper - Strictly uses document.createElement & textContent (No raw HTML injection)
+      const add = (parent, tag, text, className) => {
+        const node = document.createElement(tag);
+        if (text !== undefined && text !== null) node.textContent = text;
+        if (className) node.className = className;
+        parent.append(node);
+        return node;
+      };
+
+      // Initialize inputs from memory/storage
+      if (token) inputDashToken.value = token;
+      if (reviewerToken) inputRevToken.value = reviewerToken;
+      updateAuthBadge();
+
+      function updateAuthBadge() {
+        if (token) {
+          authStatusBadge.textContent = reviewerToken ? "Dashboard + Reviewer OK" : "Dashboard OK";
+          authStatusBadge.className = "badge badge-complete";
+        } else {
+          authStatusBadge.textContent = "Chưa có Dashboard token";
+          authStatusBadge.className = "badge badge-pending";
+        }
+      }
+
+      btnSaveTokens.addEventListener("click", () => {
+        token = inputDashToken.value.trim();
+        reviewerToken = inputRevToken.value.trim();
+        sessionStorage.setItem(STORAGE_DASH_TOKEN, token);
+        sessionStorage.setItem(STORAGE_REV_TOKEN, reviewerToken);
+        localStorage.setItem(STORAGE_DASH_TOKEN, token);
+        localStorage.setItem(STORAGE_REV_TOKEN, reviewerToken);
+        updateAuthBadge();
+        pollSystemHealth();
+        if (isStreaming) updateStreamUI();
+        refresh();
+      });
+
+      btnClearTokens.addEventListener("click", () => {
+        token = "";
+        reviewerToken = "";
+        inputDashToken.value = "";
+        inputRevToken.value = "";
+        sessionStorage.removeItem(STORAGE_DASH_TOKEN);
+        sessionStorage.removeItem(STORAGE_REV_TOKEN);
+        localStorage.removeItem(STORAGE_DASH_TOKEN);
+        localStorage.removeItem(STORAGE_REV_TOKEN);
+        updateAuthBadge();
+        if (isStreaming) {
+          isStreaming = false;
+          updateStreamUI();
+        }
+        refresh();
+      });
+
+      document.querySelector("#auth").addEventListener("click", () => {
+        const val = window.prompt("Dashboard bearer token", token) || "";
+        if (val) {
+          token = val.trim();
+          inputDashToken.value = token;
+          sessionStorage.setItem(STORAGE_DASH_TOKEN, token);
+          localStorage.setItem(STORAGE_DASH_TOKEN, token);
+          updateAuthBadge();
+          pollSystemHealth();
+          if (isStreaming) updateStreamUI();
+          refresh();
+        }
+      });
 
       function updateStreamUI() {
         if (isStreaming) {
@@ -89,6 +699,8 @@
         if (!token) {
           token = window.prompt("Dashboard bearer token") || "";
           if (!token) return;
+          inputDashToken.value = token;
+          updateAuthBadge();
           refresh();
         }
         isStreaming = !isStreaming;
@@ -109,100 +721,334 @@
           }
         } catch (_) {}
       }
+
+      async function pollSystemHealth() {
+        try {
+          const res = await fetch("/healthz");
+          if (res.ok) {
+            const data = await res.json();
+            const isDegraded = data.status === "degraded";
+            healthBadge.textContent = `Health: ${data.status.toUpperCase()}`;
+            healthBadge.className = `badge badge-${isDegraded ? "high" : "complete"}`;
+            if (data.ingest_guard) {
+              const bRem = data.ingest_guard.budget_remaining;
+              const bSpent = data.ingest_guard.budget_spent;
+              guardBadge.textContent = `Guard: ${bRem} left (${bSpent} used)`;
+              guardBadge.className = `badge badge-${data.ingest_guard.degraded ? "critical" : "standard"}`;
+            }
+          } else {
+            healthBadge.textContent = `Health: ERROR (${res.status})`;
+            healthBadge.className = "badge badge-critical";
+          }
+        } catch (_) {
+          healthBadge.textContent = "Health: Unreachable";
+          healthBadge.className = "badge badge-critical";
+        }
+      }
+
       window.setInterval(pollLiveStatus, 2000);
-      document.querySelector("#auth").addEventListener("click", () => {
-        token = window.prompt("Dashboard bearer token") || "";
-        pollLiveStatus();
-        if (isStreaming) updateStreamUI();
-        refresh();
-      });
-      const add = (parent, tag, text, className) => {
-        const node = document.createElement(tag);
-        node.textContent = text;
-        if (className) node.className = className;
-        parent.append(node);
-        return node;
-      };
-      let refreshing = false;
+      window.setInterval(pollSystemHealth, 5000);
+      pollSystemHealth();
+
       const evidencePlaying = () => Array.from(list.querySelectorAll("video")).some(video => !video.paused && !video.ended);
+
+      // Filtering event listeners
+      filterSeverity.addEventListener("change", () => refresh());
+      filterTaxonomy.addEventListener("change", () => refresh());
+      filterLimit.addEventListener("change", () => refresh());
+      btnRefreshNow.addEventListener("click", () => refresh());
+
+      // Format taxonomy label
+      function formatTaxonomy(tax) {
+        switch (tax) {
+          case "fire_suspected":
+          case "smoke_suspected":
+          case "fire_smoke_suspected": return "US01 · Cháy / khói nghi ngờ (Fire & Smoke)";
+          case "urban_flooding": return "US02 · Ngập nước đô thị (Urban Flooding)";
+          case "illegal_dumping":
+          case "illegal_dumping_action":
+          case "unlawful_waste_accumulation": return "US03 · Đổ trộm / tồn lưu rác (Illegal Dumping)";
+          case "sidewalk_encroachment": return "US04 · Lấn chiếm vỉa hè (Sidewalk Encroachment)";
+          case "illegal_parking": return "US05 · Đỗ xe sai quy định (Illegal Parking)";
+          case "crowd_concentration": return "US06 · Tụ tập đông người (Crowd)";
+          case "suspected_disorder": return "US06 · Nghi gây rối (Suspected Disorder)";
+          case "violent_altercation": return "US07 · Nghi ẩu đả (Violent Altercation)";
+          case "vehicle_vehicle":
+          case "vehicle_pedestrian":
+          case "vehicle_rollover_or_barrier":
+          case "vehicle_incident": return "US08 · Sự cố phương tiện (Vehicle Incident)";
+          case "person_fall": return "US09 · Người ngã (Person Fall)";
+          case "person_lying_persistent": return "US09 · Nằm bất động (Persistent Lying)";
+          case "person_on_stationary_vehicle": return "US09 · Người trên xe (On-vehicle)";
+          case "danger_zone_intrusion": return "US10 · Vào vùng nguy hiểm (Danger Zone)";
+          case "abandoned_object":
+          case "abandoned_object_dropped":
+          case "unattended_object_persistent": return "US11 · Vật bỏ quên (Abandoned Object)";
+          case "fallen_tree": return "US12 · Cây đổ chắn đường (Fallen Tree)";
+          case "streetlight_outage": return "US13 · Đèn đường hỏng (Streetlight Outage)";
+          case "property_vandalism": return "US14 · Phá hoại tài sản (Property Vandalism)";
+          default: return tax || "Sự kiện (Event)";
+        }
+      }
+
+      // Format facts box for each domain scenario
+      function renderFactsGrid(parent, event) {
+        const payload = event.payload || {};
+        const tax = payload.taxonomy || "";
+        const grid = document.createElement("div");
+        grid.className = "facts-grid";
+
+        let added = 0;
+        const addFact = (label, val) => {
+          if (val === undefined || val === null || val === "") return;
+          const item = document.createElement("div");
+          item.className = "facts-item";
+          add(item, "span", label, "facts-label");
+          add(item, "span", String(val), "facts-val");
+          grid.append(item);
+          added++;
+        };
+
+        if (tax === "person_fall" || tax === "person_lying_persistent" || tax === "person_on_stationary_vehicle") {
+          addFact("Track ID", payload.track_id);
+          addFact("Diễn biến Onset", payload.onset_time !== undefined ? `${payload.onset_time}s` : null);
+          addFact("Neo cảnh báo", payload.anchor_time !== undefined ? `${payload.anchor_time}s` : null);
+          if (payload.pose_evidence) {
+            const pe = payload.pose_evidence;
+            addFact("Tư thế (Pose)", `${pe.status || "none"}${pe.reason ? ` (${pe.reason})` : ""}`);
+            if (pe.keypoints && Array.isArray(pe.keypoints)) {
+              addFact("Số Keypoints", `${pe.keypoints.length} điểm`);
+            }
+          }
+          if (payload.associated_vehicles && payload.associated_vehicles.length) {
+            addFact("Phương tiện gắn kết", payload.associated_vehicles.map(v => v.track_id).join(", "));
+          }
+        } else if (tax === "vehicle_incident") {
+          addFact("Kiểu tương tác", payload.interaction_type);
+          if (payload.involved_track_ids && payload.involved_track_ids.length) {
+            addFact("Track tham gia", payload.involved_track_ids.join(", "));
+          }
+          addFact("TTC ước tính", payload.time_to_collision !== undefined ? `${payload.time_to_collision}s` : null);
+          addFact("Closing speed", payload.closing_speed !== undefined ? `${payload.closing_speed} px/s` : null);
+          addFact("IoU rate", payload.iou_rate !== undefined ? `${payload.iou_rate}` : null);
+          addFact("Độ nghi ngờ", payload.incident_kind || "vehicle_incident");
+        } else if (tax === "illegal_parking") {
+          addFact("Track xe", payload.track_id);
+          addFact("Loại xe", payload.vehicle_label);
+          addFact("Thời gian đứng yên (Dwell)", `${payload.dwell_seconds || 0}s (ngưỡng: ${payload.threshold_seconds || 0}s)`);
+          addFact("Vùng cấm (ROI)", payload.roi_id || "ROI giám sát");
+          addFact("Khung giờ áp dụng", payload.schedule_id || "Toàn thời gian");
+        } else if (tax === "crowd_concentration" || tax === "suspected_disorder") {
+          addFact("Số lượng người", `${payload.crowd_count || 0} người`);
+          addFact("Thời gian duy trì", `${payload.persistence_seconds || 0}s`);
+          if (payload.disorder_metrics) {
+            const dm = payload.disorder_metrics;
+            addFact("Tốc độ phân tán", `${dm.dispersal_rate || 0} px/s`);
+            addFact("Đột biến gia tốc", dm.acceleration_spike ? "Có" : "Không");
+          }
+        } else if (tax === "danger_zone_intrusion") {
+          addFact("Track người", payload.track_id);
+          addFact("Thời gian trong vùng", `${payload.dwell_seconds || 0}s`);
+          addFact("Vùng nguy hiểm (ROI)", payload.roi_id || "Vùng cảnh báo");
+          addFact("Lịch hiệu lực", payload.schedule_active ? "Đang hiệu lực" : "Ngoài giờ");
+        }
+
+        // Tier-2 VLM Storyboard Verification metadata
+        if (payload.vlm_verification) {
+          const vlm = payload.vlm_verification;
+          addFact("Tier-2 VLM Status", `${vlm.status || "verified"} (${vlm.model_id || "civiwatch-vlm"})`);
+          if (vlm.confidence !== undefined) {
+            addFact("VLM Confidence", `${(Number(vlm.confidence) * 100).toFixed(1)}%`);
+          }
+          if (vlm.reasoning) {
+            addFact("VLM Storyboard", vlm.reasoning);
+          }
+        }
+
+        // Generic fallback facts if specific fields not matched
+        if (added === 0) {
+          if (payload.scenario_id) addFact("Kịch bản", payload.scenario_id);
+          if (payload.lifecycle) addFact("Lifecycle", payload.lifecycle);
+          if (payload.severity) addFact("Severity", payload.severity);
+          if (payload.track_id) addFact("Track ID", payload.track_id);
+          if (payload.observation_duration_seconds !== undefined) {
+            addFact("Thời gian quan sát", `${payload.observation_duration_seconds}s`);
+          }
+        }
+
+        if (added > 0) parent.append(grid);
+      }
+
       async function refresh() {
         if (refreshing) return;
         if (evidencePlaying()) return;
-        if (!token) { status.textContent = "Enter the dashboard token to load events."; return; }
+        if (!token) {
+          statusText.textContent = "Nhập Dashboard token ở trên để tải danh sách sự kiện.";
+          eventsCount.textContent = "";
+          return;
+        }
         refreshing = true;
-        status.textContent = "Loading events…";
+        statusText.textContent = "Đang tải sự kiện…";
+
+        // Query parameters
+        const params = new URLSearchParams();
+        params.set("limit", filterLimit.value || "50");
+        if (filterSeverity.value) params.set("severity", filterSeverity.value);
+        if (filterTaxonomy.value) params.set("taxonomy", filterTaxonomy.value);
+
         try {
-          const response = await fetch("/v1/events?limit=50", { headers: { Authorization: `Bearer ${token}` } });
-          if (!response.ok) throw new Error(response.status === 401 ? "Dashboard token rejected." : `Request failed (${response.status}).`);
+          const response = await fetch(`/v1/events?${params.toString()}`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (!response.ok) {
+            throw new Error(response.status === 401 ? "Dashboard token bị từ chối (401 Unauthorized)." : `Yêu cầu thất bại (${response.status}).`);
+          }
           const data = await response.json();
           if (evidencePlaying()) return;
+
+          // Preserve open details states
           const openDetails = new Set(Array.from(list.querySelectorAll("article")).flatMap(card =>
             Array.from(card.querySelectorAll("details[open]")).map(detail =>
               `${card.dataset.eventKey}:${detail.querySelector("summary")?.textContent}`)));
+
           list.replaceChildren();
-          if (!data.events.length) {
-            status.textContent = "No events yet. Run the edge synthetic fixture to add one.";
+
+          if (!data.events || !data.events.length) {
+            const empty = document.createElement("div");
+            empty.className = "empty-state";
+            add(empty, "h3", "Không có sự kiện nào");
+            add(empty, "p", "Chưa có sự kiện nào phù hợp với bộ lọc hiện tại hoặc hệ thống chưa nhận sự kiện mới.");
+            list.append(empty);
+            statusText.textContent = "Không tìm thấy sự kiện.";
+            eventsCount.textContent = "0 sự kiện";
             return;
           }
+
           for (const row of data.events) {
             const event = row.event;
             const card = document.createElement("article");
             card.className = "event";
             card.dataset.eventKey = JSON.stringify([event.device_id, event.event_id]);
+
+            // Header Row
             const header = document.createElement("header");
-            const taxonomy = event.payload.taxonomy || "Event";
-            add(header, "strong", taxonomy);
-            const priority = row.review_priority || "standard";
+            const rawTaxonomy = event.payload?.taxonomy || "Event";
+            const taxTitle = add(header, "span", formatTaxonomy(rawTaxonomy), "event-title");
+
+            // Severity Badge
+            const severity = (event.payload?.severity || "standard").toLowerCase();
+            const sevBadge = add(header, "span", severity.toUpperCase(), `badge badge-${severity}`);
+
+            // Priority Badge
+            const priority = (row.review_priority || "standard").toLowerCase();
             if (priority === "low") {
               add(header, "span", "On-vehicle (Low priority)", "badge badge-priority-low");
             } else if (priority === "urgent") {
               add(header, "span", "Emergency priority", "badge badge-priority-urgent");
             }
-            add(header, "span", event.origin, "muted");
-            add(card, "h2", `${event.camera_id} · revision ${event.revision}`);
-            card.prepend(header);
-            add(card, "p", `${event.payload.lifecycle || "unknown"} · ${event.payload.severity || "unknown"} · review priority ${priority} · quality ${event.quality_state}${event.payload.quality ? ` · ODD ${event.payload.quality.odd_supported === true ? "supported" : event.payload.quality.odd_supported === false ? "not supported" : "unverified"}` : ""}`);
-            const time = add(card, "time", event.event_time);
-            time.dateTime = event.event_time;
-            add(card, "p", `Event ${event.event_id}`, "muted");
-            const review = row.review;
-            add(card, "p", `Review: ${review.decision} · version ${review.review_version}${review.needs_re_review ? " · needs re-review" : ""}`);
+
+            // Origin Badge
+            const origin = (event.origin || "live").toLowerCase();
+            add(header, "span", `Origin: ${origin}`, `badge badge-origin-${origin}`);
+
+            // Quality & ODD
+            const qualityState = event.quality_state || "good";
+            const oddSupported = event.payload?.quality?.odd_supported;
+            const oddText = oddSupported === true ? "ODD: Hỗ trợ" : oddSupported === false ? "ODD: Ngoài phạm vi" : "ODD: Chưa duyệt";
+            add(header, "span", `Chất lượng: ${qualityState} (${oddText})`, "badge badge-standard");
+
+            card.append(header);
+
+            // Subtitle Meta Row
+            const meta = document.createElement("div");
+            meta.className = "event-meta";
+            
+            const divCam = document.createElement("div");
+            add(divCam, "span", "Camera:");
+            add(divCam, "strong", event.camera_id);
+            meta.append(divCam);
+
+            const divRev = document.createElement("div");
+            add(divRev, "span", "Bản ghi:");
+            add(divRev, "strong", `rev ${event.revision}`);
+            meta.append(divRev);
+
+            const divId = document.createElement("div");
+            add(divId, "span", "ID:");
+            add(divId, "code", `${event.device_id}/${event.event_id}`);
+            meta.append(divId);
+
+            const divTime = document.createElement("div");
+            add(divTime, "span", "Thời gian:");
+            const timeEl = add(divTime, "time", event.event_time);
+            timeEl.dateTime = event.event_time;
+            meta.append(divTime);
+
+            card.append(meta);
+
+            // Scenario Core Facts Grid
+            renderFactsGrid(card, event);
+
+            // Review Box
+            const reviewBox = document.createElement("div");
+            reviewBox.className = "review-box";
+
+            const reviewStatusRow = document.createElement("div");
+            reviewStatusRow.className = "review-status-row";
+
+            const review = row.review || { decision: "unreviewed", review_version: 0 };
+            const decision = review.decision || "unreviewed";
+            add(reviewStatusRow, "strong", "Trạng thái Review:");
+            add(reviewStatusRow, "span", decision.toUpperCase(), `badge badge-review-${decision}`);
+            add(reviewStatusRow, "span", `(Phiên bản: ${review.review_version})`, "muted");
+
             if (review.needs_re_review) {
               const reasons = Array.isArray(review.re_review_reasons) ? review.re_review_reasons : [];
-              add(card, "p", reasons.length
-                ? `Re-review required: ${reasons.join(", ")}`
-                : "Re-review required; reason unavailable.", "badge badge-pending");
+              const reReviewText = reasons.length
+                ? `Yêu cầu Review lại: ${reasons.join(", ")}`
+                : "Yêu cầu Review lại; không rõ nguyên nhân.";
+              add(reviewStatusRow, "span", reReviewText, "badge badge-re-review");
             }
+            reviewBox.append(reviewStatusRow);
+
+            // Review Action Buttons
             if (data.review_enabled) {
-              const controls = document.createElement("p");
-              const addReviewButton = (action, label) => {
-                const button = add(controls, "button", label);
-                button.type = "button";
-                button.addEventListener("click", () => submitReview(row, action));
+              const actionsRow = document.createElement("div");
+              actionsRow.className = "review-actions-row";
+
+              const makeReviewBtn = (action, label, btnClass) => {
+                const btn = add(actionsRow, "button", label, btnClass);
+                btn.type = "button";
+                btn.addEventListener("click", () => openReviewDialog(row, action));
               };
+
               if (review.needs_re_review) {
-                addReviewButton("reopen", "Reopen for re-review");
-              } else if (review.decision === "unreviewed") {
-                addReviewButton("confirm", "Confirm");
-                addReviewButton("false_positive", "False positive");
-              } else if (review.decision === "confirmed") {
-                addReviewButton("resolve", "Resolve");
-                addReviewButton("reopen", "Reopen");
+                makeReviewBtn("reopen", "Mở lại để Review (Reopen)", "btn-warning");
+              } else if (decision === "unreviewed") {
+                makeReviewBtn("confirm", "Xác nhận sự cố (Confirm)", "btn-success");
+                makeReviewBtn("false_positive", "Báo nhầm (False Positive)", "btn-danger");
+              } else if (decision === "confirmed") {
+                makeReviewBtn("resolve", "Giải quyết (Resolve)", "btn-primary");
+                makeReviewBtn("reopen", "Mở lại (Reopen)", "btn-warning");
               } else {
-                addReviewButton("reopen", "Reopen");
+                makeReviewBtn("reopen", "Mở lại (Reopen)", "btn-warning");
               }
-              card.append(controls);
+              reviewBox.append(actionsRow);
             }
-            if (review.audit.length) {
-              const history = document.createElement("details");
-              add(history, "summary", `Review audit (${review.audit.length})`);
+            card.append(reviewBox);
+
+            // Review Audit History
+            if (review.audit && review.audit.length) {
+              const auditDetails = document.createElement("details");
+              add(auditDetails, "summary", `Lịch sử Review (${review.audit.length})`);
               for (const entry of review.audit) {
-                add(history, "p", `v${entry.review_version} ${entry.action} → ${entry.decision} · ${entry.actor} · ${entry.created_at} · ${entry.reason}`);
+                add(auditDetails, "p", `v${entry.review_version} ${entry.action} → ${entry.decision} · Người duyệt: ${entry.actor} · ${entry.created_at} · Lý do: ${entry.reason}`);
               }
-              card.append(history);
+              card.append(auditDetails);
             }
 
-            const evidenceRequests = event.payload.evidence_requests || [];
+            // Evidence Section (Matches exact strings required by test assertions)
+            const evidenceRequests = event.payload?.evidence_requests || [];
             const uploadedEvidences = row.evidence || [];
             const evidenceByReq = new Map();
             for (const ev of uploadedEvidences) {
@@ -220,12 +1066,13 @@
                 const evItem = document.createElement("div");
                 evItem.className = "evidence-item";
                 const evDoc = evidenceByReq.get(req.request_id);
+
                 if (evDoc) {
                   const manifest = evDoc.manifest || {};
                   const completeness = manifest.completeness || "available";
                   const rangeStr = Array.isArray(manifest.actual_range)
                     ? `[${manifest.actual_range[0]}s - ${manifest.actual_range[1]}s]`
-                    : "range recorded";
+                    : "khoảng hợp lệ";
                   add(evItem, "span", `${completeness} · ${rangeStr}`, `badge badge-${completeness}`);
 
                   const video = document.createElement("video");
@@ -242,13 +1089,29 @@
                   dl.download = `${req.request_id}.mkv`;
                   dl.textContent = "Download clip";
                   actions.append(dl);
+
                   if (manifest.size_bytes) {
                     add(actions, "span", `${(manifest.size_bytes / 1024).toFixed(1)} KB`, "muted");
                   }
+
+                  // Retrieval command button
+                  const btnRetrieve = add(actions, "button", "Truy hồi từ Edge", "btn-warning");
+                  btnRetrieve.type = "button";
+                  btnRetrieve.addEventListener("click", () => triggerRetrieval(event.device_id, event.event_id, req.request_id));
+
                   evItem.append(actions);
                 } else {
                   add(evItem, "span", `Pending upload for ${req.request_id}`, "badge badge-pending");
-                  add(evItem, "p", `Requested [${req.requested_start}s - ${req.requested_end}s] (${req.evidence_anchor_kind})`, "muted");
+                  const rangeText = `Requested [${req.requested_start}s - ${req.requested_end}s] (${req.evidence_anchor_kind || "anchor"})`;
+                  add(evItem, "p", rangeText, "muted");
+
+                  // Request retrieval from edge
+                  const actions = document.createElement("div");
+                  actions.className = "evidence-actions";
+                  const btnRetrieve = add(actions, "button", "Yêu cầu trích xuất từ Edge", "btn-primary");
+                  btnRetrieve.type = "button";
+                  btnRetrieve.addEventListener("click", () => triggerRetrieval(event.device_id, event.event_id, req.request_id));
+                  evItem.append(actions);
                 }
                 evSection.append(evItem);
               }
@@ -260,12 +1123,14 @@
                   const manifest = ev.manifest || {};
                   const completeness = manifest.completeness || "available";
                   add(evItem, "span", `${completeness} (${ev.request_id})`, `badge badge-${completeness}`);
+
                   const video = document.createElement("video");
                   video.controls = true;
                   video.preload = "metadata";
                   const mediaUrl = `/v1/evidence/${encodeURIComponent(event.device_id)}/${encodeURIComponent(event.event_id)}/${encodeURIComponent(ev.request_id)}/media?token=${encodeURIComponent(token)}`;
                   video.src = mediaUrl;
                   evItem.append(video);
+
                   const actions = document.createElement("div");
                   actions.className = "evidence-actions";
                   const dl = document.createElement("a");
@@ -274,64 +1139,153 @@
                   dl.textContent = "Download clip";
                   actions.append(dl);
                   evItem.append(actions);
+
                   evSection.append(evItem);
                 }
               }
               card.append(evSection);
             }
 
+            // Raw Snapshot Details
             const detail = document.createElement("details");
-            add(detail, "summary", "Event snapshot");
+            add(detail, "summary", "Event snapshot (JSON)");
             add(detail, "pre", JSON.stringify(event, null, 2));
             card.append(detail);
+
+            // Restore expanded state
             for (const section of card.querySelectorAll("details")) {
               section.open = openDetails.has(`${card.dataset.eventKey}:${section.querySelector("summary")?.textContent}`);
             }
+
             list.append(card);
           }
-          status.textContent = `Showing ${data.events.length} event${data.events.length === 1 ? "" : "s"}. Refreshes every 3 seconds while evidence playback is paused.`;
+
+          statusText.textContent = `Hiển thị ${data.events.length} sự kiện. Tự động làm mới mỗi 3s khi video dừng.`;
+          eventsCount.textContent = `Tổng: ${data.events.length}`;
         } catch (error) {
-          status.textContent = `${error.message} Check the API and try again.`;
+          statusText.textContent = `Lỗi: ${error.message}`;
         } finally {
           refreshing = false;
         }
       }
-      async function submitReview(row, action) {
-        if (!reviewerToken) reviewerToken = window.prompt("Reviewer bearer token") || "";
-        if (!reviewerToken) return;
-        const reason = window.prompt(`Reason for ${action.replaceAll("_", " ")}`) || "";
-        if (!reason.trim()) return;
+
+      // Dialog review handler
+      function openReviewDialog(row, action) {
+        if (!reviewerToken) {
+          reviewerToken = window.prompt("Nhập Reviewer bearer token:") || "";
+          if (!reviewerToken) return;
+          inputRevToken.value = reviewerToken;
+          sessionStorage.setItem(STORAGE_REV_TOKEN, reviewerToken);
+          localStorage.setItem(STORAGE_REV_TOKEN, reviewerToken);
+          updateAuthBadge();
+        }
+        pendingReviewRow = row;
+        pendingReviewAction = action;
+        dialogDesc.textContent = `Hành động: [${action.toUpperCase()}] cho sự kiện ${row.event.event_id} (Camera: ${row.event.camera_id}).`;
+        reviewReason.value = "";
+        reviewDialog.showModal();
+        reviewReason.focus();
+      }
+
+      btnDialogCancel.addEventListener("click", () => {
+        reviewDialog.close();
+        pendingReviewRow = null;
+        pendingReviewAction = null;
+      });
+
+      reviewForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const reason = reviewReason.value.trim();
+        if (!reason) {
+          window.alert("Vui lòng nhập lý do review.");
+          return;
+        }
+        reviewDialog.close();
+        if (!pendingReviewRow || !pendingReviewAction) return;
+        await submitReview(pendingReviewRow, pendingReviewAction, reason);
+        pendingReviewRow = null;
+        pendingReviewAction = null;
+      });
+
+      async function submitReview(row, action, reason) {
         const event = row.event;
         try {
           const response = await fetch(`/v1/events/${encodeURIComponent(event.device_id)}/${encodeURIComponent(event.event_id)}/review`, {
             method: "POST",
-            headers: { Authorization: `Bearer ${reviewerToken}`, "Content-Type": "application/json" },
+            headers: {
+              Authorization: `Bearer ${reviewerToken}`,
+              "Content-Type": "application/json",
+            },
             body: JSON.stringify({
               action,
-              expected_review_version: row.review.review_version,
+              expected_review_version: row.review?.review_version || 0,
               viewed_event_revision: event.revision,
               viewed_event_hash: row.event_hash,
-              viewed_evidence_versions: row.evidence_versions || event.payload.evidence_versions || {},
-              reason: reason.trim(),
+              viewed_evidence_versions: row.evidence_versions || event.payload?.evidence_versions || {},
+              reason: reason,
             }),
           });
+
           if (response.status === 409) {
             await refresh();
-            status.textContent = "Review conflict: the event or review changed. Inspect the refreshed event, then choose again.";
+            window.alert("Xung đột phiên bản review: Sự kiện hoặc review đã thay đổi trên server. Vui lòng tải lại trang.");
             return;
           }
-          if (response.status === 401) reviewerToken = "";
+          if (response.status === 401) {
+            reviewerToken = "";
+            inputRevToken.value = "";
+            updateAuthBadge();
+            window.alert("Reviewer token không hợp lệ (401 Unauthorized).");
+            return;
+          }
           if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || `Review failed (${response.status}).`);
+            const err = await response.json();
+            throw new Error(err.detail || `Lỗi review (${response.status})`);
           }
           await refresh();
         } catch (error) {
-          status.textContent = `${error.message} Review was not applied.`;
+          window.alert(`Review thất bại: ${error.message}`);
         }
       }
+
+      async function triggerRetrieval(deviceId, eventId, requestId) {
+        if (!reviewerToken) {
+          reviewerToken = window.prompt("Nhập Reviewer bearer token để truy hồi bằng chứng:") || "";
+          if (!reviewerToken) return;
+          inputRevToken.value = reviewerToken;
+          sessionStorage.setItem(STORAGE_REV_TOKEN, reviewerToken);
+          localStorage.setItem(STORAGE_REV_TOKEN, reviewerToken);
+          updateAuthBadge();
+        }
+        try {
+          const res = await fetch(`/v1/evidence/${encodeURIComponent(deviceId)}/${encodeURIComponent(eventId)}/${encodeURIComponent(requestId)}/retrieval`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${reviewerToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ target: "edge", ttl_seconds: 300, retention_scope: "clip" })
+          });
+          if (res.ok) {
+            const retDoc = await res.json();
+            window.alert(`Đã phát lệnh truy hồi bằng chứng thành công!\nCommand ID: ${retDoc.command_id}\nTrạng thái: ${retDoc.status}`);
+            refresh();
+          } else {
+            const err = await res.json();
+            window.alert(`Không thể gửi lệnh truy hồi: ${err.detail || res.statusText}`);
+          }
+        } catch (err) {
+          window.alert(`Lỗi kết nối truy hồi: ${err.message}`);
+        }
+      }
+
+      // Initial load
       refresh();
-      window.setInterval(refresh, 3000);
+
+      // Auto refresh interval
+      window.setInterval(() => {
+        if (chkAutoRefresh.checked) refresh();
+      }, 3000);
     })();
   </script>
 </body>

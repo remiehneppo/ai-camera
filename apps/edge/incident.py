@@ -9,8 +9,8 @@ from typing import Any
 from apps.edge.geometry import is_normalized_polygon, point_in_polygon
 from apps.edge.tracker import Track, bbox_iou
 
-_VEHICLE_LABELS = {"motorcycle", "bicycle"}
-_TWO_WHEELER_LABELS = {"motorcycle", "bicycle"}
+_VEHICLE_LABELS = {"motorcycle", "two_wheeler", "bicycle"}
+_TWO_WHEELER_LABELS = {"motorcycle", "two_wheeler", "bicycle"}
 
 
 def _normalize_pose_outcome(outcome: Any) -> dict[str, Any] | None:

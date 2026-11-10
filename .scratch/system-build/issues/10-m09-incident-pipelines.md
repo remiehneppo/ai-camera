@@ -11,7 +11,7 @@ Updated: 2026-10-11
 
 ## Phạm vi và bàn giao
 
-- Ownership dự kiến: `src/traffic_camera/domain/incidents/, src/traffic_camera/domain/policies/`. Chỉ tạo phần cần cho phase đang làm; đường dẫn source chưa tồn tại là vị trí dự kiến.
+- Ownership thực tế (CiviWatch v2): `domain/urban_scenarios.py`, `apps/edge/incident.py`, `apps/edge/vehicle_incident.py`, `apps/edge/danger_zone.py`, `apps/edge/parking_incident.py`, `apps/edge/crowd_incident.py`, `apps/edge/urban_safety_engine.py`, `apps/edge/vlm_verifier.py`.
 - Contract: Track/pose/quality/time → pure event transitions/revisions.
 - SOLID cần kiểm: OCP: thêm pipeline qua registry không sửa FSM pipeline khác; SRP: mỗi feature state riêng; DIP: không I/O/vendor trong evaluate.
 - Consumers/callers cần rà: các task có dependency tới task trong module này; xem dependency map tại mục lục. Trước sửa source dùng CodeGraph context/impact và kiểm producer/consumer cùng contract.

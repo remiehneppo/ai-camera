@@ -31,8 +31,12 @@ import math
 from typing import Any, Sequence
 from uuid import uuid4
 
+import numpy as np
+
 from apps.edge.geometry import is_normalized_polygon, point_in_polygon
+from apps.edge.homography import GroundPlaneHomography
 from apps.edge.tracker import Track
+from apps.edge.vlm_verifier import StoryboardBuilder, VLMVerifier
 
 from domain.vehicle_motion import (
     KinematicsTracker,
@@ -42,8 +46,8 @@ from domain.vehicle_motion import (
     compute_pairwise_risk,
 )
 
-VEHICLE_LABELS: frozenset[str] = frozenset({"car", "motorcycle", "bicycle", "bus", "truck"})
-TWO_WHEELER_LABELS: frozenset[str] = frozenset({"motorcycle", "bicycle"})
+VEHICLE_LABELS: frozenset[str] = frozenset({"car", "motorcycle", "two_wheeler", "bicycle", "bus", "truck"})
+TWO_WHEELER_LABELS: frozenset[str] = frozenset({"motorcycle", "two_wheeler", "bicycle"})
 PEDESTRIAN_LABELS: frozenset[str] = frozenset({"person", "pedestrian"})
 
 
@@ -58,6 +62,9 @@ class _TrackState:
     last_timestamp: float = 0.0
     history_detections: list[dict[str, Any]] = field(default_factory=list)
     was_moving: bool = False
+    moving_frames: int = 0
+    first_cx: float | None = None
+    first_cy: float | None = None
     max_speed: float = 0.0
     is_stationary: bool = True
     stationary_since: float | None = None
@@ -112,6 +119,9 @@ class VehicleIncidentEngine:
         proximity_distance: float = 80.0,
         frame_dimensions: tuple[float, float] | None = None,
         module_name: str | None = None,
+        homography: GroundPlaneHomography | None = None,
+        vlm_verifier: VLMVerifier | None = None,
+        enable_vlm: bool = True,
     ) -> None:
         self.camera_id = str(camera_id)
         self.device_id = str(device_id)
@@ -122,10 +132,16 @@ class VehicleIncidentEngine:
         self.origin = str(origin)
         self.model_artifact_hash = str(model_artifact_hash)
         self.module = str(module_name) if module_name is not None else self.factory
+        self.homography = homography
+        self.enable_vlm = bool(enable_vlm)
+        self.vlm_verifier = vlm_verifier or (VLMVerifier(endpoint_url="") if self.enable_vlm else None)
+        self.storyboard = StoryboardBuilder()
         self.rule_lineage: list[dict[str, str]] = [
             {"role": "vehicle_motion", "version": "1.0.0"},
             {"role": "vehicle_incident", "version": "1.0.0"},
         ]
+        if vlm_verifier is not None:
+            self.rule_lineage.append({"role": "vlm_verifier", "version": vlm_verifier.model_id})
         self.calibration_version = str(calibration_version)
         self.quality_state = str(quality_state)
         self.roi_polygon = roi_polygon
@@ -150,6 +166,7 @@ class VehicleIncidentEngine:
         """Clear all internal tracking states and history."""
         self._tracks.clear()
         self._pairs.clear()
+        self.storyboard.clear()
 
     def observation_gap(self) -> None:
         """Reset kinematics and continuous history across an observation gap."""
@@ -223,31 +240,57 @@ class VehicleIncidentEngine:
         for t in tracks:
             detections.extend(t.history_detections[-10:])
 
+        payload: dict[str, Any] = {
+            "taxonomy": "vehicle_incident",
+            "interaction_type": interaction_type,
+            "severity": severity,
+            "confidence": round(float(confidence), 3),
+            "track_id": primary_track_id,
+            "track_ids": involved_track_ids,
+            "anchor_time": anchor_time,
+            "detection_time": detection_time,
+            "detections": detections,
+        }
+        if self.homography is not None and tracks:
+            obs_seq = [(d["bbox"], float(d["timestamp"])) for d in tracks[0].history_detections[-5:]]
+            mk = self.homography.estimate_track_kinematics(obs_seq)
+            if mk is not None:
+                payload["metric_kinematics"] = {
+                    "x_m": mk.x_m,
+                    "y_m": mk.y_m,
+                    "speed_mps": mk.speed_mps,
+                    "accel_mps2": mk.accel_mps2,
+                }
+
         return {
             "anchor_kind": "alert_condition",
-            "payload": {
-                "taxonomy": "vehicle_incident",
-                "interaction_type": interaction_type,
-                "severity": severity,
-                "confidence": round(float(confidence), 3),
-                "track_id": primary_track_id,
-                "track_ids": involved_track_ids,
-                "anchor_time": anchor_time,
-                "detection_time": detection_time,
-                "detections": detections,
-            },
+            "payload": payload,
         }
+
+    def _verify_candidate(self, event: dict[str, Any], ts: float, dims: tuple[float, float] | None) -> bool:
+        """Run VLMVerifier on a candidate vehicle event across all 3 branches."""
+        if self.vlm_verifier is None:
+            return True
+        sb = self.storyboard.build_grid(ts, original_dimensions=dims) if len(self.storyboard) > 0 else None
+        verdict = self.vlm_verifier.verify(event, storyboard=sb)
+        event["payload"]["vlm_verification"] = verdict.to_dict()
+        return verdict.verified
 
     def process_tracks(
         self,
         tracks: list[Track],
         timestamp: float,
         frame_dimensions: tuple[float, float] | None = None,
+        rgb: np.ndarray | None = None,
     ) -> list[dict[str, Any]]:
         """Evaluate tracks at timestamp and return validated event snapshots for any triggered incidents."""
         ts = float(timestamp)
         dims = frame_dimensions or self.frame_dimensions
         events: list[dict[str, Any]] = []
+
+        if rgb is not None:
+            det_dicts = [{"bbox": list(t.bbox), "label": t.label, "score": t.score} for t in tracks]
+            self.storyboard.record_frame(rgb, ts, int(ts * 10), det_dicts)
 
         # 1. Update kinematics and track state for tracks in ROI
         active_track_ids: set[int | str] = set()
@@ -274,10 +317,16 @@ class VehicleIncidentEngine:
             if len(state.history_detections) > 32:
                 state.history_detections[:] = state.history_detections[-20:]
 
-            # Prior motion tracking
+            # Prior motion tracking (require sustained displacement to reject parked-box jitter)
+            if state.first_cx is None or state.first_cy is None:
+                state.first_cx = float(track.cx)
+                state.first_cy = float(track.cy)
+            net_disp = math.hypot(float(track.cx) - state.first_cx, float(track.cy) - state.first_cy)
             if k.speed >= self.min_moving_speed:
-                state.was_moving = True
+                state.moving_frames += 1
                 state.max_speed = max(state.max_speed, k.speed)
+                if state.moving_frames >= 3 and net_disp >= 12.0:
+                    state.was_moving = True
 
             # Stationary tracking
             if k.speed <= self.stationary_speed:
@@ -319,13 +368,32 @@ class VehicleIncidentEngine:
                 )
                 pair.prev_iou = risk.iou
 
-                # Filter duplicate detections of the same physical vehicle under multiple classes (e.g. bus vs truck)
-                # Two distinct vehicles cannot physically occupy >= 65% of each other's 2D bounding box
+                # Filter duplicate or nested detections of the same physical vehicle (e.g. bus vs truck)
                 if risk.iou >= 0.65:
                     continue
+                ix1 = max(v1.last_bbox[0], v2.last_bbox[0])
+                iy1 = max(v1.last_bbox[1], v2.last_bbox[1])
+                ix2 = min(v1.last_bbox[2], v2.last_bbox[2])
+                iy2 = min(v1.last_bbox[3], v2.last_bbox[3])
+                inter_area = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+                area1 = max(1.0, (v1.last_bbox[2] - v1.last_bbox[0]) * (v1.last_bbox[3] - v1.last_bbox[1]))
+                area2 = max(1.0, (v2.last_bbox[2] - v2.last_bbox[0]) * (v2.last_bbox[3] - v2.last_bbox[1]))
+                if inter_area / min(area1, area2) >= 0.72:
+                    continue
 
-                # Convergence detection
-                if risk.closing_speed > 10.0 or risk.iou > 0.05 or risk.risk_level in ("high", "critical"):
+                # Ground-plane physical separation guard (eliminates perspective bbox overlap false positives)
+                if self.homography is not None:
+                    gp1 = self.homography.bbox_foot_to_ground(v1.last_bbox)
+                    gp2 = self.homography.bbox_foot_to_ground(v2.last_bbox)
+                    if gp1.valid and gp2.valid and math.hypot(gp1.x_m - gp2.x_m, gp1.y_m - gp2.y_m) > 1.8:
+                        continue
+
+                # Spatial proximity gate: vehicles far apart in image cannot collide
+                dist_px = math.hypot(k1.cx - k2.cx, k1.cy - k2.cy)
+                in_contact_zone = (risk.iou > 0.05) or (dist_px <= self.proximity_distance * 1.25)
+
+                # Convergence detection only starts when vehicles are reasonably close or closing fast nearby
+                if (risk.closing_speed > 10.0 and dist_px <= self.proximity_distance * 2.5) or risk.iou > 0.05 or risk.risk_level in ("high", "critical"):
                     if not pair.had_convergence:
                         v1.heading_before_convergence = k1.heading
                         v2.heading_before_convergence = k2.heading
@@ -336,6 +404,8 @@ class VehicleIncidentEngine:
                 if not pair.had_convergence or pair.last_convergence_time is None:
                     continue
                 if (ts - pair.last_convergence_time) > 2.0:
+                    continue
+                if not in_contact_zone:
                     continue
 
                 # Hard negative: Both vehicles must have had prior motion!
@@ -374,12 +444,22 @@ class VehicleIncidentEngine:
                     if dh2 >= self.deflection_threshold:
                         deflected = True
 
+                # Hard negative: Same-direction queueing/stopping at intersections (Vietnam dense traffic)
+                is_same_direction_queue = False
+                if v1.heading_before_convergence is not None and v2.heading_before_convergence is not None:
+                    dh_pair = abs(
+                        (v1.heading_before_convergence - v2.heading_before_convergence + math.pi) % (2 * math.pi) - math.pi
+                    )
+                    if dh_pair < 0.70 and not deflected and risk.iou < 0.28:
+                        is_same_direction_queue = True
+                if is_same_direction_queue:
+                    continue
+
                 has_collision = False
-                # Collision requires mutual impact evidence:
-                # 1) At least one vehicle experienced an impact deceleration spike and halted
-                if (decel_1 and decel_2) and one_halted:
+                # Collision requires mutual impact evidence + close overlap/proximity:
+                if (decel_1 and decel_2) and one_halted and (risk.iou > 0.05 or pair.max_closing_speed > 20.0):
                     has_collision = True
-                elif (decel_1 or decel_2) and both_halted and (pair.max_closing_speed > 20.0 or risk.iou > 0.1):
+                elif (decel_1 or decel_2) and both_halted and (risk.iou > 0.1 or (pair.max_closing_speed > 25.0 and dist_px <= self.proximity_distance)):
                     has_collision = True
                 elif (decel_1 or decel_2 or risk.iou > 0.15) and deflected:
                     has_collision = True
@@ -387,9 +467,6 @@ class VehicleIncidentEngine:
                     has_collision = True
 
                 if has_collision:
-                    pair.last_alert_time = ts
-                    v1.last_alert_time = ts
-                    v2.last_alert_time = ts
                     sev = "critical" if (pair.max_closing_speed > 30.0 or risk.iou > 0.2) else "high"
                     conf = min(0.99, max(0.85, (v1.last_score + v2.last_score) / 2.0))
                     event = self._build_facts(
@@ -402,6 +479,11 @@ class VehicleIncidentEngine:
                         confidence=conf,
                         tracks=[v1, v2],
                     )
+                    if not self._verify_candidate(event, ts, dims):
+                        continue
+                    pair.last_alert_time = ts
+                    v1.last_alert_time = ts
+                    v2.last_alert_time = ts
                     events.append(event)
 
         # 3. Branch 3: vehicle_rollover_or_barrier (single-vehicle accident)
@@ -422,7 +504,14 @@ class VehicleIncidentEngine:
             # Case 3a: Two-wheeler fallen over (was moving upright, aspect ratio inverted to horizontal)
             if state.label in TWO_WHEELER_LABELS:
                 ar = state.last_aspect_ratio or 0.0
-                if state.initial_is_upright and ar >= self.two_wheeler_rollover_ar:
+                init_ar = state.initial_aspect_ratio or 0.5
+                had_halt_or_impact = state.is_stationary or (
+                    state.last_deceleration_spike_time is not None
+                    and (ts - state.last_deceleration_spike_time) <= 1.5
+                )
+                if state.initial_is_upright and ar >= self.two_wheeler_rollover_ar and (
+                    had_halt_or_impact or ar >= 1.8 or (ar - init_ar) >= 0.7
+                ):
                     triggered = True
                     severity = "critical"
 
@@ -458,7 +547,6 @@ class VehicleIncidentEngine:
                     severity = "high"
 
             if triggered:
-                state.last_alert_time = ts
                 event = self._build_facts(
                     interaction_type="vehicle_rollover_or_barrier",
                     severity=severity,
@@ -469,6 +557,9 @@ class VehicleIncidentEngine:
                     confidence=round(float(state.last_score), 3),
                     tracks=[state],
                 )
+                if not self._verify_candidate(event, ts, dims):
+                    continue
+                state.last_alert_time = ts
                 events.append(event)
 
         # 4. Branch 2: vehicle_pedestrian
@@ -518,11 +609,21 @@ class VehicleIncidentEngine:
                     and (p.last_aspect_ratio or 0.0) >= self.pedestrian_lying_ar
                 )
 
+                # Hard negative: Co-moving motorbike/bicycle rider is NOT a struck pedestrian
+                rel_speed = math.hypot(vk.vx - pk.vx, vk.vy - pk.vy)
+                p_ar = p.last_aspect_ratio or 0.5
+                if rel_speed < 15.0 and not p_fell_during_interaction:
+                    continue
+
                 # Pre-existing lying person near vehicle without deceleration is NOT a crash confirmation
-                if (p_fell_during_interaction and in_proximity) or (v_decel and iou > 0.15 and dist <= self.proximity_distance * 0.8):
-                    pair.last_alert_time = ts
-                    v.last_alert_time = ts
-                    p.last_alert_time = ts
+                if (p_fell_during_interaction and in_proximity) or (
+                    v_decel
+                    and v.is_stationary
+                    and iou > 0.15
+                    and dist <= self.proximity_distance * 0.8
+                    and rel_speed >= 25.0
+                    and p_ar >= 0.85
+                ):
                     conf = min(0.99, max(0.88, (v.last_score + p.last_score) / 2.0))
                     event = self._build_facts(
                         interaction_type="vehicle_pedestrian",
@@ -534,6 +635,11 @@ class VehicleIncidentEngine:
                         confidence=conf,
                         tracks=[v, p],
                     )
+                    if not self._verify_candidate(event, ts, dims):
+                        continue
+                    pair.last_alert_time = ts
+                    v.last_alert_time = ts
+                    p.last_alert_time = ts
                     events.append(event)
 
         return events

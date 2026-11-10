@@ -8,7 +8,9 @@ Nguồn quyết định: [nhật ký requirement Q1–Q35](../logs/2026-10-20-re
 
 | Thành phần | Trạng thái quyết định | Chưa được suy ra |
 |---|---|---|
-| YOLOX-Tiny / RTMPose-Tiny, ByteTrack, ONNX Runtime | **Baseline sản xuất đã được kiểm chứng**: Phục vụ toàn bộ 4 nhóm sự cố (US09 Person-down, US08 Tai nạn xe, US05 Đỗ xe sai vùng, US06 Đông người & gây rối), đạt 28–45 FPS thời gian thực trên CPU với camera HD/1080p | Không tự suy rằng mô hình baseline giải quyết được ngoài ODD camera cố định |
+| YOLOX-Tiny / RTMPose-Tiny (Batched), ByteTrack, Ground-Plane Homography, ONNX Runtime | **Baseline sản xuất CiviWatch v2 đã được kiểm chứng**: Phục vụ toàn bộ 14 nhóm sự cố (US01–US14) thông qua 5 engine chuyên biệt + `UrbanSafetyScenarioEngine`, đạt 28–45 FPS thời gian thực trên CPU với camera HD/1080p | Không tự suy rằng mô hình baseline giải quyết được ngoài ODD camera cố định |
+| Tier-2 Hybrid VLM Storyboard Verifier (`Qwen2.5-VL-3B-Instruct` / `InternVL3` / `LocalVisualVerifier`) | **Đã tích hợp trong CiviWatch v2 ([ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md))**: Tạo ảnh lưới `2×3` Set-of-Mark (`[-5s, -2s, 0s, +1s, +2s, +3s]`) hậu kiểm và lọc báo giả (hard negatives) cho cả 14 nhóm US01–US14 | VLM đóng vai trò Tier-2 triage/verifier, không thay thế quyết định review của con người |
+| Go2RTC Zero-Plumbing Media Engine (`infra/go2rtc.yaml`, `apps/edge/media_engine.py`) | **Đã tích hợp trong CiviWatch v2**: Kéo RTSP một lần, phân phối WebRTC/MSE/MP4 stream-copy và snapshot JPEG tức thời | Vẫn giữ fallback `FileRecorder` cục bộ khi chạy độc lập không có daemon `go2rtc` |
 | RF-DETR + ViTPose | Ứng viên detector + pose bổ sung để đánh giá nâng cao cho cảnh đêm/thời tiết xấu; **không chặn triển khai baseline hiện hành** | Không mặc nhiên tương thích adapter, export/runtime, schema keypoints, tốc độ, bộ nhớ hoặc license |
 | NVIDIA Jetson Orin NX | Dòng hardware ứng viên đã chọn để đánh giá mở rộng, không phải Xavier NX | Board deployment chưa chọn; chưa có accepted SKU/RAM, SDK, capacity hoặc thermal envelope |
 

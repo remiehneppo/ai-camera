@@ -21,7 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--database",
-        default=os.environ.get("MONGO_DATABASE", "ai_camera"),
+        default=os.environ.get("MONGO_DATABASE", "civi_watch"),
         help="MongoDB database name",
     )
     parser.add_argument(

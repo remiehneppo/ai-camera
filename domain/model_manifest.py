@@ -181,3 +181,46 @@ def load_manifest(path: str | Path, model_path: str | Path, *, environment: str 
     if digest != artifact['sha256']:
         raise ValueError('artifact SHA-256 mismatch')
     return manifest
+
+
+def validate_civiwatch_manifest_dict(
+    manifest: Any,
+    *,
+    actual_size_bytes: int | None = None,
+    actual_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Pure domain validation of a CiviWatch detector manifest dictionary without I/O."""
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+        raise ValueError("invalid or unsupported model manifest schema")
+    required = {"schema_version", "model_id", "artifact", "input", "output", "labels", "preprocess", "postprocess"}
+    if not (required <= set(manifest)):
+        raise ValueError("manifest fields are invalid")
+    artifact = manifest.get("artifact", {})
+    if not isinstance(artifact, dict):
+        raise ValueError("manifest artifact must be an object")
+    expected_size = artifact.get("size_bytes")
+    if actual_size_bytes is not None and expected_size is not None and actual_size_bytes != expected_size:
+        raise ValueError("artifact size mismatch")
+    expected_sha = artifact.get("sha256")
+    if actual_sha256 is not None and expected_sha is not None and actual_sha256 != expected_sha:
+        raise ValueError(f"artifact SHA-256 mismatch: expected {expected_sha}, got {actual_sha256}")
+    return dict(manifest)
+
+
+def load_civiwatch_manifest(path: str | Path, model_path: str | Path) -> dict[str, Any]:
+    """Load arbitrary CiviWatch detector manifest (e.g. 640x640, NMS-free) and delegate to pure validator."""
+    try:
+        manifest = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"manifest cannot be read: {error}") from error
+    model = Path(model_path)
+    if not model.is_file():
+        raise FileNotFoundError(f"model artifact not found: {model}")
+    actual_size = model.stat().st_size
+    with model.open("rb") as stream:
+        actual_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    return validate_civiwatch_manifest_dict(
+        manifest,
+        actual_size_bytes=actual_size,
+        actual_sha256=actual_digest,
+    )

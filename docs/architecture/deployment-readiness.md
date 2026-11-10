@@ -1,6 +1,6 @@
-# Hồ sơ readiness cho edge AI camera
+# Hồ sơ readiness cho hệ thống CiviWatch (`civi-watch`)
 
-**Cập nhật:** 2026-10-11. **Trạng thái:** mẫu thu thập/chưa nghiệm thu; không có số đo hardware trong repo được dùng để ký capacity. Tài liệu này hỗ trợ [kiến trúc](system-architecture.md), không thay đặc tả module.
+**Cập nhật:** 2026-11-09 ([ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md)). **Trạng thái:** Đã hoàn tất triển khai software-lab CiviWatch v2 (918 tests pass, 14/14 kịch bản US01–US14); mẫu thu thập hardware/site dưới đây phục vụ nghiệm thu thực địa (G3–G5). Tài liệu này hỗ trợ [kiến trúc](system-architecture.md), không thay đặc tả module.
 
 ## Hồ sơ cần khóa
 

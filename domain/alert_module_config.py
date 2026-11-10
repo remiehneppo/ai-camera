@@ -47,10 +47,10 @@ __all__ = [
 
 SCHEMA_VERSION: Final[str] = "module-camera-config-v1"
 
+from domain.urban_scenarios import ALL_SCENARIO_FACTORIES
+
 #: Factories this codebase ships; a module whose factory is outside this set is refused.
-ALLOWLISTED_FACTORIES: Final[FrozenSet[str]] = frozenset(
-    {"person_down", "vehicle_incident", "danger_zone", "illegal_parking", "crowd_incident"}
-)
+ALLOWLISTED_FACTORIES: Final[FrozenSet[str]] = ALL_SCENARIO_FACTORIES
 
 #: Configuration keys an operator may set for one module on one camera.
 CONFIG_FIELDS: Final[FrozenSet[str]] = frozenset(

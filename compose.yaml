@@ -27,6 +27,16 @@ services:
     entrypoint: ["mongosh", "mongodb://mongo:27017/admin", "--quiet", "--file", "/mongo-init.js"]
     restart: "no"
 
+  go2rtc:
+    image: alexxit/go2rtc:latest
+    volumes:
+      - ./infra/go2rtc.yaml:/config/go2rtc.yaml:ro
+      - ./data:/app/data:ro
+    ports:
+      - "127.0.0.1:1984:1984"
+      - "127.0.0.1:8554:8554"
+    restart: unless-stopped
+
   server:
     build: .
     depends_on:
@@ -34,13 +44,13 @@ services:
         condition: service_completed_successfully
     environment:
       MONGO_URI: mongodb://mongo:27017/?replicaSet=rs0&retryWrites=true&w=majority&journal=true
-      MONGO_DATABASE: camera_lab
+      MONGO_DATABASE: civi_watch
       DEVICE_TOKENS: ${DEVICE_TOKENS:?Set DEVICE_TOKENS to a JSON object mapping bearer tokens to device IDs}
-      DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:?Set DASHBOARD_TOKEN before starting the lab stack}
+      DASHBOARD_TOKEN: ${DASHBOARD_TOKEN:?Set DASHBOARD_TOKEN before starting the CiviWatch stack}
       REVIEWER_TOKENS: ${REVIEWER_TOKENS:-}
-      EVIDENCE_DIR: /tmp/ai-camera-evidence
+      EVIDENCE_DIR: /tmp/civi-watch-evidence
     volumes:
-      - server-evidence:/tmp/ai-camera-evidence
+      - server-evidence:/tmp/civi-watch-evidence
     ports:
       - "127.0.0.1:8000:8000"
     restart: unless-stopped
@@ -48,4 +58,4 @@ services:
 volumes:
   server-evidence:
   mongo-data:
-    name: ai-camera-oc-mongo-data-7.0
+    name: civi-watch-mongo-data-7.0

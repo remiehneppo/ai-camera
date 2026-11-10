@@ -9,6 +9,7 @@ from typing import Any
 from uuid import UUID
 
 from domain.evidence_contract import validate_evidence_request
+from domain.urban_scenarios import ALL_URBAN_TAXONOMIES
 
 SCHEMA_VERSION = 1
 CANONICALIZATION = "canonical-json-python-v1"
@@ -20,6 +21,8 @@ PERSON_DOWN_TAXONOMIES = (
     "person_lying_persistent",
     "person_on_stationary_vehicle",
 )
+
+URBAN_SAFETY_TAXONOMIES = tuple(sorted(ALL_URBAN_TAXONOMIES))
 
 _FIELDS = {
     "schema_version",
@@ -109,6 +112,41 @@ def _validate_quality(quality: Any) -> None:
 
 
 _POSE_STATUSES = {"none", "ok", "skipped", "failed", "cancelled"}
+_VLM_STATUSES = {"verified", "filtered_false_positive", "skipped", "failed"}
+
+
+def _validate_vlm_verification(vlm: Any) -> None:
+    """Optional payload.vlm_verification: Tier-2 VLM Storyboard Verification metadata."""
+    if vlm is None:
+        return
+    if not isinstance(vlm, dict):
+        raise EventValidationError("payload.vlm_verification must be an object")
+    status = vlm.get("status")
+    if not isinstance(status, str) or status not in _VLM_STATUSES:
+        raise EventValidationError(
+            f"payload.vlm_verification.status must be one of: {', '.join(sorted(_VLM_STATUSES))}"
+        )
+    verified = vlm.get("verified")
+    if verified is not None and type(verified) is not bool:
+        raise EventValidationError("payload.vlm_verification.verified must be a boolean")
+    if status == "verified" and verified is False:
+        raise EventValidationError("payload.vlm_verification.verified cannot be false when status is 'verified'")
+    if status == "filtered_false_positive" and verified is True:
+        raise EventValidationError("payload.vlm_verification.verified cannot be true when status is 'filtered_false_positive'")
+    model_id = vlm.get("model_id")
+    if model_id is not None and (not isinstance(model_id, str) or not model_id or len(model_id) > 128):
+        raise EventValidationError("payload.vlm_verification.model_id must be a non-empty string <= 128 chars")
+    conf = vlm.get("confidence")
+    if conf is not None and (
+        isinstance(conf, bool) or not isinstance(conf, (int, float)) or conf < 0.0 or conf > 1.0
+    ):
+        raise EventValidationError("payload.vlm_verification.confidence must be a number in [0.0, 1.0]")
+    hn_class = vlm.get("hard_negative_class")
+    if hn_class is not None and (not isinstance(hn_class, str) or not hn_class or len(hn_class) > 128):
+        raise EventValidationError("payload.vlm_verification.hard_negative_class must be a non-empty string <= 128 chars or null")
+    reasoning = vlm.get("reasoning")
+    if reasoning is not None and (not isinstance(reasoning, str) or not reasoning or len(reasoning) > 1024):
+        raise EventValidationError("payload.vlm_verification.reasoning must be a non-empty string <= 1024 chars")
 
 
 def _validate_pose_evidence(pose_evidence: Any) -> None:
@@ -158,9 +196,16 @@ def validate_event(value: Any) -> dict[str, Any]:
         raise EventValidationError("model_lineage must be an array with at most 16 entries")
     if not isinstance(value["payload"], dict):
         raise EventValidationError("payload must be a JSON object")
+    tax = value["payload"].get("taxonomy")
+    if tax is not None and (not isinstance(tax, str) or not tax or len(tax) > 128):
+        raise EventValidationError("payload.taxonomy must be a non-empty string of at most 128 characters")
+    scen_id = value["payload"].get("scenario_id")
+    if scen_id is not None and tax is not None and tax not in ALL_URBAN_TAXONOMIES:
+        raise EventValidationError(f"payload.taxonomy '{tax}' is not a valid urban safety taxonomy")
 
     _validate_quality(value["payload"].get("quality"))
     _validate_pose_evidence(value["payload"].get("pose_evidence"))
+    _validate_vlm_verification(value["payload"].get("vlm_verification"))
     requests = value["payload"].get("evidence_requests", [])
     if not isinstance(requests, list) or len(requests) > 16:
         raise EventValidationError("evidence_requests must be an array of at most 16 requests")

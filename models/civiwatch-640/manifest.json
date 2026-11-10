@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "model_id": "civiwatch-yolo26s-640",
+  "artifact": {
+    "sha256": "09dc372f23c87282da0f6366eda57ba6fab6ff1342529b1f6c50bb8d90fab660",
+    "size_bytes": 38196645,
+    "source_url": "local:yolo26s_civiwatch_640.onnx",
+    "source_commit": "civi-watch-v2",
+    "release": "v2.0"
+  },
+  "input": {
+    "name": "images",
+    "shape": [
+      1,
+      3,
+      640,
+      640
+    ],
+    "dtype": "float32"
+  },
+  "output": {
+    "name": "output0",
+    "shape": [
+      1,
+      300,
+      6
+    ],
+    "dtype": "float32"
+  },
+  "labels": [
+    "person",
+    "two_wheeler",
+    "car",
+    "bus",
+    "truck",
+    "obstacle_object"
+  ],
+  "preprocess": {
+    "color": "RGB",
+    "layout": "NCHW",
+    "resize": "bilinear",
+    "letterbox": "top_left",
+    "pad_value": 114,
+    "scale": 0.00392156862745098,
+    "mean": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "std": [
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  "postprocess": {
+    "decode": "nms_free",
+    "confidence_threshold": 0.25,
+    "box_format": "xyxy",
+    "person_class_id": 0
+  },
+  "runtime": {
+    "onnxruntime": "1.20.1",
+    "numpy": "1.26.4",
+    "provider": "CPUExecutionProvider",
+    "opencv_python_headless": "4.10.0.84"
+  },
+  "rights": {
+    "source_license": "Apache-2.0",
+    "weights_license": "internal-lab-civiwatch",
+    "lab_use_approved": true,
+    "production_use_approved": false
+  }
+}

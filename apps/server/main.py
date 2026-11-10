@@ -333,7 +333,7 @@ def create_app(config: ServerConfig | None = None, live_service: LiveStreamServi
     dashboard_token = config.dashboard_token
     reviewer_tokens = config.reviewer_tokens
     evidence_dir = config.evidence_dir
-    app = FastAPI(title="AI Camera Lab API", version="1.0.0")
+    app = FastAPI(title="CiviWatch API", version="2.0.0")
     app.add_middleware(EventBodyLimitMiddleware)
     app.state.event_store = store
     app.state.device_tokens = config.device_tokens
