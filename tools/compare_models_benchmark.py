@@ -11,12 +11,10 @@ Compares configured detection models on:
 from __future__ import annotations
 
 import argparse
-from fractions import Fraction
 import json
 import math
 from pathlib import Path
 import sys
-import tempfile
 import time
 from typing import Any, Sequence
 
@@ -36,6 +34,7 @@ from apps.edge.pipeline import PerceptionPipeline
 from apps.edge.pose import PoseManager, PoseScheduler, RtmposeEstimator
 from apps.edge.recorder import FileRecorder
 from apps.edge.vehicle_incident import VehicleIncidentEngine
+from tools.replay_runner import run_replay_session
 
 MODELS_CONFIG: list[dict[str, Any]] = [
     {
@@ -243,7 +242,7 @@ def evaluate_perception_pipeline_on_video(
     unexercised = ["full_edge_recording", "evidence_packaging", "wan_outbox_upload"]
     manifest_p = Path(model_cfg["manifest"])
     model_p = Path(model_cfg["model"])
-    if not manifest_p.is_file() or not model_p.is_file() or not video_path.is_file():
+    if not manifest_p.is_file() or not model_p.is_file() or not Path(video_path).is_file():
         return {
             "status": "unavailable",
             "pipeline_type": "perception_pipeline",
@@ -254,169 +253,70 @@ def evaluate_perception_pipeline_on_video(
             "total_detections": 0,
         }
 
-    if sample_fps <= 0 or not math.isfinite(sample_fps):
+    def pipeline_factory(tmp_root: Path, vw: int, vh: int, native_fps: float) -> tuple[PerceptionPipeline, EventOutbox]:
+        rec = FileRecorder(tmp_root / "ring", ring_seconds=120)
+        outbox = EventOutbox(tmp_root / "events.sqlite3")
+        hom = GroundPlaneHomography.default_urban_cctv(vw, vh, road_width_m=15.0, road_depth_m=45.0)
+        vehicle_eng = VehicleIncidentEngine(
+            homography=hom,
+            min_moving_speed=15.0,
+            impact_deceleration_threshold=120.0,
+            enable_vlm=False,
+        )
+        person_eng = IncidentEngine()
+        estimator = RtmposeEstimator(
+            manifest_path=ROOT / "models/rtmpose-tiny/manifest.json",
+            model_path=ROOT / "models/rtmpose-tiny/rtmpose_tiny.onnx",
+        )
+        pose_mgr = PoseManager(estimator=estimator, max_queue_size=30, max_cached_frames=30)
+        scheduler = PoseScheduler(batch_budget=8)
+        p = PerceptionPipeline(
+            recorder=rec,
+            outbox=outbox,
+            manifest_path=manifest_p,
+            model_path=model_p,
+            incident_engines=[vehicle_eng, person_eng],
+            pose_manager=pose_mgr,
+            pose_scheduler=scheduler,
+            origin="replay",
+        )
+        return p, outbox
+
+    res = run_replay_session(
+        video_path,
+        pipeline_factory,
+        sample_fps=sample_fps,
+        max_frames=max_frames,
+        fail_fast=False,
+    )
+
+    if res.status != "completed":
         return {
-            "status": "failed",
-            "error": "invalid sample_fps",
+            "status": res.status,
+            "error": res.error or "Replay session failed",
             "pipeline_type": "perception_pipeline",
             "unexercised_components": unexercised,
-            "frames_processed": 0,
+            "frames_processed": res.frames_processed,
+            "total_detections": res.total_detections,
+            "total_events": res.total_events,
             "pipeline_fps": 0.0,
-            "total_events": 0,
-            "total_detections": 0,
         }
 
-    cap = cv2.VideoCapture(str(video_path))
-    try:
-        if not cap.isOpened():
-            return {
-                "status": "failed",
-                "error": f"failed to open video: {video_path}",
-                "pipeline_type": "perception_pipeline",
-                "unexercised_components": unexercised,
-                "frames_processed": 0,
-                "pipeline_fps": 0.0,
-                "total_events": 0,
-                "total_detections": 0,
-            }
+    actual_fps = round(len(res.latencies_ms) / max(0.001, res.elapsed_seconds), 1)
+    persisted_outbox = len(res.outbox_events)
 
-        vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        native_fps = float(cap.get(cv2.CAP_PROP_FPS))
-        if vw <= 0 or vh <= 0 or not math.isfinite(native_fps) or native_fps <= 0.0:
-            return {
-                "status": "failed",
-                "error": "invalid video stream dimensions or native_fps",
-                "pipeline_type": "perception_pipeline",
-                "unexercised_components": unexercised,
-                "frames_processed": 0,
-                "pipeline_fps": 0.0,
-                "total_events": 0,
-                "total_detections": 0,
-            }
-
-        step_frames = max(1, int(round(native_fps / sample_fps)))
-
-        with tempfile.TemporaryDirectory(prefix="civiwatch-perception-bench-") as tmp:
-            root_dir = Path(tmp)
-            rec = FileRecorder(root_dir / "ring", ring_seconds=120)
-            outbox = EventOutbox(root_dir / "events.sqlite3")
-
-            hom = GroundPlaneHomography.default_urban_cctv(vw, vh, road_width_m=15.0, road_depth_m=45.0)
-            vehicle_eng = VehicleIncidentEngine(
-                homography=hom,
-                min_moving_speed=15.0,
-                impact_deceleration_threshold=120.0,
-                enable_vlm=False,
-            )
-            person_eng = IncidentEngine()
-
-            estimator = RtmposeEstimator(
-                manifest_path=ROOT / "models/rtmpose-tiny/manifest.json",
-                model_path=ROOT / "models/rtmpose-tiny/rtmpose_tiny.onnx",
-            )
-            pose_mgr = PoseManager(estimator=estimator, max_queue_size=30, max_cached_frames=30)
-            scheduler = PoseScheduler(batch_budget=8)
-
-            pipeline = PerceptionPipeline(
-                recorder=rec,
-                outbox=outbox,
-                manifest_path=manifest_p,
-                model_path=model_p,
-                incident_engines=[vehicle_eng, person_eng],
-                pose_manager=pose_mgr,
-                pose_scheduler=scheduler,
-                origin="replay",
-            )
-
-            t_start = time.perf_counter()
-            total_events = 0
-            total_dets = 0
-            latencies: list[float] = []
-            sample_idx = 0
-            raw_idx = 0
-
-            while True:
-                if max_frames and sample_idx >= max_frames:
-                    break
-                ok, bgr = cap.read()
-                if not ok:
-                    break
-                source_frame_idx = raw_idx
-                raw_idx += 1
-                if source_frame_idx % step_frames != 0:
-                    continue
-
-                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-                raw_ts = source_frame_idx / native_fps
-                pts = round(raw_ts * 1_000_000)
-                ts = float(pts * Fraction("1/1000000"))
-
-                t0 = time.perf_counter()
-                try:
-                    evs = pipeline.process_frame(rgb, timestamp=ts, frame_id=source_frame_idx)
-                except Exception as exc:
-                    return {
-                        "status": "failed",
-                        "error": f"Pipeline exception on frame {source_frame_idx}: {exc}",
-                        "pipeline_type": "perception_pipeline",
-                        "unexercised_components": unexercised,
-                        "frames_processed": sample_idx,
-                        "total_detections": total_dets,
-                        "total_events": total_events,
-                        "pipeline_fps": 0.0,
-                    }
-                step_ms = (time.perf_counter() - t0) * 1000.0
-
-                obs = pipeline.last_observation or {}
-                det_status = obs.get("detection_status")
-                if det_status not in {"ok", "ok_empty"}:
-                    return {
-                        "status": "failed",
-                        "error": f"Detection failed on frame {source_frame_idx}: status={det_status}, error={obs.get('error')}",
-                        "pipeline_type": "perception_pipeline",
-                        "unexercised_components": unexercised,
-                        "frames_processed": sample_idx,
-                        "total_detections": total_dets,
-                        "total_events": total_events,
-                        "pipeline_fps": 0.0,
-                    }
-
-                latencies.append(step_ms)
-                total_events += len(evs or [])
-                total_dets += len(obs.get("detections", []))
-                sample_idx += 1
-
-            if sample_idx == 0:
-                return {
-                    "status": "failed",
-                    "error": "No frames processed from video",
-                    "pipeline_type": "perception_pipeline",
-                    "unexercised_components": unexercised,
-                    "frames_processed": 0,
-                    "total_detections": 0,
-                    "total_events": 0,
-                    "pipeline_fps": 0.0,
-                }
-
-            elapsed = time.perf_counter() - t_start
-            actual_fps = round(len(latencies) / max(0.001, elapsed), 1)
-            persisted_outbox = len(outbox.pending())
-
-            return {
-                "status": "completed",
-                "pipeline_type": "perception_pipeline",
-                "unexercised_components": unexercised,
-                "frames_processed": len(latencies),
-                "total_detections": total_dets,
-                "total_events": total_events,
-                "persisted_outbox": persisted_outbox,
-                "pipeline_fps": actual_fps,
-                "pipeline_p50_ms": round(float(np.median(latencies)), 1),
-                "pipeline_p95_ms": round(float(np.percentile(latencies, 95)), 1),
-            }
-    finally:
-        cap.release()
+    return {
+        "status": "completed",
+        "pipeline_type": "perception_pipeline",
+        "unexercised_components": unexercised,
+        "frames_processed": len(res.latencies_ms),
+        "total_detections": res.total_detections,
+        "total_events": res.total_events,
+        "persisted_outbox": persisted_outbox,
+        "pipeline_fps": actual_fps,
+        "pipeline_p50_ms": round(float(np.median(res.latencies_ms)), 1),
+        "pipeline_p95_ms": round(float(np.percentile(res.latencies_ms, 95)), 1),
+    }
 
 
 def generate_markdown_report(results: list[dict[str, Any]]) -> str:

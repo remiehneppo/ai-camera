@@ -437,6 +437,82 @@ class TestF19InferenceErrorHandling(unittest.TestCase):
 
 
 
+class TestReplayRunnerDeepening(unittest.TestCase):
+    """Deepened semantic replay runner interface tests (ADR-0006)."""
+
+    def test_replay_runner_computes_exact_rational_timestamps_and_strides(self):
+        from tools.replay_runner import run_replay_session
+
+        frames = [np.zeros((100, 100, 3), dtype=np.uint8) for _ in range(10)]
+        native_fps = 25.0
+        sample_fps = 10.0
+
+        received_steps: list[tuple[int, float]] = []
+
+        def dummy_factory(tmp_root: Path, width: int, height: int, fps: float):
+            mock_pipeline = MagicMock()
+            mock_pipeline.last_observation = {"detection_status": "ok_empty", "detections": []}
+            mock_pipeline.process_frame.side_effect = lambda rgb, timestamp, frame_id: (
+                received_steps.append((frame_id, timestamp)) or []
+            )
+            mock_outbox = MagicMock()
+            mock_outbox.pending.return_value = []
+            return mock_pipeline, mock_outbox
+
+        with tempfile.NamedTemporaryFile(suffix=".mp4") as tf:
+            with patch("cv2.VideoCapture", return_value=FakeVideoCapture(frames, native_fps=native_fps)):
+                res = run_replay_session(
+                    Path(tf.name),
+                    dummy_factory,
+                    sample_fps=sample_fps,
+                    max_frames=4,
+                    fail_fast=True,
+                )
+
+        self.assertEqual(res.status, "completed")
+        self.assertEqual(res.frames_processed, 4)
+        expected_indices = [0, 2, 4, 6]
+        expected_times = [float(round((idx / native_fps) * 1_000_000) * Fraction("1/1000000")) for idx in expected_indices]
+        for i, (fid, ts) in enumerate(received_steps):
+            self.assertEqual(fid, expected_indices[i])
+            self.assertAlmostEqual(ts, expected_times[i], places=4)
+
+    def test_run_benchmark_uses_source_timestamps_and_fails_fast_on_error(self):
+        import tools.run_benchmark as run_bench
+
+        frames = [np.zeros((100, 100, 3), dtype=np.uint8) for _ in range(6)]
+        native_fps = 25.0
+        observed_timestamps: list[float] = []
+
+        with tempfile.NamedTemporaryFile(suffix=".mp4") as tf:
+            with patch("cv2.VideoCapture", return_value=FakeVideoCapture(frames, native_fps=native_fps)), \
+                 patch("tools.run_benchmark.PerceptionPipeline") as mock_pipeline_cls:
+                mock_pipeline = mock_pipeline_cls.return_value
+                def step(rgb, timestamp, frame_id):
+                    observed_timestamps.append(timestamp)
+                    mock_pipeline.last_observation = {"detection_status": "ok_empty", "detections": []}
+                    return []
+                mock_pipeline.process_frame.side_effect = step
+                mock_pipeline.last_observation = {"detection_status": "ok_empty", "detections": []}
+
+                result = run_bench.run_single_benchmark(Path(tf.name), max_frames=3, sample_fps=10.0)
+
+        self.assertEqual(result["frames_processed"], 3)
+        # Source timestamps at 25 fps sampled at 10 fps (step=2) are 0.0, 0.08, 0.16 (NOT legacy sample-index 0.0, 0.1, 0.2!)
+        self.assertAlmostEqual(observed_timestamps[0], 0.0, places=4)
+        self.assertAlmostEqual(observed_timestamps[1], 0.08, places=4)
+        self.assertAlmostEqual(observed_timestamps[2], 0.16, places=4)
+
+        # Fail-fast on detection error
+        with tempfile.NamedTemporaryFile(suffix=".mp4") as tf:
+            with patch("cv2.VideoCapture", return_value=FakeVideoCapture(frames, native_fps=native_fps)), \
+                 patch("tools.run_benchmark.PerceptionPipeline") as mock_pipeline_cls:
+                mock_pipeline = mock_pipeline_cls.return_value
+                mock_pipeline.process_frame.return_value = []
+                mock_pipeline.last_observation = {"detection_status": "failed", "error": "simulated_error"}
+                with self.assertRaises(RuntimeError):
+                    run_bench.run_single_benchmark(Path(tf.name), max_frames=3, sample_fps=10.0)
+
 
 if __name__ == "__main__":
     unittest.main()

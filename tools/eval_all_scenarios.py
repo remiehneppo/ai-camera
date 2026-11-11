@@ -23,23 +23,15 @@ Evaluates test video datasets across edge perception alert engines:
 from __future__ import annotations
 
 import argparse
-from fractions import Fraction
 import json
-import math
 from pathlib import Path
 import statistics
 import sys
-import time
 from typing import Any
-
-import cv2
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-
-import tempfile
-
 from apps.edge.crowd_incident import CrowdIncidentEngine
 from apps.edge.homography import GroundPlaneHomography
 from apps.edge.incident import IncidentEngine
@@ -54,6 +46,7 @@ from apps.edge.urban_safety_engine import UrbanSafetyScenarioEngine
 from apps.edge.vehicle_incident import VehicleIncidentEngine
 from domain.urban_scenarios import SCENARIO_SPECS
 from tools.eval_clip import LATENCY_SCOPE, extract_effective_config
+from tools.replay_runner import run_replay_session
 
 TAXONOMY_ENGINE_MAP: dict[str, str] = {
     "person_fall": "person_down",
@@ -86,214 +79,144 @@ def evaluate_video(
     impact_deceleration: float = 120.0,
     extended_scenarios: bool = False,
 ) -> dict[str, Any]:
-    if not video_path.is_file():
-        raise FileNotFoundError(f"video not found: {video_path}")
+    if extended_scenarios:
+        evaluated_scenarios = [
+            "US01", "US02", "US03", "US05", "US06", "US07", "US08", "US09", "US11", "US12", "US13"
+        ]
+        unconfigured_scenarios = ["US04", "US10", "US14"]
+    else:
+        evaluated_scenarios = ["US05", "US06", "US08", "US09"]
+        unconfigured_scenarios = [
+            "US01", "US02", "US03", "US04", "US07", "US10", "US11", "US12", "US13", "US14"
+        ]
 
-    cap = cv2.VideoCapture(str(video_path))
-    try:
-        if not cap.isOpened():
-            raise RuntimeError(f"failed to open video: {video_path}")
-        native_fps = float(cap.get(cv2.CAP_PROP_FPS))
-        if not math.isfinite(native_fps) or native_fps <= 0:
-            raise RuntimeError(f"Invalid source frame rate: {video_path}")
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        step = max(1, int(round(native_fps / sample_fps)))
-        with tempfile.TemporaryDirectory(prefix="ai-camera-eval-all-") as tmp:
-            tmp_path = Path(tmp)
-            recorder = FileRecorder(tmp_path / "ring", ring_seconds=60)
-            outbox = EventOutbox(tmp_path / "events.sqlite3")
+    created_pipeline: list[PerceptionPipeline] = []
 
-            pose_mgr = None
-            if with_pose:
-                pose_estimator = RtmposeEstimator(
-                    manifest_path=ROOT / "models/rtmpose-tiny/manifest.json",
-                    model_path=ROOT / "models/rtmpose-tiny/rtmpose_tiny.onnx",
-                )
-                pose_mgr = PoseManager(estimator=pose_estimator, max_queue_size=30, max_cached_frames=30)
-
-            tracker = ByteTracker(high_threshold=0.25, low_threshold=0.08, match_threshold=0.3)
-            fall_engine = IncidentEngine(
-                standing_aspect_ratio=0.85,
-                lying_aspect_ratio=1.2,
-                min_drop_velocity=15.0,
-                min_lying_duration=3.0,
-                cooldown_seconds=30.0,
+    def pipeline_factory(tmp_root: Path, width: int, height: int, native_fps: float) -> tuple[PerceptionPipeline, EventOutbox]:
+        recorder = FileRecorder(tmp_root / "ring", ring_seconds=60)
+        outbox = EventOutbox(tmp_root / "events.sqlite3")
+        pose_mgr = None
+        if with_pose:
+            pose_estimator = RtmposeEstimator(
+                manifest_path=ROOT / "models/rtmpose-tiny/manifest.json",
+                model_path=ROOT / "models/rtmpose-tiny/rtmpose_tiny.onnx",
             )
-            hom = GroundPlaneHomography.default_urban_cctv(width, height)
-            vehicle_engine = VehicleIncidentEngine(
-                impact_deceleration_threshold=impact_deceleration,
-                min_moving_speed=15.0,
-                homography=hom,
-            )
-            parking_engine = ParkingIncidentEngine(max_dwell_seconds=parking_max_dwell)
-            crowd_engine = CrowdIncidentEngine(
-                min_crowd_count=crowd_min_count,
-                min_duration_seconds=crowd_min_duration,
-            )
-            engines = [fall_engine, vehicle_engine, parking_engine, crowd_engine]
-            if extended_scenarios:
-                engines.append(UrbanSafetyScenarioEngine(factory="urban_safety_vlm"))
+            pose_mgr = PoseManager(estimator=pose_estimator, max_queue_size=30, max_cached_frames=30)
 
-            if extended_scenarios:
-                evaluated_scenarios = [
-                    "US01", "US02", "US03", "US05", "US06", "US07", "US08", "US09", "US11", "US12", "US13"
-                ]
-                unconfigured_scenarios = ["US04", "US10", "US14"]
-            else:
-                evaluated_scenarios = ["US05", "US06", "US08", "US09"]
-                unconfigured_scenarios = [
-                    "US01", "US02", "US03", "US04", "US07", "US10", "US11", "US12", "US13", "US14"
-                ]
+        tracker = ByteTracker(high_threshold=0.25, low_threshold=0.08, match_threshold=0.3)
+        fall_engine = IncidentEngine(
+            standing_aspect_ratio=0.85,
+            lying_aspect_ratio=1.2,
+            min_drop_velocity=15.0,
+            min_lying_duration=3.0,
+            cooldown_seconds=30.0,
+        )
+        hom = GroundPlaneHomography.default_urban_cctv(width, height)
+        vehicle_engine = VehicleIncidentEngine(
+            impact_deceleration_threshold=impact_deceleration,
+            min_moving_speed=15.0,
+            homography=hom,
+        )
+        parking_engine = ParkingIncidentEngine(max_dwell_seconds=parking_max_dwell)
+        crowd_engine = CrowdIncidentEngine(
+            min_crowd_count=crowd_min_count,
+            min_duration_seconds=crowd_min_duration,
+        )
+        engines = [fall_engine, vehicle_engine, parking_engine, crowd_engine]
+        if extended_scenarios:
+            engines.append(UrbanSafetyScenarioEngine(factory="urban_safety_vlm"))
 
-            pipeline = PerceptionPipeline(
-                recorder=recorder,
-                outbox=outbox,
-                detector=detector,
-                tracker=tracker,
-                incident_engines=engines,
-                pose_manager=pose_mgr,
-                origin="replay",
-            )
+        p = PerceptionPipeline(
+            recorder=recorder,
+            outbox=outbox,
+            detector=detector,
+            tracker=tracker,
+            incident_engines=engines,
+            pose_manager=pose_mgr,
+            origin="replay",
+        )
+        created_pipeline.append(p)
+        return p, outbox
 
-            frame_idx = 0
-            processed = 0
-            latencies: list[float] = []
-            class_counts: dict[str, int] = {}
-            detection_status_counts: dict[str, int] = {}
-            pose_status_counts: dict[str, int] = {}
-            total_detections = 0
-            total_pose_inferences = 0
-            emitted_meta: dict[str, tuple[int, float]] = {}
+    res = run_replay_session(
+        video_path,
+        pipeline_factory,
+        sample_fps=sample_fps,
+        max_frames=max_frames,
+        fail_fast=True,
+    )
 
-            while True:
-                ok, frame_bgr = cap.read()
-                if not ok:
-                    break
-                if frame_idx % step != 0:
-                    frame_idx += 1
-                    continue
-                if max_frames and processed >= max_frames:
-                    break
+    events: list[dict[str, Any]] = []
+    for snapshot in res.outbox_events:
+        p = snapshot.get("payload", {})
+        tax = p.get("taxonomy") or snapshot.get("taxonomy")
+        eng = TAXONOMY_ENGINE_MAP.get(str(tax), "incident")
+        eid = snapshot.get("event_id")
+        meta = res.emitted_meta.get(str(eid)) if eid is not None else None
+        f_idx = meta[0] if meta else None
+        t_stamp = meta[1] if meta else float(p.get("anchor_time", 0.0))
+        rec: dict[str, Any] = {
+            "engine": eng,
+            "taxonomy": tax,
+            "frame": f_idx,
+            "timestamp": round(t_stamp, 2),
+            "severity": p.get("severity"),
+            "event_id": eid,
+            "origin": snapshot.get("origin"),
+            "stream_session_id": snapshot.get("stream_session_id"),
+            "details": p,
+        }
+        if "interaction_type" in p:
+            rec["interaction_type"] = p["interaction_type"]
+        if "dwell_seconds" in p:
+            rec["dwell_seconds"] = p["dwell_seconds"]
+        if "crowd_count" in p:
+            rec["crowd_count"] = p["crowd_count"]
+        events.append(rec)
 
-                rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-                raw_ts = frame_idx / native_fps
-                pts = round(raw_ts * 1_000_000)
-                time_base = "1/1000000"
-                ts = float(pts * Fraction(time_base))
+    events_by_taxonomy: dict[str, int] = {}
+    for ev in events:
+        t = ev.get("taxonomy")
+        if t:
+            events_by_taxonomy[t] = events_by_taxonomy.get(t, 0) + 1
 
-                t0 = time.perf_counter()
-                emitted_events = pipeline.process_frame(rgb, timestamp=ts, frame_id=frame_idx)
-                latencies.append((time.perf_counter() - t0) * 1000.0)
+    active_pipeline = created_pipeline[0] if created_pipeline else res.pipeline
+    assert active_pipeline is not None
+    effective_cfg = extract_effective_config(
+        active_pipeline,
+        sample_fps=sample_fps,
+        max_frames=max_frames,
+        with_pose=with_pose,
+    )
 
-                obs = pipeline.last_observation or {}
-                detection_status = obs.get("detection_status")
-                if detection_status:
-                    detection_status_counts[detection_status] = (
-                        detection_status_counts.get(detection_status, 0) + 1
-                    )
-                if detection_status not in {"ok", "ok_empty"}:
-                    raise RuntimeError(
-                        f"Detection failed on frame {frame_idx} of {video_path.name}: "
-                        f"status={detection_status}, error={obs.get('error')}"
-                    )
-
-                dets = obs.get("detections", [])
-                for d in dets:
-                    lbl = d.get("label", "unknown")
-                    class_counts[lbl] = class_counts.get(lbl, 0) + 1
-                total_detections += len(dets)
-
-                obs_pose_outcomes = obs.get("pose_outcomes", [])
-                total_pose_inferences += len(obs_pose_outcomes)
-                for po in obs_pose_outcomes:
-                    st = po.get("status") if isinstance(po, dict) else getattr(po, "status", None)
-                    if st:
-                        pose_status_counts[st] = pose_status_counts.get(st, 0) + 1
-
-                for ev in (emitted_events or []):
-                    eid = ev.get("event_id")
-                    if eid:
-                        emitted_meta[eid] = (frame_idx, ts)
-
-                processed += 1
-                frame_idx += 1
-
-            if processed == 0:
-                raise RuntimeError(f"No frames processed from video: {video_path}")
-
-            events: list[dict[str, Any]] = []
-            for row in outbox.pending():
-                snapshot = row["event"]
-                p = snapshot.get("payload", {})
-                tax = p.get("taxonomy") or snapshot.get("taxonomy")
-                eng = TAXONOMY_ENGINE_MAP.get(str(tax), "incident")
-                eid = snapshot.get("event_id")
-                meta = emitted_meta.get(eid)
-                f_idx = meta[0] if meta else None
-                t_stamp = meta[1] if meta else float(p.get("anchor_time", 0.0))
-                rec: dict[str, Any] = {
-                    "engine": eng,
-                    "taxonomy": tax,
-                    "frame": f_idx,
-                    "timestamp": round(t_stamp, 2),
-                    "severity": p.get("severity"),
-                    "event_id": eid,
-                    "origin": snapshot.get("origin"),
-                    "stream_session_id": snapshot.get("stream_session_id"),
-                    "details": p,
-                }
-                if "interaction_type" in p:
-                    rec["interaction_type"] = p["interaction_type"]
-                if "dwell_seconds" in p:
-                    rec["dwell_seconds"] = p["dwell_seconds"]
-                if "crowd_count" in p:
-                    rec["crowd_count"] = p["crowd_count"]
-                events.append(rec)
-
-            events_by_taxonomy: dict[str, int] = {}
-            for ev in events:
-                t = ev.get("taxonomy")
-                if t:
-                    events_by_taxonomy[t] = events_by_taxonomy.get(t, 0) + 1
-
-            effective_cfg = extract_effective_config(
-                pipeline,
-                sample_fps=sample_fps,
-                max_frames=max_frames,
-                with_pose=with_pose,
-            )
-            return {
-                "video": video_path.name,
-                "origin": "replay",
-                "resolution": f"{width}x{height}",
-                "native_fps": native_fps,
-                "frames_processed": processed,
-                "evaluated_scenarios": evaluated_scenarios,
-                "unconfigured_scenarios": unconfigured_scenarios,
-                "total_detections": total_detections,
-                "class_counts": class_counts,
-                "total_pose_inferences": total_pose_inferences,
-                "detection_status_counts": detection_status_counts,
-                "pose_status_counts": pose_status_counts,
-                "event_count": len(events),
-                "events_by_taxonomy": events_by_taxonomy,
-                "events": events,
-                "latency_ms": {
-                    "p50": round(statistics.median(latencies), 2) if latencies else None,
-                    "p95": (
-                        round(sorted(latencies)[max(0, int(len(latencies) * 0.95) - 1)], 2)
-                        if latencies
-                        else None
-                    ),
-                    "scope": LATENCY_SCOPE,
-                },
-                "latency_scope": LATENCY_SCOPE,
-                "effective_config": effective_cfg,
-            }
-    finally:
-        cap.release()
-
+    return {
+        "video": Path(video_path).name,
+        "origin": "replay",
+        "resolution": f"{res.width}x{res.height}",
+        "native_fps": res.native_fps,
+        "frames_processed": res.frames_processed,
+        "evaluated_scenarios": evaluated_scenarios,
+        "unconfigured_scenarios": unconfigured_scenarios,
+        "total_detections": res.total_detections,
+        "class_counts": res.class_counts,
+        "total_pose_inferences": res.total_pose_inferences,
+        "detection_status_counts": res.detection_status_counts,
+        "pose_status_counts": res.pose_status_counts,
+        "event_count": len(events),
+        "events_by_taxonomy": events_by_taxonomy,
+        "events": events,
+        "latency_ms": {
+            "p50": round(statistics.median(res.latencies_ms), 2) if res.latencies_ms else None,
+            "p95": (
+                round(sorted(res.latencies_ms)[max(0, int(len(res.latencies_ms) * 0.95) - 1)], 2)
+                if res.latencies_ms
+                else None
+            ),
+            "scope": LATENCY_SCOPE,
+        },
+        "latency_scope": LATENCY_SCOPE,
+        "effective_config": effective_cfg,
+    }
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate video clips across configured edge perception engines")

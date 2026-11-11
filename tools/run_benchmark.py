@@ -8,15 +8,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 from pathlib import Path
 import sys
-import tempfile
 import time
 from typing import Any
 
-import cv2
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -26,6 +23,7 @@ from apps.edge.outbox import EventOutbox
 from apps.edge.pipeline import PerceptionPipeline
 from apps.edge.pose import PoseManager, PoseScheduler, RtmposeEstimator
 from apps.edge.recorder import FileRecorder
+from tools.replay_runner import ReplayFrameStep, run_replay_session
 
 
 def get_process_rss_mb() -> float:
@@ -54,40 +52,34 @@ def run_single_benchmark(
     model_path: Path | None = None,
 ) -> dict[str, Any]:
     """Execute pipeline benchmark on a video file with or without pose estimation."""
-    if not video_path.is_file():
-        raise FileNotFoundError(f"Video file not found: {video_path}")
-
+    vpath = Path(video_path)
     effective_manifest = manifest_path or (ROOT / "models/yolox-tiny/manifest.json")
     effective_model = model_path or (ROOT / "data/oracle/yolox_tiny.onnx")
 
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        raise RuntimeError(f"Failed to open video: {video_path}")
+    decode_latencies: list[float] = []
+    preprocess_latencies: list[float] = []
+    inference_latencies: list[float] = []
+    postprocess_latencies: list[float] = []
+    direct_pose_latencies: list[float] = []
+    max_detections_in_frame = 0
+    estimator_holder: list[RtmposeEstimator] = []
 
-    native_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-    total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    step = max(1, int(round(native_fps / sample_fps)))
-
-    with tempfile.TemporaryDirectory(prefix="ai-camera-bench-") as tmp_dir:
-        tmp_path = Path(tmp_dir)
-        recorder = FileRecorder(tmp_path / "ring", ring_seconds=600)
-        outbox = EventOutbox(tmp_path / "events.sqlite3")
-
+    def pipeline_factory(tmp_root: Path, vw: int, vh: int, native_fps: float) -> tuple[PerceptionPipeline, EventOutbox]:
+        recorder = FileRecorder(tmp_root / "ring", ring_seconds=600)
+        outbox = EventOutbox(tmp_root / "events.sqlite3")
         estimator: RtmposeEstimator | None = None
         pose_mgr: PoseManager | None = None
         scheduler: PoseScheduler | None = None
-
         if with_pose:
             estimator = RtmposeEstimator(
                 manifest_path=ROOT / "models/rtmpose-tiny/manifest.json",
                 model_path=ROOT / "models/rtmpose-tiny/rtmpose_tiny.onnx",
             )
+            estimator_holder.append(estimator)
             pose_mgr = PoseManager(estimator=estimator, max_queue_size=30, max_cached_frames=30)
             scheduler = PoseScheduler(batch_budget=8)
 
-        pipeline = PerceptionPipeline(
+        p = PerceptionPipeline(
             recorder=recorder,
             outbox=outbox,
             manifest_path=effective_manifest,
@@ -96,104 +88,68 @@ def run_single_benchmark(
             pose_scheduler=scheduler,
             origin="replay",
         )
+        return p, outbox
 
-        decode_latencies: list[float] = []
-        pipeline_latencies: list[float] = []
-        preprocess_latencies: list[float] = []
-        inference_latencies: list[float] = []
-        postprocess_latencies: list[float] = []
-        direct_pose_latencies: list[float] = []
+    def on_step(step: ReplayFrameStep, pipeline: PerceptionPipeline) -> None:
+        nonlocal max_detections_in_frame
+        decode_latencies.append(step.decode_ms)
+        obs = step.observation
+        dets = obs.get("detections", [])
+        max_detections_in_frame = max(max_detections_in_frame, len(dets))
 
-        class_counts: dict[str, int] = {}
-        total_detections = 0
-        total_pose_outcomes = 0
-        max_detections_in_frame = 0
+        timings = obs.get("timings", {})
+        if "preprocess_ms" in timings:
+            preprocess_latencies.append(timings["preprocess_ms"])
+        if "inference_ms" in timings:
+            inference_latencies.append(timings["inference_ms"])
+        if "postprocess_ms" in timings:
+            postprocess_latencies.append(timings["postprocess_ms"])
 
-        frame_idx = 0
-        video_frame_count = 0
-        rss_start = get_process_rss_mb()
-        bench_start = time.perf_counter()
+        if with_pose and estimator_holder:
+            est = estimator_holder[0]
+            persons = [d for d in dets if d.get("label") == "person"]
+            for p_det in persons:
+                t_pose0 = time.perf_counter()
+                _kps = est.estimate(step.rgb, p_det["bbox_xyxy"])
+                t_pose1 = time.perf_counter()
+                direct_pose_latencies.append((t_pose1 - t_pose0) * 1000.0)
 
-        while frame_idx < max_frames:
-            t_dec0 = time.perf_counter()
-            ret, bgr = cap.read()
-            if not ret:
-                break
-            video_frame_count += 1
-            if video_frame_count % step != 0:
-                continue
+    rss_start = get_process_rss_mb()
+    t_bench0 = time.perf_counter()
 
-            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            t_dec1 = time.perf_counter()
-            decode_latencies.append((t_dec1 - t_dec0) * 1000.0)
+    res = run_replay_session(
+        vpath,
+        pipeline_factory,
+        sample_fps=sample_fps,
+        max_frames=max_frames,
+        fail_fast=True,
+        on_step=on_step,
+    )
 
-            # Process frame through edge pipeline
-            t_pipe0 = time.perf_counter()
-            timestamp = frame_idx * (1.0 / sample_fps)
-            events = pipeline.process_frame(rgb, timestamp=timestamp, frame_id=frame_idx)
-            t_pipe1 = time.perf_counter()
-            pipeline_latencies.append((t_pipe1 - t_pipe0) * 1000.0)
-
-            # last_observation is None until the first frame is processed.
-            obs = pipeline.last_observation or {}
-            dets = obs.get("detections", [])
-            total_detections += len(dets)
-            max_detections_in_frame = max(max_detections_in_frame, len(dets))
-
-            for d in dets:
-                lbl = d.get("label", "unknown")
-                class_counts[lbl] = class_counts.get(lbl, 0) + 1
-
-            # Capture detector internal timings
-            timings = obs.get("timings", {})
-            if "preprocess_ms" in timings:
-                preprocess_latencies.append(timings["preprocess_ms"])
-            if "inference_ms" in timings:
-                inference_latencies.append(timings["inference_ms"])
-            if "postprocess_ms" in timings:
-                postprocess_latencies.append(timings["postprocess_ms"])
-
-            # Capture scheduled pose outcomes
-            outcomes = obs.get("pose_outcomes", [])
-            total_pose_outcomes += len(outcomes)
-
-            # In pose mode, also profile dedicated keypoint estimation on detected persons
-            if with_pose and estimator is not None:
-                persons = [d for d in dets if d.get("label") == "person"]
-                for p_det in persons:
-                    t_pose0 = time.perf_counter()
-                    _kps = estimator.estimate(rgb, p_det["bbox_xyxy"])
-                    t_pose1 = time.perf_counter()
-                    direct_pose_latencies.append((t_pose1 - t_pose0) * 1000.0)
-
-            frame_idx += 1
-
-        cap.release()
-        total_bench_time = time.perf_counter() - bench_start
-        rss_peak = get_process_rss_mb()
-
-    analysis_fps = round(frame_idx / total_bench_time, 2) if total_bench_time > 0 else 0.0
+    total_bench_time = time.perf_counter() - t_bench0
+    rss_peak = get_process_rss_mb()
+    analysis_fps = round(res.frames_processed / total_bench_time, 2) if total_bench_time > 0 else 0.0
 
     return {
-        "video": video_path.name,
+        "video": vpath.name,
         "mode": "Full Pipeline + RTMPose" if with_pose else "Baseline (YOLOX + ByteTrack)",
         "with_pose": with_pose,
-        "resolution": f"{video_width}x{video_height}",
-        "frames_processed": frame_idx,
+        "resolution": f"{res.width}x{res.height}",
+        "frames_processed": res.frames_processed,
         "total_time_seconds": round(total_bench_time, 3),
         "analysis_fps": analysis_fps,
-        "total_detections": total_detections,
-        "avg_detections_per_frame": round(total_detections / frame_idx, 1) if frame_idx else 0.0,
+        "total_detections": res.total_detections,
+        "avg_detections_per_frame": round(res.total_detections / res.frames_processed, 1) if res.frames_processed else 0.0,
         "max_detections_per_frame": max_detections_in_frame,
-        "class_counts": class_counts,
-        "scheduled_pose_outcomes": total_pose_outcomes,
+        "class_counts": res.class_counts,
+        "scheduled_pose_outcomes": res.total_pose_inferences,
         "direct_pose_inferences": len(direct_pose_latencies),
         "rss_start_mb": round(rss_start, 1),
         "rss_peak_mb": round(rss_peak, 1),
         "rss_delta_mb": round(rss_peak - rss_start, 1),
         "latencies": {
             "decode_ms": calculate_percentiles(decode_latencies),
-            "pipeline_ms": calculate_percentiles(pipeline_latencies),
+            "pipeline_ms": calculate_percentiles(res.latencies_ms),
             "detector_preprocess_ms": calculate_percentiles(preprocess_latencies),
             "detector_inference_ms": calculate_percentiles(inference_latencies),
             "detector_postprocess_ms": calculate_percentiles(postprocess_latencies),
