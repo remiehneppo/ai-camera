@@ -1,6 +1,60 @@
 # CiviWatch (`civi-watch`) — Urban Safety Edge AI Platform
 
-Implemented software-lab slices: synthetic event/dashboard (#01), lab facts/protocol (#02), versioned review with audit trail and re-review triggers (#04), retry/revision delivery (#05), file recorder/replay (#06), durable pinned evidence (#07), server evidence upload/playback (#08), process crash recovery (#09), pinned ONNX detector oracle (#11), Python ByteTracker with time/session semantics and coarse class-group association (#13), end-to-end perception pipeline baseline with centralized incident snapshot ownership (#14, ADR-0005), live runner (#15 partial), startup/shutdown (#16), truthful health monitor with operational fault surfacing (#17), storage quota protection (#18), dataset feedback lineage (#20), ODD image quality assessment and freeze detection (#21 partial), RTMPose-Tiny pose estimation (#22), track gap and clock jump handling (#23 partial), pose scheduling and degradation (#24), person fall detection (#25), persistent lying (#26), on-vehicle review priority and danger overrides (#27), negative audit sampling and Horvitz-Thompson quality regression G2 (#28), device lifecycle and site access enforcement (#33), pose outcomes flow into person-down incidents (#53); plus independent module x camera configuration with fail-fast doctor reporting (#03 partial), danger-zone intrusion module x camera carrier E2E (#57 partial), retained-evidence retrieval commands with authorization (#32), a bounded inbound storm guard and edge counter (#41), a synthetic probe with pin-gap injection and runtime scheduler (#40), central retention with backup/restore reconciliation proof (#43), local/signed config activation (#34), canary deployment and authorized rollback with fresh sequence (#35), 24h WAN outage autonomy with metadata priority and backlog drain (#36), vehicle motion kinematics with US08 suspected incident flow (#47), illegal parking dwell time detection (#62 partial), crowd concentration & spatial-cluster suspected disorder (#63 partial), and shared semantic replay pipeline reuse across evaluators (ADR-0006). Full Python test suite (893 tests, 188 subtests) and static type checks (`mypy`, 72 source files) pass across edge, snapshot ownership, semantic replay, health, quota, pose, review API, quality evaluation, device lifecycle, retention, vehicle motion, danger zone, illegal parking, crowd incidents, and contracts. Native C++ acceleration (#10/#12), camera hardware RTSP field validation, and production target deployment acceptance (G3–G5) remain open as tracked in the [tracker](.scratch/system-build-slices/PRD.md). ODD constraint is strictly locked: 100% fixed traffic CCTV cameras (720p to 1080p); dashcams and low-resolution (<720p) streams are permanently disqualified.
+## Project overview
+
+CiviWatch is a Python reference for suspected urban-safety incidents from fixed CCTV, retained evidence and versioned human review. The configured feature modules share perception and snapshot construction while keeping their own temporal state.
+
+The current code baseline is `17d9a32`. It registers US01–US14, but a registered scenario is not proof of camera configuration, quality acceptance or production readiness. The default feature verifiers run offline. Ground-plane templates are not site calibration, and historical benchmark numbers do not establish current target capacity.
+
+Read the [current status and evidence](docs/README.md#trạng-thái-đối-chiếu-tại-17d9a32) before using a report as acceptance evidence. The target ODD is fixed traffic CCTV at 720p–1080p; dashcams and low-resolution streams are outside it.
+
+## Architecture and layout
+
+| Path | Responsibility |
+|---|---|
+| `domain/` | Event/config/model contracts and scenario registry |
+| `apps/edge/pipeline.py` | Shared perception, feature dispatch and candidate verification |
+| `apps/edge/snapshot.py` | Validated snapshot construction and evidence-request policy |
+| `apps/edge/evidence.py`, `outbox.py`, `recorder.py` | Local persistence, evidence lifecycle and raw retention |
+| `apps/server/` | Ingest, review, retrieval and dashboard |
+| `tools/` | Replay, diagnostics, dataset preparation and scoped benchmarks |
+| `docs/architecture/`, `docs/adr/` | Current implementation descriptions and recorded decisions |
+
+[CONTEXT.md](CONTEXT.md) defines domain terms. [ADR-0005](docs/adr/0005-incident-snapshot-ownership.md) and [ADR-0006](docs/adr/0006-semantic-replay-pipeline-reuse.md) fix snapshot/replay ownership; [ADR-0008](docs/adr/0008-civiwatch-v2-hybrid-vlm-architecture.md) records v2 design intent. [ADR-0007](docs/adr/0007-rtsp-stream-ownership.md) remains proposed. The [current architecture](docs/architecture/system-architecture.md) separates implemented paths from those decisions and open acceptance work.
+
+## Prerequisites and pinned runtimes
+
+- Python 3.12 and the dependencies in `requirements-oracle-test.txt` for the full local check environment
+- FFmpeg/ffprobe for recorder and video diagnostics
+- Docker Compose for the MongoDB/server/go2rtc lab: MongoDB `7.0.43-jammy`, Python `3.12-slim`, digest-pinned go2rtc `1.9.15`
+- Cleared model/video fixtures for the commands that reference them; software smoke on synthetic pixels does not establish ODD acceptance
+
+## Development commands
+
+| Task | Command |
+|---|---|
+| Run the lab | `docker compose up --build` after setting the required environment |
+| Build the server image | `docker compose build server` |
+| Check types | `.venv-oracle/bin/python -m mypy domain/ apps/ tools/` |
+| Run the full test suite | `.venv-oracle/bin/python -m pytest -q -ra` |
+| Inspect evaluator options | `.venv-oracle/bin/python tools/eval_all_scenarios.py --help` |
+| Validate the media change spec | `openspec validate fix-civiwatch-media-control-auth --strict` |
+
+There is no configured standalone lint command in the root build/lint configuration. Do not report lint or a target-native build as passing from the Python checks.
+
+## Environment variables
+
+Use [`.env.local.example`](.env.local.example) as a placeholder inventory and inject actual credentials outside source control. Required media credentials have no default.
+
+| Variables | Purpose |
+|---|---|
+| `DEVICE_TOKENS`, `DASHBOARD_TOKEN` | Device identities and dashboard access |
+| `REVIEWER_TOKENS` | Optional reviewer identities; required to enable review decisions |
+| `GO2RTC_API_USER`, `GO2RTC_API_PASSWORD` | Native media control authentication and matching edge-adapter credentials |
+| `DEVICE_ID`, `DEVICE_TOKEN`, `API_URL` | Synthetic edge sender configuration |
+| `ALLOW_INSECURE_LAB` | Explicit loopback HTTP allowance; remove beyond the lab |
+
+An explicitly selected remote `VLMVerifier` can read `CIVIWATCH_VLM_URL` and `CIVIWATCH_VLM_API_KEY`. Default feature verifiers remain offline; setting an endpoint variable alone does not prove that a remote verifier is selected. Remote-image egress requires the applicable data/residency approval.
 
 ## Run the lab stack
 
@@ -80,11 +134,11 @@ DEVICE_ID=lab-edge-01 python -m apps.edge.send_synthetic --no-send \
   --record-file /tmp/camera-fixture.mp4 --anchor-time 10
 ```
 
-Evidence requests live in the full event payload. Source-event-time anchor policy is pre10/post20; trigger time does not shift it. Ended replay sessions are persisted so recovery terminates incomplete evidence explicitly. Independent immutable MKV clips and manifests live under the recorder root; `EventOutbox.reconcile_evidence` retries durable intents and records per-request operational failures. Actual ranges are keyframe/segment aligned, not exact trims. Transfer receipt state is independent of completeness; actual server upload/playback is ticket #08.
+Evidence requests live in the full event payload. Source-event-time policy is pre10/post20; trigger time does not shift it. Ended replay sessions are persisted so recovery terminates incomplete evidence explicitly. Immutable MKV clips/manifests live under the recorder root; `EvidenceLifecycle` coordinates intent, pin, finalize and reconciliation. Actual ranges are keyframe/segment aligned, not exact trims. Transfer receipt state is independent of completeness. Server upload/playback exists separately; see [current readiness](docs/architecture/deployment-readiness.md) for its acceptance limits.
 
 ## Concurrent ring ingestion and incremental replay (#51)
 
-`FileRecorder.ingest()` accepts an existing local file or named pipe and publishes each closed segment while ingestion continues. Query `segments()` / `actual_range()` and create pins during the context; post-roll remains `collecting` until coverage arrives. On exit, call `finalize_pin()` after coverage or pass `allow_partial=True` to retain an honest partial receipt. Existing segment data is reconciled after a crash between media rename and sidecar commit. Remote URLs, including RTSP, are intentionally rejected here so credentials cannot reach ffmpeg argv; no live camera integration is implemented.
+`FileRecorder.ingest()` accepts an existing local file or named pipe and publishes each closed segment while ingestion continues. Query `segments()` / `actual_range()` and create pins during the context; post-roll remains `collecting` until coverage arrives. On exit, call `finalize_pin()` after coverage or pass `allow_partial=True` to retain an honest partial receipt. Existing segment data is reconciled after a crash between media rename and sidecar commit. This file-ingest interface rejects remote URLs, including RTSP; the separate `RtspRingRecorder` / `LivePerceptionRunner` path owns live capture and still needs its field acceptance.
 
 `replay()` streams ffprobe frame timestamps as CSV with synchronous callback backpressure and advances watermark only after each successful callback. It does not retain a Python frame list. Synthetic 320×180 H.264 measurements at 10–10,000 seconds delivered the first callback before ffprobe EOF in all 12 runs; sampled Python and ffprobe RSS did not grow proportionally with duration in that envelope. This is evidence for incremental replay, not a process-wide memory guarantee. Closed-segment metadata probing separately materializes JSON per segment. Replay remains file-based, not a reconnecting camera session or live analytics pipeline.
 
@@ -103,7 +157,7 @@ python3 -m apps.edge.replay_lab /tmp/camera-fixture.mp4 \
 
 The JSON compares PTS/time-base/event-time traces, reports delivered counts, elapsed time and callback-completion lag, and queries raw coverage during every callback. Lag is relative to the first callback, excluding initial probing; last consumer event time is observed progress, not a queried recorder watermark. Raw is fully recorded before replay, not ingested concurrently. Temporary recorder artifacts are removed after the report. Replay timestamp metadata is streamed; this diagnostic accumulates output traces, so use small fixtures.
 
-This is **semantic transport evidence only**: no analytics/domain parity, realtime queue/drop stress, RTSP or hardware acceptance. Delayed-pin regressions use intentionally small lab retention values and real pruned segments; they do not establish approved maximum verification/handoff/recovery budgets. Tickets #06/#07 remain partial and #08 remains blocked.
+This diagnostic supplies semantic transport evidence only: it does not establish analytics/domain parity, realtime queue/drop stress, RTSP or hardware acceptance. Delayed-pin regressions use intentionally small lab retention values and real pruned segments; they do not establish approved maximum verification/handoff/recovery budgets. Check the [current readiness](docs/architecture/deployment-readiness.md) and tracker rather than deriving ticket completion from this diagnostic.
 
 ## ONNX detector oracle lab (#11)
 
@@ -159,11 +213,11 @@ python3 -m apps.edge.pin_budget_lab /tmp/camera-fixture.mp4 \
 
 This scenario persists an intent, prunes before first pin, restarts the recorder/outbox, then reconciles at explicit EOF. Theoretical requirement is caller delay + pre10 + caller margin, separate from actual keyframe-aligned coverage. These values are **scenarios, not approved or measured verification/handoff/recovery maxima or RTO**. Ring8 in this example produces partial pre-roll; anchor0 with verification15/handoff10/recovery12 and ring8 produces known `missing` request coverage with a failed build and `unknown` artifact completeness (there is no artifact).
 
-Both diagnostics remove temporary artifacts after reporting; use small fixtures. Neither establishes live RTSP, bounded queue/drop stress, target/storage sizing, power-cut, production clearance or evidence upload/playback acceptance. #06/#07 remain partial; #08 remains blocked.
+Both diagnostics remove temporary artifacts after reporting; use small fixtures. Neither establishes live RTSP, bounded queue/drop stress, target/storage sizing, power-cut, production clearance or evidence upload/playback acceptance. The separate upload/review implementation and its remaining acceptance work are tracked in [deployment readiness](docs/architecture/deployment-readiness.md).
 
 ## Benchmark dataset and pipeline performance suite
 
-An automated benchmark suite profiles the complete edge perception pipeline against real 1080p surveillance video footage (`shibuya_crossing_1080p.mp4` for pedestrian flow and `intersection_traffic_1080p.mp4` for vehicle traffic, under CC BY-SA 4.0).
+The profiling tool processes the pinned 1080p replay clips `shibuya_crossing_1080p.mp4` and `intersection_traffic_1080p.mp4`. Treat each result according to its recorded model, configuration, hardware and timing scope; it is not a full edge/evidence acceptance run.
 
 1. Download and verify the benchmark dataset (assets pinned by SHA-256 in `data/benchmark/manifest.json`):
 ```sh
@@ -175,20 +229,13 @@ python3 tools/fetch_benchmark_dataset.py
 .venv-oracle/bin/python tools/run_benchmark.py --max-frames 120 --sample-fps 10.0
 ```
 
-### Measured performance summary (Intel Core i5-12400F, ONNX Runtime CPU):
+The [2026-10-21 pipeline profiling report](docs/reports/2026-10-21-pipeline-benchmark-report.md) records historical CPU measurements. The v2 and remediation changes alter model choices, matching and timing/error handling; do not reuse an older FPS table as current capacity evidence. Use [deployment readiness](docs/architecture/deployment-readiness.md) for the measurements and sign-off still required.
 
-| Scenario (1080p) | Configuration | Throughput (FPS) | Median Latency (P50) | Peak RAM (RSS) |
-| :--- | :--- | :---: | :---: | :---: |
-| **Shibuya Crossing** | **Baseline (YOLOX + ByteTrack)** | **20.10 FPS** | **44.79 ms** | **266.7 MB** |
-| **Shibuya Crossing** | **Full Pipeline + RTMPose** | **8.84 FPS** | **89.50 ms** | **519.8 MB** (Pose: 3.73 ms/person) |
-| **Intersection Traffic** | **Baseline (YOLOX + ByteTrack)** | **16.35 FPS** | **56.25 ms** | **334.9 MB** |
-| **Intersection Traffic** | **Full Pipeline + RTMPose** | **10.56 FPS** | **83.77 ms** | **530.4 MB** (Pose: 3.84 ms/person) |
-
-Detailed breakdown of per-stage latencies (decode, preprocess, inference, NMS, tracking, pose) is recorded in [Pipeline Benchmark Report](docs/reports/2026-10-21-pipeline-benchmark-report.md).
+`run_benchmark.py` and the other replay tools share the deep `tools/replay_runner.py` module, which unifies video decode validation, source-derived rational timestamps, ephemeral SQLite lifecycle, and fail-fast detection checks across all evaluators. Use its timings as perception-pipeline diagnostic profiling only, not full edge capacity or hardware acceptance.
 
 ## Server and edge behavior notes
 
-- `GET /api/events` is cursor-paginated: `limit` is 1-100 and the response carries `events`, `next_cursor` and `review_enabled`. Pass `next_cursor` back as `cursor` for the next page; a malformed cursor is rejected with 422.
+- `GET /v1/events` is cursor-paginated: `limit` is 1-100 and the response carries `events`, `next_cursor` and `review_enabled`. Pass `next_cursor` back as `cursor` for the next page; a malformed cursor is rejected with 422.
 - Evidence upload is streamed to a temporary file with a rolling sha256 and then linked into place; a clip larger than `MAX_EVIDENCE_BYTES` (100 MiB, `apps/server/main.py`) is rejected with 413. Treat this ceiling as provisional until target bitrate sizing is signed off.
 - `deliver_pending` retries network errors, HTTP 5xx and 429 with capped exponential backoff and jitter; other 4xx responses fail immediately.
 - RTSP loss does not switch the live runner to the fallback permanently: the reconnect loop retries with capped backoff, and the stream session, recorder session and health session stay equal across source changes. A lost frame is reported as a missing observation, never as a synthetic image.
@@ -231,12 +278,7 @@ config hash and `perception_groups` — modules that declare the same `perceptio
 camera are reported as one shared decode/inference group instead of two. Registration records
 configuration only, not concurrent capacity.
 
-`--start` hands the registry to `EdgeRuntime`: analytics starts only for a camera with an
-activated enabled module, and a disabled module's reason is the reason reported by
-`status()['analytics']['reason']`. Modules whose config declares an ROI also expose
-`roi_polygon` on `AlertModuleRegistry.activation_for_camera(...)`, the shape
-`Pipeline(roi_polygon=...)` accepts; wiring it into the live/replay lab pipeline belongs to
-#57.
+`--start` hands the registry to `EdgeRuntime`: analytics starts only for an activated enabled camera module. Disabled reasons remain visible in status. The live/replay pipeline consumes activated module configuration, including ROI and schedule, through the registry/composition path. [Ticket #57](.scratch/system-build-slices/issues/57-vung-nguy-hiem-module-camera-e2e.md) records the danger-zone carrier implementation and remaining acceptance scope; a registry entry alone does not establish active camera coverage.
 
 ## Retained-evidence retrieval (#32)
 
@@ -302,7 +344,7 @@ curl "$SERVER/healthz"   # -> {"status": "ok"|"degraded", "ingest_guard": {...}}
 The guard carries a fixed lab budget — 50 malformed attempts per 60s window and 8 forensic
 samples — and is not a signed production SLA; changing it is a code change, not a config knob.
 
-## Synthetic probe và operational fault (#40)
+## Synthetic probe and operational fault (#40)
 
 A probe walks `decode → inference → journal → delivery` through injected stage callables,
 checkpoints each stage in a bounded ledger, and reports a **stall** as an operational fault
@@ -374,11 +416,7 @@ thresholds 0.25/0.08/0.3 rather than the pipeline defaults used by `eval_clip`.
 Explicit missing paths fail; unavailable auto-selected corpus paths retain existing skip behavior.
 Captures and temporary storage are cleaned up on errors as well as success.
 
-Extended evaluation explicitly reports US04, US10 and US14 as unconfigured without their
-camera-specific ROI/engine configuration. Sample timestamps follow source frame time, not
-the requested sampling rate. `tools/compare_models_benchmark.py` measures the perception
-pipeline only: it does not exercise recording, evidence packaging or WAN upload, and failed
-observations cannot produce a completed result or measured performance claim.
+Extended evaluation reports US04, US10 and US14 as unconfigured: it does not construct their specialized camera engines/ROI, and the current CLI has no option to enable them. Source-frame timestamps are used by these evaluators and the corrected `tools/compare_models_benchmark.py`; the legacy profiler caveat above is separate. The model comparison measures perception only, excluding continuous recording, evidence packaging and WAN upload. Failed observations cannot produce a completed result or measured performance claim.
 
 `tools/train_civiwatch_detector.py --dry-run` writes separately named blueprint artifacts
 and preserves an existing active `manifest.json` and model. Without CUDA, normal training
@@ -398,9 +436,6 @@ Run static type checking and the entire test suite using the oracle lab environm
 .venv-oracle/bin/python -m mypy domain/ apps/ tools/
 .venv-oracle/bin/python -m pytest -q
 ```
-The review remediation check passed **979 tests** (207 subtests), with `mypy` clean across
-**83 source files**. These are software-lab checks, not camera calibration, target-hardware
-acceptance or production deployment evidence. Exact commands and limits are in the
-[remediation log](docs/logs/2026-11-11-review-remediation.md).
+The [current status index](docs/README.md#trạng-thái-đối-chiếu-tại-17d9a32) links the full-suite, typecheck and smoke evidence for this code baseline. These software-lab checks do not establish camera calibration, target capacity or deployment acceptance.
 
 Run the local contract and SQLite tests with `python -m unittest discover -s tests`. MongoDB transaction, HTTP auth, and browser checks require the Compose lab to be running; they are separate from this unit suite.

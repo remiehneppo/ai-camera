@@ -1,6 +1,6 @@
 # Hướng dẫn review ranh giới khi triển khai
 
-Nguồn chuẩn: [kiến trúc](../architecture/system-architecture.md), [contracts](../architecture/contracts.md), [plan](../architecture/implementation-plan.md). Thứ tự thực hiện theo [tracker slices](../../.scratch/system-build-slices/PRD.md); tài liệu này chỉ giữ tiêu chí review, không sao chép graph hoặc trạng thái backlog.
+Nguồn chuẩn: [kiến trúc](../architecture/system-architecture.md), [contracts](../architecture/contracts.md), [plan](../architecture/implementation-plan.md), [bằng chứng remediation 2026-11-11](../logs/2026-11-11-review-remediation.md) (baseline `17d9a32`: 979 tests + 207 subtests passed, 83 files mypy clean). Thứ tự thực hiện theo [tracker slices](../../.scratch/system-build-slices/PRD.md); tài liệu này chỉ giữ tiêu chí review, không sao chép graph hoặc trạng thái backlog.
 
 ## SOLID tại các ranh giới thực
 
@@ -29,4 +29,6 @@ Không dùng số lượng class/interface làm tiêu chí SOLID. Protocol/struc
 
 B04 local activation làm trước remote trust integration; remote chỉ bật sau T02. QL03 camera-moved P2 không chờ geometry; G01/G02 validity bắt buộc khi bật vehicle. O04/A05 dùng cùng capacity run sau conformance target, không chờ vòng nhau. F04/C03 khóa stream/pin contract trước R01/V04 integration; camera chưa có thì live gate chưa đạt. S01 lưu eligibility/intent ngay P1; W02 worker chỉ khi protocol bật.
 
-Mọi thay đổi shared contract phải rà producer, consumer, schemas, bindings, config và fixtures. Đọc [release checklist](integration-release.md) để xác định tests và artifact cần có; mock/unit không thay RTSP/DB/browser/hardware proof.
+Mọi thay đổi shared contract phải rà producer, consumer, `domain/` (`domain/event_contract.py`, `domain/urban_scenarios.py`, ...), config và fixtures (chưa có `src/traffic_camera/` hay `schemas/`; các đường dẫn kiến trúc đích như `schemas/`, `native/`, edge `application/`, `adapters/`, `bootstrap/` thuộc phạm vi tương lai). Đọc [release checklist](integration-release.md) để xác định tests và artifact cần có; mock/unit không thay RTSP/DB/browser/hardware proof.
+
+Lưu ý ranh giới kiến trúc tại baseline `17d9a32`: rà soát kiến trúc chỉ ghi nhận 2 hướng ứng viên là cơ chế semantic replay (Strong) và phân định trách nhiệm verification (Worth exploring), không đề xuất giao diện async/queue/delay mới hay tái thiết kế geometry. Bản thân replay không tự tạo storyboard tương lai — các frame sau alert-condition anchor phải đã được buffer sẵn. Feature verifier mặc định chạy offline (`endpoint_url=""` bỏ qua biến môi trường cho tới khi chọn rõ verifier); helper `go2rtc` không phải runner capture owner và dashboard vẫn giữ luồng MJPEG hiện có; template homography chưa hiệu chuẩn thực địa; evaluator mở rộng hiện loại trừ US04/US10/US14 theo thiết kế (không tự kích hoạt chỉ qua tham số ROI); các gate phần cứng đích và thực địa G3–G5 tiếp tục mở.

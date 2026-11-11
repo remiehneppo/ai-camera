@@ -1,4 +1,19 @@
-# Kế hoạch Triển khai Các Tầng Bảo mật Tuân thủ Pháp luật Việt Nam và Quản lý Phiên bản cho Hệ thống AI Camera Giao thông
+# Kế hoạch bảo mật và quản lý phiên bản: phạm vi tham chiếu
+
+## Phạm vi đối chiếu với code `17d9a32`
+
+Tài liệu này ghi định hướng và các mục cần thẩm định; không phải chứng nhận tuân thủ, thiết kế production đã accepted hoặc bảng chức năng đã triển khai. Các đoạn về HSM/TPM, LUKS, mTLS, VLAN/flow compiler, NVR, redaction và export hai người duyệt phải có quyết định, code và evidence riêng trước khi coi là hiện trạng CiviWatch. Những tham chiếu ADR-0012/ADR-0017 trong nội dung không thuộc tập ADR-0001–0008 của repository này; không dùng chúng để ghi đè quyết định hiện hành.
+
+Hiện trạng kỹ thuật đã đối chiếu:
+
+| Hạng mục | Có trong baseline | Giới hạn |
+|---|---|---|
+| Media control | go2rtc `1.9.15` pin digest, credential bên ngoài, local auth, kiểm origin/allowlist route và chặn chuyển tiếp credential khác origin | Smoke cô lập xác nhận HTTP 401/200, foreign-origin 403 và admin-route 404; HTTP Basic không mã hóa đường truyền |
+| Dashboard | Xóa token gỡ storage và URL media/evidence, chặn refresh cũ khôi phục nội dung; query credential được bỏ khỏi thanh địa chỉ | Không suy ra token chưa từng xuất hiện ở request/proxy log trước khi trang xử lý |
+| Durability và rollout | SQLite event/outbox/request intent cùng transaction; code có signed activation/LKG và canary/rollback | Pin/file I/O nằm ngoài DB transaction; chưa chứng minh power-cut, TPM/HSM hoặc target rollout production |
+| Hậu kiểm hình ảnh | Feature verifier mặc định offline; remote verifier chỉ khi được chọn tường minh | Muốn gửi ảnh tới endpoint bên ngoài phải có phê duyệt dữ liệu/residency; output AI vẫn là đề xuất |
+
+Bằng chứng và giới hạn: [remediation log](logs/2026-11-11-review-remediation.md), [hợp đồng tích hợp](architecture/contracts.md), [readiness](architecture/deployment-readiness.md). Phần căn cứ pháp lý bên dưới giữ vai trò danh mục tham chiếu cần pháp chế xác minh hiệu lực và phạm vi áp dụng trước khi sử dụng; lần đồng bộ này không xác nhận nội dung pháp lý hoặc tiêu chuẩn đã đáp ứng.
 
 ---
 

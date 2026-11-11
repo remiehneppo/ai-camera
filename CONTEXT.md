@@ -2,6 +2,8 @@
 
 Hệ thống CiviWatch quan sát sự kiện an toàn đô thị từ video (14 nhóm US01–US14), hậu kiểm bằng VLM Storyboard, giữ bằng chứng và hỗ trợ người trực xác minh. Ngôn ngữ dưới đây phản ánh [thiết kế hiện hành](docs/architecture/system-architecture.md).
 
+Phạm vi triển khai hiện tại được đối chiếu tại `17d9a32`: Python reference có registry US01–US14, nhưng cấu hình camera và bằng chứng từng nhóm quyết định khả năng chạy hoặc nghiệm thu. Xem [trạng thái và nguồn kiểm chứng](docs/README.md#trạng-thái-đối-chiếu-tại-17d9a32); quyết định kiến trúc accepted không tự chứng minh hiệu năng, hiệu chuẩn hoặc triển khai hiện trường.
+
 ## Language
 
 **Alert feature pipeline**: Luồng quan sát và đánh giá dành cho một tính năng cảnh báo, tạo sự kiện nghi ngờ trong phạm vi của tính năng đó. Nhiều pipeline có thể cùng quan sát một camera.
@@ -64,7 +66,7 @@ _Avoid_: Video chứng minh toàn bộ thời gian tồn tại của sự kiện
 **Urban safety scenario**: Nhóm tình huống an toàn đô thị cần người trực xác minh, được định nghĩa bằng dấu hiệu quan sát và ranh giới riêng.
 _Avoid_: Một khả năng đã triển khai; kết luận nguyên nhân, ý định hoặc trách nhiệm.
 
-**Vehicle incident**: Sự cố đường bộ nghi ngờ có xe tham gia (xe–xe, xe–người, xe tự ngã/lật hoặc đâm dải phân cách/vật cản cố định) được phân loại theo động học và xung lực va chạm thực tế.
+**Vehicle incident**: Sự cố đường bộ nghi ngờ có xe tham gia, suy ra từ dấu hiệu chuyển động, hội tụ, giảm tốc hoặc thay đổi tư thế quan sát được. `payload.taxonomy` là `vehicle_incident`; `interaction_type` phân biệt xe–xe, xe–người và xe tự ngã/lật hoặc đâm vật cản.
 _Avoid_: Tự kết luận lỗi vi phạm, ý định hoặc trách nhiệm pháp lý.
 
 **Pairwise interaction risk**: Phân tích rủi ro tương tác cặp giữa các phương tiện hoặc giữa xe và người trong không gian ảnh 2D (tốc độ thu hẹp khoảng cách closing speed, tỉ lệ giao nhau IoU và tốc độ giãn nở IoU, cấp độ rủi ro TTC).
@@ -90,6 +92,18 @@ _Avoid_: Thiệt hại hoặc ý định đã xác định; mọi thao tác sử
 
 **Fixed CCTV Traffic Camera ODD**: Phạm vi điều kiện hoạt động chuẩn của camera giám sát giao thông gắn cố định trên cột đèn, ngã tư hoặc cầu vượt, có độ phân giải từ HD (720p / 1280×720) đến 2MP (Full HD 1080p / 1920×1080).
 _Avoid_: Camera hành trình (dashcam - chuyển động di động tạo luồng quang học giả), camera quay quét lia liên tục, camera độ nét thấp (<720p).
+
+**Candidate facts**: Dữ kiện tình huống do feature module đề xuất trước khi pipeline hậu kiểm và dựng snapshot. Feature module giữ temporal state; dữ kiện chưa phải quyết định Review confirmation.
+_Avoid_: Full snapshot do từng engine tự tạo, sự kiện đã được người trực xác nhận.
+
+**Temporal Storyboard**: Lưới ảnh lấy từ buffer quan sát theo các mốc thời gian quanh anchor để hỗ trợ hậu kiểm. Frame gần mốc có thể lặp hoặc chưa bao phủ phần thời gian sau anchor trong lượt xử lý đồng bộ.
+_Avoid_: Clip raw liên tục, bảo đảm có đủ sáu thời điểm độc lập hoặc đủ post-roll.
+
+**Verification outcome**: Kết quả hậu kiểm candidate bằng local visual heuristic hoặc verifier được chọn tường minh. Trạng thái lỗi giữ candidate theo policy hiện hữu; kết quả này không thay thế Review confirmation hoặc Complete evidence.
+_Avoid_: Nhãn `verified` chứng minh sự kiện có thật, thiếu quan sát nghĩa là negative.
+
+**Calibration validity**: Bằng chứng phép ánh xạ hình học phù hợp camera/site đã được chấp nhận. Homography template theo kích thước frame chỉ hỗ trợ đường chạy lab, không chứng minh vận tốc hoặc gia tốc vật lý chính xác.
+_Avoid_: Có ma trận homography hoặc trường đơn vị mét nghĩa là camera đã hiệu chuẩn.
 
 ## Tài liệu liên quan
 

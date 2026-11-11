@@ -1,6 +1,6 @@
 # Hợp đồng tích hợp hệ thống
 
-Đặc tả cập nhật 2026-10-11; ghi chú implementation đồng bộ 2026-10-12. Một số schema/runtime/tests đã được nghiệm thu theo slices #01/#05/#06/#07/#11; không có nghĩa toàn bộ hợp đồng hoặc release gates đã đạt. [Kiến trúc](system-architecture.md) xác định module và fault boundary; tài liệu này xác định semantics tại các ranh giới. [Plan](implementation-plan.md) và [tracker](../../.scratch/system-build-slices/PRD.md) giao việc thực hiện.
+Đặc tả cập nhật 2026-10-11; implementation note đối chiếu `17d9a32` ngày 2026-11-11. Software lab hiện ghi nhận 979 tests, 207 subtests và `mypy` sạch trên 83 source files; con số này không đóng toàn bộ contract hoặc release gates. [Kiến trúc](system-architecture.md) xác định module và fault boundary; tài liệu này xác định semantics tại các ranh giới. [Plan](implementation-plan.md) và [tracker](../../.scratch/system-build-slices/PRD.md) giao việc thực hiện.
 
 ## 1. PerceptionPipeline
 
@@ -21,8 +21,18 @@ Implementation note (2026-10-14): `PerceptionExecution` tập trung execution, d
 
 ## 2. Event snapshot và identity
 
-Mỗi AI revision là **full snapshot**, không phải delta. Identity revision là `(authenticated device_id, event_id, revision)`, revision là số nguyên dương tăng dần do edge cấp bền vững. Payload chứa schema version, camera/session, pipeline ID/version, taxonomy (thuộc `URBAN_SAFETY_TAXONOMIES` phủ đủ 14 nhóm `US01`–`US14`), origin, timestamps/uncertainty, lifecycle/severity/score, tracks/ROI, model/config/calibration provenance, optional `quality` assessment, optional `pose_evidence` (gồm `status`: ok/skipped/failed/cancelled/none, `reason`, `branch`, `keypoints`, `executed_at`, `frame_id`, `request_id`), optional `vlm_verification` (gồm `status`: verified/filtered_false_positive/skipped/failed, `verified`, `model_id`, `confidence` trong `[0.0, 1.0]`, `hard_negative_class`, `reasoning` theo [ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md)), optional `vehicle_track_id`, optional `association_uncertainty` (gồm `method`: 2d_bbox_overlap, `overlap_iou`), và evidence request references.
+Mỗi AI revision là **full snapshot**, không phải delta. Identity revision là `(authenticated device_id, event_id, revision)`, revision là số nguyên dương tăng dần do edge cấp bền vững. Payload chứa schema version, camera/session, pipeline ID/version, taxonomy thuộc registry US01–US14, origin, timestamps/uncertainty, lifecycle/severity/score, tracks/ROI, model/config/calibration provenance và evidence request references.
 
+Các trường tùy chọn giữ contract hiện hữu:
+
+- `quality`: assessment theo capability/camera/site
+- `pose_evidence`: `status` (ok/skipped/failed/cancelled/none), `reason`, `branch`, `keypoints`, `executed_at`, `frame_id`, `request_id`
+- `vlm_verification`: `status` (verified/filtered_false_positive/skipped/failed), `verified`, `model_id`, `confidence` trong `[0.0, 1.0]`, `hard_negative_class`, `reasoning`
+- `vehicle_track_id`, `association_uncertainty`: association có `method=2d_bbox_overlap` và `overlap_iou`
+
+US08 phát `payload.taxonomy="vehicle_incident"`; `interaction_type` phân biệt xe–xe, xe–người và xe tự ngã/lật. US11 giữ `alert_condition` anchor tại lúc đủ điều kiện cảnh báo, không đổi sang onset khi không quan sát được người đặt.
+
+Các invariant identity, revision và origin:
 - `origin = live | replay | synthetic` độc lập taxonomy nghiệp vụ, bất biến suốt event. Replay vẫn có taxonomy `person_fall` để đánh giá, nhưng không thể biến thành live ở revision sau. Origin do composition/source mode xác định; server kiểm identity/mode được cấp quyền, không tin flag của UI để cho gửi notification.
 - Device/event/camera/session/producer pipeline identity và origin bất biến. Session mất continuity đóng/reset event theo policy và sự kiện mới dùng UUID mới; liên kết sự kiện cũ là reference, không sửa identity cũ. Model/config lineage có thể được ghi bổ sung theo revision nhưng không rewrite history.
 - Server nhận 3→1→2 vẫn lưu ba snapshots và current=3. Không đợi revision 1 để dựng current. Validate schema/identity/snapshot invariants, không bắt buộc có đủ các intermediate FSM transitions tại ingestion. Edge chịu trách nhiệm allowed transitions; history ghi revision gaps để audit. Snapshot đến đầu tiên khởi tạo identity binding trong scope device/camera được phép; mọi revision sau phải khớp, kể cả revision cũ.
@@ -32,7 +42,7 @@ Mỗi AI revision là **full snapshot**, không phải delta. Identity revision 
 
 Fixtures bắt buộc: 3→1→2, chỉ có revision 3, hai writer concurrent, same-key/different-hash, camera/origin/session substitution, retry đổi sent_at nhưng không đổi hash và AI update xen review.
 
-Implementation note (2026-10-30, ADR-0005): Python reference dùng `apps.edge.snapshot.build_incident_snapshot(facts, *, context, feature)` để dựng full snapshot. Năm feature engine chỉ trả `{anchor_kind, payload}`; payload giữ dữ kiện tình huống, Person-down giữ lifecycle candidate, không cấp event/request identity hoặc quality. Pipeline đánh giá quality hiện tại/scoped và truyền camera/session/Origin/model/calibration cùng producer/config/rule riêng của feature. Constructor từ chối envelope hoặc quality/Evidence request do facts cung cấp, giữ source anchor và tạo bản sao metadata độc lập trước validation. Pipeline chuyển snapshot hợp lệ cho EvidenceLifecycle trước khi trả event; schema và ownership persist/retry ở §3.1 không đổi. Bằng chứng và giới hạn nằm trong [log triển khai](../logs/2026-10-29-architecture-deepening-review.md#producer-integration-and-controlled-runtime-smoke); đây không phải nghiệm thu native lifecycle hoặc raw Evidence coverage.
+Implementation note (2026-11-11, ADR-0005 và remediation): Python reference dùng `apps.edge.snapshot.build_incident_snapshot(facts, *, context, feature)` làm một điểm dựng snapshot không giữ temporal state. Feature engine trả candidate facts và giữ state riêng; `PerceptionPipeline` điều phối storyboard/verification rồi truyền context, producer/config/rule lineage và quality đã đánh giá cho constructor. Constructor từ chối envelope, quality hoặc Evidence request từ facts, giữ source anchor và sao chép metadata trước validation. `EvidenceLifecycle` enqueue revision, delivery outbox và request intent trong một SQLite transaction, sau đó pin/file I/O và cập nhật evidence riêng; DB transaction không bao gồm filesystem pinning. Candidate, Verification outcome và Review confirmation là các ngữ nghĩa độc lập. Xem [evidence và giới hạn](../logs/2026-11-11-review-remediation.md#final-verification-evidence).
 
 ## 3. Evidence request, anchor và pin receipt
 
@@ -42,7 +52,7 @@ Lab dùng event ring 10 phút, pre10/post20 giây, server clips 7 ngày; outage2
 |---|---|---|---|
 | Person fall có onset quan sát | onset estimate có provenance | anchor − 10s đến anchor + 20s | Đang hoạt động |
 | Persistent lying/on-vehicle thiếu onset | first qualifying observation của chuỗi persistence đang dùng | anchor − 10s đến anchor + 20s; không gọi anchor này là onset | Đang hoạt động |
-| Alert-condition incidents (Toàn bộ các nhóm US01–US08, US10–US14) | mốc thời gian nguồn khi thỏa mãn điều kiện tạo cảnh báo theo vùng/ngưỡng | anchor − 10s đến anchor + 20s; evidence_anchor_kind="alert_condition" | Đang hoạt động |
+| Alert-condition incidents (US01–US08, US10–US14) | mốc thời gian nguồn khi thỏa mãn điều kiện tạo cảnh báo theo vùng/ngưỡng | anchor − 10s đến anchor + 20s; `evidence_anchor_kind="alert_condition"` | Đang hoạt động |
 | Synthetic fixture | thời điểm anchor khai báo trong fixture | cùng policy pre/post | Đang hoạt động |
 
 Manifest/request mang `evidence_anchor_kind`, `evidence_anchor_time`, `requested_start/end`, mapping uncertainty, policy version và actual ranges/gaps. Complete được tính trên requested interval với gap tolerance đã ký. Trigger muộn tại t=15 với onset t=0 vẫn yêu cầu [-10,20], không lấy [5,35]. Khi onset/interval thay đổi tạo request mới có `supersedes_request_id`; không sửa requested range của ID đã ACK. Event revision mới liên kết request mới, artifact cũ vẫn giữ lineage/audit.
@@ -135,7 +145,7 @@ Tests: bật provider sau nhiều tuần disabled không phát backlog; policy c
 
 **Realtime stress:** nguồn chạy tốc độ thực, deadlines/queue-age/drop/fairness thật. Kiểm freshness, coverage, memory, recorder gap và degraded state; không yêu cầu event set giống semantic replay nếu quan sát bị drop. Cả hai mode giữ origin=replay và chặn notification.
 
-Implementation note (2026-10-30, ADR-0006): Ba command eval_vehicle/eval_all_scenarios/eval_clip dùng cùng process_frame của Python reference, mỗi video có session và storage tạm riêng, Origin=replay và không có uploader. Hai evaluator từng gọi stage trực tiếp nay chỉ giữ decode/sampling/cấu hình/tổng hợp; tracker và ngưỡng feature giữ giá trị hiệu lực riêng từng caller. Multi-scenario giữ scheduler xử lý pose của PoseManager với queue/batch 30 như đường cũ, không thay bằng budget 8 của bộ chọn candidate cũ. Detection ngoài ok/ok_empty kết thúc lỗi sau khi pipeline ghi status/gap; pose failed/skipped vẫn độc lập. Báo cáo lấy snapshot đã persist, ghi effective_config và phạm vi process_frame gồm local persistence khi có latency. Capture và storage tạm được dọn ở đường bình thường/lỗi; explicit path không tồn tại trả lỗi, không báo thành công. Bằng chứng trong [log](../logs/2026-10-29-architecture-deepening-review.md#replay-integration-review-corrections-and-cli-smoke) chỉ xác nhận đường semantic replay/reference đã chạy, không thay native lifecycle, raw coverage, target stress hoặc server/review acceptance.
+Implementation note (2026-11-11, ADR-0006): `eval_vehicle`, `eval_all_scenarios`, `eval_clip` và benchmark so sánh model dùng chung `PerceptionPipeline.process_frame`, session/storage tạm theo clip và không có uploader. Caller vẫn sở hữu decode, sampling, cấu hình và tổng hợp; pipeline sở hữu status/gap, dispatch và snapshot. Multi-scenario giữ policy tracker/feature và queue/batch pose 30 của caller; direct synchronous pose có thể chạy tuần tự. Detection ngoài `ok`/`ok_empty` kết thúc lỗi; pose failed/skipped độc lập. Benchmark so sánh model không kiểm continuous recording, evidence packaging hoặc WAN upload. Baseline evaluator chạy bốn nhóm; extended chạy mười một và báo US04/US10/US14 unconfigured vì chưa tạo engine/ROI chuyên biệt. Latency ghi scope `process_frame` gồm local persistence; capture/storage được dọn ở success/error. Không suy raw coverage, native conformance hoặc target stress từ replay này.
 
 ## 8. Target gate có điều kiện
 

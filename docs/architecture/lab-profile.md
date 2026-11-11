@@ -1,6 +1,6 @@
 # Hồ sơ lab và protocol nghiệm thu
 
-**Cập nhật:** 2026-10-12. **Trạng thái:** inventory host đã probe; chưa nghiệm thu ODD, capacity, chất lượng hoặc recovery.
+**Cập nhật:** 2026-11-11 (commit `17d9a32`; inventory host probe gốc 2026-10-12). **Trạng thái:** Inventory workstation đã probe ở thời điểm lịch sử; bằng chứng remediation phần mềm tại `17d9a32` đạt **979 passed, 207 subtests passed** và `mypy` sạch trên **83 source files** (xem [docs/README.md](../README.md) và [log khắc phục](../logs/2026-11-11-review-remediation.md)); chưa nghiệm thu ODD, capacity thiết bị biên, chất lượng thực tế hoặc recovery (G3–G5 mở).
 
 Đây là snapshot của workstation dùng trong lab, không phải hồ sơ site hay edge target. Số probe chỉ mô tả máy tại thời điểm ghi; giá trị `pending` cần người chịu trách nhiệm và evidence/sign-off, không được thay bằng ước lượng.
 
@@ -33,7 +33,7 @@ Nguồn: read-only probes `uname -a`, `lscpu`, `free -h`, `lsblk -o NAME,SIZE,TY
 
 [Hồ sơ ứng viên](../requirements/technology-candidates.md) ghi capability và gates; [danh mục tình huống](../requirements/urban-safety-scenarios.md) không phải chứng nhận độ phủ. Detector + pose không tự đáp ứng các hành vi theo thời gian hay toàn bộ 13 nhóm/nhánh phá hoại; từng capability cần temporal/domain logic và quality/ODD acceptance riêng. Person-down một camera/ROI lòng đường vẫn đi trước tai nạn xe và các nhóm mở rộng.
 
-## Thử nghiệm và Benchmark Dataset Thực tế — 2026-10-21
+## Thử nghiệm và Benchmark Dataset — Quan sát Lịch sử 2026-10-21
 
 - Tải và ghim SHA-256 bộ video giám sát đô thị 1080p chuẩn mở (CC BY-SA 4.0) vào `data/benchmark/` bằng công cụ `tools/fetch_benchmark_dataset.py`, metadata tại `data/benchmark/manifest.json`:
   - `shibuya_crossing_1080p.mp4` (87.9 MB, SHA-256 `6689609b91920ae7276a74332763084e80a13754c87ce43332982bf95099fa2e`): Kịch bản luồng người đi bộ, phục vụ đo tracking người và trích xuất pose keypoints.
@@ -42,8 +42,8 @@ Nguồn: read-only probes `uname -a`, `lscpu`, `free -h`, `lsblk -o NAME,SIZE,TY
   - **Baseline Pipeline (YOLOX-Tiny + ByteTrack + IncidentEngine + FileRecorder):** Thông lượng đạt **16.35 – 20.10 FPS**, độ trễ trung vị P50 từ **44.79 – 56.25 ms**, bộ nhớ RAM đỉnh **266.7 – 334.9 MB**.
   - **Full Pipeline + RTMPose-Tiny (17 keypoints SimCC):** Thông lượng đạt **8.84 – 10.56 FPS**, trích xuất pose trung vị P50 từ **3.73 – 3.84 ms / người**, bộ nhớ RAM đỉnh **519.8 – 530.4 MB**.
   - Báo cáo chi tiết và bảng latency breakdown: [Báo cáo Benchmark Pipeline](../reports/2026-10-21-pipeline-benchmark-report.md).
-- Toàn bộ test suite phần mềm trên nhánh `civi-watch` đạt **918 passed (190 subtests)** và `mypy` sạch trên **79 source files** (100% test xanh trên toàn bộ các gói: perception, batched pose, homography, 14 kịch bản đô thị US01–US14, VLM Storyboard Verifier, Go2RTC media engine, health, quota, tracker, ODD quality/freeze, CiviWatch review server, event contracts).
-- **Giới hạn:** Đây là số đo thực tế trên workstation CPU x86 làm căn cứ tham chiếu kỹ thuật; chưa phải nghiệm thu target capacity hay thermal soak trên phần cứng nhúng đích (Jetson Orin NX) hoặc thử nghiệm thực địa (G3/G5).
+- Ghi nhận kiểm thử phần mềm lịch sử (trước remediation 2026-11-09) từng báo cáo 918 passed (190 subtests) và 79 source files `mypy` clean. Tại commit `17d9a32` (2026-11-11), bằng chứng remediation quan sát được đạt **979 passed (207 subtests)** và `mypy` sạch trên **83 source files**; danh mục registry khai báo 14 kịch bản đô thị (US01–US14), trong đó công cụ đánh giá `tools/eval_all_scenarios.py` chỉ hỗ trợ 4 baseline và 11 extended scenarios (`US04`, `US10`, `US14` giữ trạng thái `unconfigured` theo cấu trúc công cụ vì không cung cấp điều khiển ROI).
+- **Giới hạn và ranh giới lịch sử:** Các số đo 2026-10-21 trên đây là kết quả thăm dò trên CPU workstation x86 cho pipeline suy luận/nhận diện, **chưa đo đồng thời hoạt động ghi ring/clip liên tục, đóng gói bằng chứng và tranh chấp băng thông WAN**. `tools/run_benchmark.py` và các công cụ phát lại hiện đã được hợp nhất qua module `tools/replay_runner.py` với timestamp hữu tỉ suy từ frame gốc và kiểm tra trạng thái fail-fast (chi tiết tại [log đồng bộ](../logs/2026-11-11-docs-architecture-sync.md) và [README.md](../../README.md)). Dòng NVIDIA Jetson Orin NX chỉ là ứng viên tham khảo (chưa chọn target board/SKU); chưa nghiệm thu target capacity, thermal soak 24–72h hay thử nghiệm thực địa (G3–G5).
 
 ## Scope, workload và ODD
 
@@ -97,3 +97,15 @@ Mỗi case lưu `pass/fail/blocked/not-run`, expected/actual, command thật, ti
 - QA/operations: xác định RPO/RTO, recorder gap budget, fault scope, recovery device/owner và cách đo.
 
 Các mục trên là gate mở, không cản synthetic/demo hoặc replay software hiện có; chúng chặn kết luận live-site, target capacity, quality sign-off và field readiness tương ứng.
+
+## Bằng chứng kỹ thuật và ranh giới kiểm chứng 17d9a32 (cập nhật 2026-11-11)
+
+Tổng hợp ranh giới hệ thống quan sát được tại commit `17d9a32` theo [log khắc phục](../logs/2026-11-11-review-remediation.md) và [mục lục tài liệu](../README.md) (thuật ngữ chuẩn tại [CONTEXT.md](../../CONTEXT.md)):
+
+- **Kiểm thử phần mềm:** **979 passed, 207 subtests passed**, `mypy` sạch trên **83 source files** (bằng chứng remediation quan sát được; không tự suy diễn thành nghiệm thu hiện trường hay tuân thủ pháp lý/an ninh).
+- **Media auth, fixture smoke và đường dẫn stream:** Ranh giới media control T2 (`fix-civiwatch-media-control-auth`) sử dụng `alexxit/go2rtc:1.9.15` ghim digest với credential ngoài (`GO2RTC_API_USER`, `GO2RTC_API_PASSWORD`), chặn foreign WebSocket origin (403), trả 401 khi thiếu auth và 404 với các route quản trị exit/restart/config; fixture smoke `/api/stream.mp4` trả HTTP 200 kèm header MP4 `ftyp`. Tuy nhiên, `LivePerceptionRunner` và `RtspRingRecorder` vẫn mở luồng kết nối trực tiếp tới nguồn upstream ([ADR-0007](../adr/0007-rtsp-stream-ownership.md) ở trạng thái `proposed`). Media helper/adapter không chứng minh go2rtc single-session fanout trên camera thật, độ trễ WebRTC hay lưu trữ bằng chứng; giao diện dashboard vẫn dùng đường dẫn MJPEG sẵn có.
+- **Huấn luyện (Blueprint vs Active):** Quy trình dry-run tạo artifact blueprint riêng biệt, bảo toàn các tệp model đang hoạt động (active deployments); huấn luyện thường không có CUDA thất bại đúng kỳ vọng và tập COCO được tái tạo khi nhãn đổi. Ba mô hình huấn luyện trên dữ liệu trộn (`yolox_tiny_civiwatch_416`, `yolox_s_civiwatch_640`, `yolo26s_civiwatch_640`, xem [log huấn luyện](../logs/2026-11-11-three-models-training-and-edge-benchmark.md)) mang tính chuyên biệt miền góc camera trên cao (99.1% dữ liệu giao thông), chưa giải tỏa bản quyền trọng số/dữ liệu và chưa qua gate triển khai thực địa.
+- **Verification, Storyboard và Snapshot:** Tuân giữ ý định thiết kế của [ADR-0005](../adr/0005-incident-snapshot-ownership.md), [ADR-0006](../adr/0006-semantic-replay-pipeline-reuse.md) và [ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md): pipeline sở hữu hậu kiểm và `snapshot.py` dựng đầy đủ snapshot. Mặc định VLM verifier cho tình huống đô thị và phương tiện đặt `endpoint_url=""` ở trạng thái **offline** (biến môi trường đơn lẻ không tự kích hoạt egress nếu chưa chọn verifier tường minh). Khi bật verifier từ xa, cuộc gọi chạy **đồng bộ dưới processing lock** của pipeline; tại thời điểm neo (`anchor`), các frame storyboard tương lai không khả dụng nếu chưa được nạp sẵn vào buffer (kể cả khi replay); `build_grid` lấy mẫu lại từ buffer quá khứ và có thể lặp lại frame, không bảo đảm 6 quan sát độc lập.
+- **Lưu trữ, Hình học và Pose:** Thao tác SQLite enqueue event, outbox và retrieval request là atomic trong một transaction, nhưng việc tạo pin và ghi tệp clip video nằm trên filesystem **ngoài transaction SQLite**. Ma trận Homography mặt đất ($3\times 3$) trong live config là mẫu **chưa hiệu chuẩn** (uncalibrated template); khả năng batching của pose phụ thuộc đồ thị và các yêu cầu đồng bộ có thể chạy tuần tự.
+- **Phạm vi công cụ đánh giá:** Registry có 14 kịch bản, nhưng `tools/eval_all_scenarios.py` chỉ chạy 4 baseline và 11 extended scenarios; **US04, US10, US14 giữ trạng thái `unconfigured`** theo thiết kế công cụ hiện tại (không có điều khiển ROI trên CLI, không tự kích hoạt khi chỉ đổi config).
+- **Trạng thái cổng nghiệm thu:** Target hardware/SKU, hiệu chuẩn hiện trường, quyền dữ liệu/mô hình và toàn bộ các cổng **G3–G5** giữ ở trạng thái mở (`pending/open`).

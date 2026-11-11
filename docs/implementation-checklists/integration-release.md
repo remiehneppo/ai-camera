@@ -1,6 +1,6 @@
 # Checklist tích hợp, kiểm lỗi và release gates
 
-Ngày: 2026-10-11. Execution: not-started. Owner điều phối: QA/operations; cần gán người cụ thể. [Mục lục](README.md) · [Phân tích kiến trúc](architecture-analysis.md) · [Readiness](../architecture/deployment-readiness.md).
+Ngày: 2026-10-11; đồng bộ baseline 17d9a32 (2026-11-11). Execution: not-started (chỉ trạng thái chưa chạy điều phối nghiệm thu tổng thể và release gates, không có nghĩa là phần mềm chưa được triển khai; trên software lab hiện có 979 unit/integration tests passed, 207 subtests passed, 83 source files mypy clean theo [bằng chứng review remediation](../logs/2026-11-11-review-remediation.md), nhưng các bài tests này không tự chứng minh ánh xạ mọi ca lỗi trong ma trận). Owner điều phối: QA/operations; cần gán người cụ thể. [Mục lục](README.md) · [Phân tích kiến trúc](architecture-analysis.md) · [Readiness](../architecture/deployment-readiness.md).
 
 ## 1. Điều kiện chạy và cách ghi bằng chứng
 
@@ -11,7 +11,7 @@ Ngày: 2026-10-11. Execution: not-started. Owner điều phối: QA/operations; 
 - [ ] **INT-PRE05** — Chạy unit/contract trước, sau đó integration bằng adapter thực; dùng fakes để chẩn đoán, không để fake thay proof DB/RTSP/hardware.
 - [ ] **INT-PRE06** — Mỗi case lưu expected/actual, command thật, timestamps, correlation IDs, protected data IDs/hashes, log/report và người kiểm. `not-run`, `blocked`, `fail` khác `pass`.
 
-Các lệnh test/build cụ thể chưa tồn tại. Khi implement, owner phải ghi lệnh thực trong issue và manifest; không copy command giả làm bằng chứng đã chạy. CI baseline chọn theo tooling được tạo, cần các entrypoint unit/contract/integration/native, schema generation/compatibility và docs validation; hardware/soak dùng marker/job riêng.
+Trên software lab baseline 17d9a32, các lệnh kiểm thử và kiểm tra kiểu hiện hành đã tồn tại (`pytest -q -ra`, `mypy domain/ apps/ tools/`, xem [log remediation 2026-11-11](../logs/2026-11-11-review-remediation.md)), tuy nhiên các lệnh và manifest chạy nghiệm thu phần cứng đích, soak và hiện trường (G3–G5) vẫn mở và phải được ghi nhận thực tế cho từng lần chạy; không copy command giả làm bằng chứng. Lưu ý: registry có 14 nhóm kịch bản nhưng evaluator baseline chạy 4 nhóm và extended chạy 11 nhóm (US04/US10/US14 chưa được cấu hình ROI/tooling chuyên biệt); default verifier chạy offline (`endpoint_url=""`); go2rtc không phải runner capture owner; template homography chưa hiệu chuẩn thực địa. CI baseline cần các entrypoint unit/contract/integration/native và docs validation; hardware/soak dùng marker/job riêng.
 
 ## 2. Ma trận kiểm lỗi xuyên module
 

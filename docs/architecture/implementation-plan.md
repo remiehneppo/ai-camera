@@ -1,8 +1,8 @@
 # Plan xây dựng hệ thống CiviWatch (`civi-watch`)
 
-**Ngày thiết kế:** 2026-10-11; **cập nhật nghiệp vụ:** 2026-10-20; **cập nhật kiến trúc CiviWatch v2:** 2026-11-09 ([ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md)). **Trạng thái:** Hệ thống đã được rebrand cứng sang **CiviWatch (`civi-watch`)** và hoàn thành triển khai software-lab cho kiến trúc 4 tầng CiviWatch v2 (bao phủ toàn bộ 14 nhóm kịch bản `US01`–`US14`, hậu kiểm VLM Storyboard `2×3`, Ground-Plane Homography, Batched RTMPose, Go2RTC Media Engine; 918 tests pass, 79 source files `mypy` clean). Các gate nghiệm thu phần cứng đích (G3) và field pilot (G4/G5) được xử lý theo site thực tế.
+**Ngày thiết kế:** 2026-10-11; **đối chiếu implementation:** 2026-11-11 tại `17d9a32`. [Trạng thái hiện hành](../README.md#trạng-thái-đối-chiếu-tại-17d9a32) dẫn tới 979 tests, 207 subtests và `mypy` sạch trên 83 source files. Registry có US01–US14; evaluator baseline chạy 4 nhóm, extended chạy 11 nhóm và chưa tạo engine/ROI chuyên biệt cho US04/US10/US14. G3 hardware và G4/G5 field pilot vẫn mở.
 
-Nguồn chuẩn: [kiến trúc hệ thống](system-architecture.md), [deployment readiness](deployment-readiness.md), [hợp đồng tích hợp](contracts.md) và [tracker thực thi](../../.scratch/system-build-slices/PRD.md). [Mục lục docs](../README.md) xác định nguồn chuẩn; log/research không ghi đè thiết kế hiện hành. Các đường dẫn source dưới đây là vị trí dự kiến, chỉ tạo khi task tương ứng bắt đầu.
+Các đường đã triển khai không tự đóng gate: snapshot/semantic replay theo ADR-0005/0006, media auth và go2rtc smoke có evidence riêng; hiệu chuẩn site, target capacity, thermal soak, quyền artifact/data và field acceptance vẫn cần hồ sơ readiness.
 
 ## 1. Kết quả cần xây và phạm vi
 
@@ -10,7 +10,7 @@ Xây một luồng hoàn chỉnh: nguồn video → perception → sự kiện n
 
 Đơn vị triển khai ban đầu là một camera và một edge. Sau khi có benchmark mới mở rộng số camera; 1–4 camera, 1080p và 10–15 analysis FPS trong báo cáo nghiên cứu là workload mong muốn để thử, chưa phải capacity được chấp nhận. Không dùng throughput inference riêng để ký capacity cả hệ thống.
 
-Danh mục mục tiêu và định nghĩa chuẩn nằm tại [requirement tình huống an toàn đô thị](../requirements/urban-safety-scenarios.md): đủ 13 nhóm và nhánh phá hoại riêng, không yêu cầu bật đồng loạt. Các nhóm ngoài person-down/tai nạn mở theo giai đoạn, mỗi nhóm cần ODD, tham số, positives/hard negatives và gate riêng; chưa thêm ticket thực thi hoặc hứa lịch trong bản cập nhật requirement.
+Danh mục mục tiêu và định nghĩa chuẩn nằm tại [requirement tình huống an toàn đô thị](../requirements/urban-safety-scenarios.md): registry hiện có 14 nhóm, không yêu cầu bật đồng loạt. Mỗi nhóm cần ODD, tham số, positives/hard negatives và gate riêng. Evaluator extended hiện báo US04/US10/US14 `unconfigured`; CLI hiện tại không nhận cấu hình chuyên biệt để bật ba nhóm này.
 
 Không implement đồng thời nhiều detector/backend, không tạo tất cả ports/folders từ đầu. Không thêm ANPR, nhận diện danh tính, chẩn đoán y khoa hoặc tự động điều phối cứu hộ vào scope này.
 
@@ -71,7 +71,7 @@ Các số cần ký ở P0: vùng ODD, latency, false-alert/review capacity, rec
 | Đội giao diện riêng | UI sản phẩm theo API/schema đã thống nhất, scope phase sau | Event/evidence/review/health UX và nghiệm thu production UI |
 | QA/operations/security | Integration, fault/soak, trust, backup/restore và runbook | Báo cáo có config/artifact/dataset/hardware hashes |
 
-Đây là vai trò, chưa gán nhân sự hay hứa lịch hoàn thành. Một người có thể nhận nhiều vai trò. Tách ownership Edge/Backend/Frontend theo đường dẫn; sửa `schemas/` phải có review của cả producer và consumer. Không giao hai người sửa cùng task/module khi chưa thống nhất người tích hợp.
+Đây là vai trò, chưa gán nhân sự hay hứa lịch hoàn thành. Một người có thể nhận nhiều vai trò. Contract hiện nằm tại `domain/`, nhất là `domain/event_contract.py`; thay đổi phải có review của producer và consumer. Không giao hai người sửa cùng task/module khi chưa thống nhất người tích hợp.
 
 Mỗi issue nhỏ phải ghi: ID, owner, `Status:`, prerequisites, phạm vi file, contract thay đổi, đầu ra, acceptance và bằng chứng. Ticket thực thi hiện ở `.scratch/system-build-slices/issues/<NN>-<slug>.md`; checklist module ở `.scratch/system-build/issues/` theo [quy ước tracker](../agents/issue-tracker.md). Task trong bảng là phạm vi/acceptance; claim và Execution chỉ cập nhật ở tracker slices. Checklist module giữ mapping và bằng chứng, không là tracker thứ hai.
 
@@ -129,7 +129,7 @@ Owner: Product/operations + Edge + ML. Output: site profile/readiness records d�
 
 ### M01 — Contracts, clock và conformance kit (P0–P1)
 
-Owner: Domain + Edge + ML + Backend. Source dự kiến: `domain/contracts/`, `schemas/`, `native/include/`, `tests/fixtures/`. Đây là nền dùng chung, không là universal schema framework.
+Owner: Domain + Edge + ML + Backend. Python reference hiện dùng `domain/event_contract.py`, các contract trong `domain/` và fixtures trong `tests/`/`fixtures/`. `native/include/` và schema generator là vị trí dự kiến cho task native, không phải thư mục contract đã tồn tại.
 
 | ID | Việc cụ thể | Phụ thuộc | Điều kiện hoàn thành |
 |---|---|---|---|
@@ -279,7 +279,7 @@ Theo Q6/Q10, edge delivery giữ HTTPS và receipt sau server durable commit; ev
 
 ### M12 — Backend ingestion, repository và evidence (P1–P4)
 
-Owner: Backend. Source: `apps/server/`, `schemas/`. FastAPI/Python + MongoDB theo Q14, một app + worker khi cần, không microservice hóa từng hàng. Evidence lab tạm dùng filesystem qua storage adapter; production storage chốt theo gate.
+Owner: Backend. Source hiện có: `apps/server/` và các contract trong `domain/`. FastAPI/Python + MongoDB theo Q14, một app + worker khi cần, không microservice hóa từng hàng. Evidence lab dùng filesystem qua storage adapter; production storage chốt theo gate.
 
 Giữ transaction revision/current projection/outbox và unique compound index `(device_id,event_id,revision)`, không thay bằng hai writes độc lập. Q18 chốt MongoDB lab một-member replica set với persistent volume, không phải HA; bootstrap/readiness và transaction/retry phải được test trên exact version, không dùng standalone. ACK sau transaction commit với write concern `w: majority, j: true`; timeout/unknown commit reconcile/retry theo idempotency, không khẳng định write đã rollback. Review dùng conditional version update cho concurrent conflict; indexes site/camera/time/type/review theo queries và schema validation cho input. Không đưa clip binary/revision arrays tăng vô hạn vào event document. [Transaction requirements](https://www.mongodb.com/docs/manual/core/transactions-production-consideration/), [write concern](https://www.mongodb.com/docs/manual/reference/write-concern/).
 

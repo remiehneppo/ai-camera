@@ -1,6 +1,6 @@
 # Bộ checklist triển khai hệ thống CiviWatch (`civi-watch`)
 
-Ngày thiết kế: 2026-10-11; cập nhật CiviWatch v2: 2026-11-09 ([ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md)). Trạng thái: 918 unit/integration tests pass trên software lab (phủ đủ 14 nhóm kịch bản US01–US14); các gate phần cứng đích và thực địa (G3–G5) nghiệm thu theo site.
+Ngày thiết kế: 2026-10-11; cập nhật baseline 17d9a32: 2026-11-11 ([ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md)). Trạng thái software lab: 979 unit/integration tests passed, 207 subtests passed, 83 source files mypy clean ([bằng chứng remediation 2026-11-11](../logs/2026-11-11-review-remediation.md)). Registry có 14 nhóm kịch bản (`domain/urban_scenarios.py`), trong đó evaluator baseline chạy 4 nhóm và extended chạy 11 nhóm (US04/US10/US14 chưa được cấu hình ROI/tooling chuyên biệt); default verifier chạy offline (`endpoint_url=""`); go2rtc không phải runner capture owner; template homography chưa hiệu chuẩn thực địa; các gate phần cứng đích và thực địa (G3–G5) tiếp tục mở theo từng site.
 
 Bộ này phân rã **18 module, 89 task hiện hành** thành bước thực hiện, acceptance và evidence record. Checklist module nằm trong tracker Markdown `.scratch/system-build/issues/` theo quy ước repo; tài liệu này là điểm vào để theo dõi. [PRD / phạm vi](../../.scratch/system-build/PRD.md).
 
@@ -51,14 +51,14 @@ Blockers cụ thể nằm trong tracker slices, không suy hard dependency từ 
 
 | Nhánh | File ownership dự kiến | Handoff bắt buộc |
 |---|---|---|
-| Contracts/Domain | `src/traffic_camera/domain/`, semantic definitions trong `schemas/` | Clock/IDs/status/FSM, compatibility và fixture versions |
-| Edge/Native/ML | `native/`, edge `application/`, `adapters/`, `bootstrap/`, `apps/edge/`, manifests/tooling | Metadata-only API, buffer lifecycle, model/track/pose parity, pin/delivery contracts |
+| Contracts/Domain | `domain/` (`domain/event_contract.py`, `domain/urban_scenarios.py`, ...); cấu trúc đích `schemas/` nếu tách riêng thuộc phạm vi tương lai | Clock/IDs/status/FSM, compatibility và fixture versions |
+| Edge/Native/ML | `apps/edge/`, `tools/`; các đường dẫn kiến trúc đích (`native/`, edge `application/`, `adapters/`, `bootstrap/`) thuộc phạm vi dự kiến tương lai | Metadata-only API, buffer lifecycle, model/track/pose parity, pin/delivery contracts |
 | Backend | `apps/server/`, server deploy/DB/storage | Auth/authz, OpenAPI/schema, receipts/revision/review/evidence/health semantics |
-| Dev demo | Phần static HTML/JS trong `apps/server/`; phối hợp cùng backend owner | API thật, list/detail/play/review và browser evidence; không frontend service riêng |
-| Đội UI sản phẩm | `apps/dashboard/` hoặc repo UI được thống nhất sau; UI03/UI04 | Auth/version/error fixtures, annotation/fleet UX, accessibility/operations acceptance |
-| QA/operations | Integration/hardware suites, `deploy/`, reports/runbooks | Protocol fault/restore/rollout, manifest và signed acceptance |
+| Dev demo | Phần static HTML/JS trong `apps/server/static/` (luồng MJPEG hiện có); phối hợp cùng backend owner | API thật, list/detail/play/review và browser evidence; không frontend service riêng |
+| Đội UI sản phẩm | Đường dẫn tương lai (`apps/dashboard/` hoặc repo UI được thống nhất sau); UI03/UI04 | Auth/version/error fixtures, annotation/fleet UX, accessibility/operations acceptance |
+| QA/operations | `tests/`, `infra/`, đường dẫn tương lai (`deploy/`), reports/runbooks | Protocol fault/restore/rollout, manifest và signed acceptance |
 
-Vai trò không tự cấp quyền sửa cùng file: trước claim gán người chịu trách nhiệm file chia sẻ, đặc biệt `schemas/`, `apps/server/` và deployment Compose. Nếu sửa contract ảnh hưởng nhánh khác, bàn giao schema + examples + failure semantics trước integration. Không đổi scaffold/framework UI sản phẩm trong scope dev demo.
+Vai trò không tự cấp quyền sửa cùng file: trước claim gán người chịu trách nhiệm file chia sẻ, đặc biệt `domain/`, `apps/server/` và cấu hình Compose (`compose.yaml`). Nếu sửa contract ảnh hưởng nhánh khác, bàn giao contract + examples + failure semantics trước integration. Không đổi scaffold/framework UI sản phẩm trong scope dev demo.
 
 ## 5. Definition of Ready / Done dùng chung
 
@@ -87,4 +87,4 @@ Lựa chọn filesystem evidence lab và polling demo là triển khai tối thi
 
 ## 7. Tiến độ và nghiệm thu
 
-Xem [tracker thực thi](../../.scratch/system-build-slices/PRD.md). Hiện mọi ticket not-started, các acceptance/runtime gates chưa chạy. Checklist module chỉ giữ task scope và evidence references; không duy trì bảng % hoặc Execution song song.
+Xem [tracker thực thi](../../.scratch/system-build-slices/PRD.md) và cột Execution trong từng issue nguồn (không sao chép hay tự tính các con số tổng hợp cũ). Trên software lab baseline 17d9a32, bộ kiểm thử đạt 979 unit/integration tests passed + 207 subtests passed và 83 source files mypy clean ([bằng chứng remediation 2026-11-11](../logs/2026-11-11-review-remediation.md)); các gate nghiệm thu phần cứng đích và thực địa (G3–G5) tiếp tục mở. Checklist module chỉ giữ task scope và evidence references; không duy trì bảng % hoặc Execution song song.

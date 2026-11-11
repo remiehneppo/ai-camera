@@ -1,9 +1,9 @@
 # Kiến trúc hệ thống CiviWatch (`civi-watch`) tại Edge
 
-**Trạng thái:** Thiết kế chuẩn CiviWatch v2 ([ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md)); đã triển khai đầy đủ trên software lab (918 tests pass, 79 source files `mypy` clean), chưa tuyên bố nghiệm thu phần cứng nhúng đích hoặc field pilot.
-**Cập nhật nghiệp vụ & kiến trúc:** 2026-11-09. [Mục lục tài liệu](../README.md) · [Hợp đồng tích hợp chuẩn](contracts.md) · [Plan triển khai](implementation-plan.md).
-**Phạm vi:** Edge analytics (4 tầng CiviWatch v2), 14 kịch bản an toàn đô thị (`US01`–`US14`), hậu kiểm VLM Storyboard, evidence, server cảnh báo/truy hồi và quản trị thiết bị.  
-**Cơ sở:** Các quyết định kỹ thuật trong [ADR-0001](../adr/0001-feature-pipeline-boundaries.md)–[ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md) và [báo cáo nghiên cứu](../../traffic-ai-camera-research/report.md).
+**Trạng thái:** Thiết kế chuẩn CiviWatch v2 ([ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md)); baseline `17d9a32` đã qua 979 tests, 207 subtests và `mypy` sạch trên 83 source files trong software lab. Kết quả này chưa tuyên bố nghiệm thu phần cứng nhúng đích, hiệu chuẩn site hoặc field pilot.
+**Cập nhật nghiệp vụ & kiến trúc:** 2026-11-11. [Mục lục tài liệu](../README.md) · [Hợp đồng tích hợp chuẩn](contracts.md) · [Plan triển khai](implementation-plan.md).
+**Phạm vi:** Edge analytics (4 tầng CiviWatch v2), registry US01–US14, hậu kiểm candidate, evidence, server cảnh báo/truy hồi và quản trị thiết bị. Evaluator hiện chạy 4 nhóm ở baseline, 11 nhóm ở extended; US04/US10/US14 báo `unconfigured` vì command chưa tạo engine/ROI chuyên biệt và chưa có tùy chọn CLI để bật chúng.
+**Cơ sở:** Các quyết định kỹ thuật trong [ADR-0001](../adr/0001-feature-pipeline-boundaries.md)–[ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md) và [trạng thái đối chiếu](../README.md#trạng-thái-đối-chiếu-tại-17d9a32).
 
 ## 1. Mục tiêu và giới hạn
 
@@ -15,9 +15,9 @@
 - Đảm bảo kết quả có provenance, timestamp, chất lượng quan sát và trạng thái xác minh; không báo im lặng khi hệ thống mất năng lực.
 - Cho phép kiểm thử offline/replay cùng pipeline realtime, benchmark toàn hệ thống trước mở rộng.
 
-### 1.1a Danh mục 14 kịch bản an toàn đô thị và trạng thái thực thi trên Edge (CiviWatch v2)
+### 1.1a Danh mục 14 kịch bản an toàn đô thị và trạng thái thực thi trên Edge
 
-[Requirement tình huống](../requirements/urban-safety-scenarios.md) và [`domain/urban_scenarios.py`](../../domain/urban_scenarios.py) xác định danh mục 14 nhóm an toàn đô thị (`US01`–`US14`). Trong kiến trúc **CiviWatch v2**, **toàn bộ 14/14 nhóm nghiệp vụ đã được triển khai trên Edge trong software lab** thông qua 5 engine chuyên biệt kết hợp với `UrbanSafetyScenarioEngine` ([`apps/edge/urban_safety_engine.py`](../../apps/edge/urban_safety_engine.py)) và bộ hậu kiểm **Tier-2 VLM Storyboard Verifier** ([`apps/edge/vlm_verifier.py`](../../apps/edge/vlm_verifier.py)):
+[Requirement tình huống](../requirements/urban-safety-scenarios.md) và [`domain/urban_scenarios.py`](../../domain/urban_scenarios.py) xác định registry 14 nhóm (`US01`–`US14`). Code có engine/factory cho toàn bộ registry trong software lab. Đây là trạng thái triển khai code, không phải claim rằng mọi nhóm đã được cấu hình, đánh giá hoặc nghiệm thu trên mọi camera.
 1. **US01 — Cháy / khói nghi ngờ (`fire_smoke_suspected`)**: Phát hiện độc lập `fire_suspected`, `smoke_suspected` và `fire_smoke_suspected`, hậu kiểm chống báo giả hơi nước/đèn pha.
 2. **US02 — Ngập nước đô thị (`urban_flooding`)**: Giám sát độ phủ mặt nước vượt mốc cảnh báo theo thời gian duy trì, lọc phản chiếu/đường ướt.
 3. **US03 — Đổ trộm / tồn lưu rác (`illegal_dumping`)**: Phân tách hành vi bỏ rác có diễn biến (`illegal_dumping_action`) và tồn lưu rác (`unlawful_waste_accumulation`).
@@ -25,7 +25,7 @@
 5. **US05 — Đỗ xe sai vùng/giờ (`illegal_parking`)**: Đo thời gian dừng đỗ liên tục (`dwell_seconds`) trong ROI cấm và khung giờ hạn chế (`ScheduleWindow`), loại bỏ 5 hard negatives.
 6. **US06 — Đông người & Nghi ngờ gây rối (`crowd_incident`)**: Phân tách 2 tầng độc lập: Tầng 1 `crowd_concentration` và Tầng 2 `suspected_disorder` (gom cụm không gian theo kích thước phối cảnh, phân tán hoảng loạn, xung đột động học).
 7. **US07 — Ẩu đả / xô xát (`violent_altercation`)**: Phát hiện chuỗi tương tác động năng cao giữa ít nhất 2 người trong khoảng cách gần duy trì theo thời gian.
-8. **US08 — Tai nạn có xe (`vehicle_incident`)**: `vehicle_vehicle`, `vehicle_pedestrian`, `vehicle_rollover_or_barrier` qua phân tích động học mượt hóa trajectory và rủi ro va chạm TTC / IoU.
+8. **US08 — Tai nạn có xe (`vehicle_incident`)**: payload giữ taxonomy `vehicle_incident`; `interaction_type` phân biệt xe–xe, xe–người và xe tự ngã/lật hoặc đâm vật cản.
 9. **US09 — Person-down (`person_down`)**: `person_fall` (có onset quan sát), `person_lying_persistent` (người nằm lòng đường), `person_on_stationary_vehicle` (người nằm/ngả trên xe đứng yên với độ ưu tiên review riêng), tích hợp RTMPose-Tiny 17 keypoints chạy theo lô (`estimate_batch`).
 10. **US10 — Vào vùng nguy hiểm (`danger_zone`)**: `danger_zone_intrusion` theo dõi xâm nhập và thời gian duy trì liên tục (`dwell_seconds`) trong vùng ROI chuẩn hóa theo lịch hoạt động (#57).
 11. **US11 — Vật bỏ quên (`abandoned_object`)**: Phân tách vật có người đặt rồi rời xa (`abandoned_object_dropped`) và vật tồn lưu không rõ chủ (`unattended_object_persistent`).
@@ -33,9 +33,13 @@
 13. **US13 — Đèn đường hỏng (`streetlight_outage`)**: Giám sát độ sáng vùng đèn trong khung giờ bật sau khoảng chuyển tiếp.
 14. **US14 — Phá hoại tài sản (`property_vandalism`)**: Phát hiện chuỗi tác động động năng cao vào vùng tài sản công cộng, độc lập với ẩu đả.
 
-Mỗi tính năng là một pipeline engine độc lập được đăng ký qua allowlisted factory (`ALLOWLISTED_FACTORIES` trong [`domain/alert_module_config.py`](../../domain/alert_module_config.py) gồm 14 factory kịch bản và `urban_safety_vlm`), chia sẻ chung nguồn video, detector YOLOX-Tiny vector hóa, ByteTracker và Ground-Plane Homography mà không trùng lặp inference.
+Feature module có state/config riêng theo module × camera, đăng ký qua `ALLOWLISTED_FACTORIES` trong [`domain/alert_module_config.py`](../../domain/alert_module_config.py). Các module chia sẻ source/detector/tracker/pose khi cấu hình tương thích. Homography metric hiện gắn với nhánh Vehicle incident, không tự áp vào mọi engine. Evaluator extended chưa tạo engine/ROI chuyên biệt cho US04/US10/US14 nên vẫn báo ba nhóm `unconfigured`.
 
-Camera cố định ngoài trời đường phố/vỉa hè; vùng/lịch/ngoại lệ cấu hình theo camera, không yêu cầu AI tự suy mọi quy định. AI tạo nghi ngờ, dashboard và người trực xác minh; không tự suy pháp lý, y tế, nguyên nhân/trách nhiệm hoặc điều phối cứu hộ. Ngày/đêm/mưa chỉ hỗ trợ trong ODD đã kiểm thử riêng từng nhóm. Severity cấu hình theo site và độc lập confidence; priority mặc định, ranh giới nhãn, hard negatives và ngưỡng pending theo requirement. Nhiều nhãn có thể liên kết một diễn biến, dedup riêng nhóm; không bắt buộc hợp nhất liên camera chính xác.
+Feature engine trả candidate facts và giữ temporal state. `PerceptionPipeline` điều phối storyboard/verification rồi gọi [`apps/edge/snapshot.py`](../../apps/edge/snapshot.py), module sở hữu construction/validation full snapshot. `EvidenceLifecycle` tách enqueue SQLite khỏi pin/file I/O. Candidate chưa phải Review confirmation.
+
+![Hình H04: Pipeline hậu kiểm candidate trước snapshot; enqueue SQLite và pin/file I/O độc lập; live capture chưa chuyển qua go2rtc](../adr/diagrams/H04-current-reference-runtime.drawio)
+
+Hai trang H04 mô tả code tại `17d9a32`, không thay diagram quyết định ADR. Feature verifier mặc định dùng `endpoint_url=""`; muốn gọi remote phải chọn verifier tường minh. Call hiện chạy đồng bộ trong processing lock; latency remote có thể kéo dài xử lý frame, chưa có phép đo để kết luận drop rate.
 
 ### 1.2 Không thuộc mục tiêu
 
@@ -66,15 +70,15 @@ Camera cố định ngoài trời đường phố/vỉa hè; vùng/lịch/ngoạ
 | Runtime fallback phải rõ | Không âm thầm NPU→CPU hoặc mất inference mà tiếp tục báo bình thường |
 | Provenance là contract bắt buộc | Mọi event/alert phải truy được camera/session/frame, config, model artifact hash, calibration version, capability/quality state và evidence còn tồn tại. Trường bắt buộc *hiện diện*, nhưng giá trị tường minh như `uncalibrated`/`unknown_artifact` hợp lệ. Event vi phạm schema vào forensic journal bounded ở trạng thái `malformed`, compact bản lặp và fault alert theo §6.17; không drop im lặng, không hứa lưu vô hạn khi disk lỗi/đầy |
 | Recorder ưu tiên hơn analytics | Khi tài nguyên thiếu, giảm analysis FPS/pose trước; không để inference backpressure làm mất video đã mã hóa |
-| Hai tầng ngôn ngữ: C++ perception core + Python control | Đường per-frame (decode→preprocess→inference→postprocess→track) là C++ (§6.7a); Python giữ phần tần suất thấp (orchestration, IncidentEngine, evidence, delivery, control). Pixel không đi qua Python trên hot path; chỉ metadata (detections/tracks/pose) vượt ranh giới |
+| Đích hai tầng ngôn ngữ: C++ perception core + Python control | Quyết định native hot path ở §6.7a vẫn là đích chưa triển khai/kiểm chứng tại `17d9a32`; Python reference hiện xử lý pixels và giữ vai trò oracle. Không lấy test Python làm conformance native. |
 | Danh mục Allowlisted Factories | Đăng ký module cấu hình biên qua danh mục đóng an toàn `ALLOWLISTED_FACTORIES` gồm đủ 14 nhóm kịch bản `US01`–`US14` và `urban_safety_vlm` ([`domain/urban_scenarios.py`](../../domain/urban_scenarios.py)); từ chối các factory ngoài danh mục |
-| Chia sẻ Hình học Biên & Homography (`apps/edge/geometry.py`, `apps/edge/homography.py`) | Thuật toán ray-casting `point_in_polygon` và ma trận phối cảnh mặt đường $3\times 3$ (`GroundPlaneHomography`) tập trung tại module dùng chung, cung cấp tọa độ mét `(X_m, Y_m)` và vận tốc thực ($\text{m/s}$) |
-| Hậu kiểm Tier-2 VLM Storyboard (`apps/edge/vlm_verifier.py`, [ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md)) | Ghép 6 keyframes quanh sự kiện thành lưới `2×3` Set-of-Mark (`StoryboardBuilder`) để hậu kiểm qua VLM JSON Schema hoặc `LocalVisualVerifier`, lọc báo giả mà không bao giờ chặn luồng cảnh báo khi VLM offline |
-| Zero-Plumbing Media Engine (`infra/go2rtc.yaml`, `apps/edge/media_engine.py`) | Tích hợp `go2rtc` (`Go2RtcMediaEngine`) phục vụ WebRTC/MSE/MP4 stream-copy và snapshot tức thời, kèm fallback `FileRecorder` cục bộ |
+| Hình học dùng chung (`apps/edge/geometry.py`, `apps/edge/homography.py`) | `point_in_polygon` và homography cung cấp phép tính dùng chung; template theo kích thước frame không chứng minh hiệu chuẩn site hoặc độ chính xác vật lý. Snapshot của đường template vẫn ghi `uncalibrated`. |
+| Hậu kiểm Tier-2 VLM Storyboard (`apps/edge/vlm_verifier.py`, [ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md)) | Pipeline ghép lưới `2×3` Set-of-Mark từ frame đang có trong buffer rồi gọi verifier. Khi chưa có thời gian sau anchor, builder phân bố các mốc trên lịch sử buffer; ảnh có thể lặp. Chỉ dữ liệu đã được nạp sau anchor mới có thể cung cấp post-roll, không phải việc chạy replay tự bảo đảm. |
+| Media engine (`infra/go2rtc.yaml`, `apps/edge/media_engine.py`) | `Go2RtcMediaEngine` phục vụ WebRTC/MJPEG/MP4/snapshot cho media client và có fallback recorder. `LivePerceptionRunner` và `RtspRingRecorder` hiện vẫn đọc upstream bằng các phiên RTSP độc lập; go2rtc không đứng trên hot path analytics. |
 | Lưu trữ Trạng thái Biên Bền vững | SQLite WAL mode bảo đảm `high_water_mark` và cấu hình LKG không bị lùi hay mất sau crash/reboot |
-| Điều phối Mạng WAN & Ưu tiên Metadata | `WanOutageCoordinator` đảm bảo tự chủ 24h, bảo vệ 50MB reserve, không xóa TTL unACK, ưu tiên metadata trước clips và giải tỏa backlog theo $B / (U - G)$ |
-| Tập trung quyền tạo Snapshot ([ADR-0005](../adr/0005-incident-snapshot-ownership.md)) | Các feature engine chỉ trả dữ kiện `{anchor_kind, payload}`; `apps/edge/snapshot.py:build_incident_snapshot` sở hữu duy nhất việc dựng, gắn ngữ cảnh/lineage/quality và validate full snapshot trước khi persist |
-| Tái sử dụng Pipeline cho Semantic Replay ([ADR-0006](../adr/0006-semantic-replay-pipeline-reuse.md)) | Các evaluator (`eval_clip`, `eval_vehicle`, `eval_all_scenarios`) gọi chung `PerceptionPipeline.process_frame` với `origin="replay"` và storage tạm độc lập, loại bỏ vòng điều phối trùng lặp |
+| Điều phối WAN và ưu tiên metadata | Code `WanOutageCoordinator` kiểm tra policy reserve, bảo vệ unACK và ưu tiên metadata trong software lab. Outage24h là budget cấu hình/kiểm tra mô phỏng; autonomy và thời gian drain trên target phải đo theo tốc độ sinh G, upload U và backlog B thực tế. |
+| Tập trung quyền tạo Snapshot ([ADR-0005](../adr/0005-incident-snapshot-ownership.md)) | Feature engine chỉ trả candidate facts `{anchor_kind, payload}`; `apps/edge/snapshot.py:build_incident_snapshot` dựng, gắn context/lineage/quality và validate full snapshot trước khi persist. |
+| Tái sử dụng Pipeline cho Semantic Replay ([ADR-0006](../adr/0006-semantic-replay-pipeline-reuse.md)) | Các evaluator gọi chung `PerceptionPipeline.process_frame` với `origin="replay"` và storage tạm độc lập; caller vẫn giữ sampling/config policy riêng và fail-fast observation lỗi. |
 | Ghép nối Track theo Nhóm Nhãn Thô (`ByteTracker`) | Liên kết IoU chỉ thực hiện trong cùng nhóm ngữ nghĩa thô (`person`, `two_wheeler`, `motor_vehicle`), chặn nhãn nhiễu (`bird`, `cat`, `bench`) nuốt track người mà vẫn giữ liên tục khi xe nháy `bus`/`truck` |
 
 **Công nghệ:** Python orchestration/reference pipeline, FastAPI/Python + MongoDB cho server; ONNX Runtime baseline inference; RKNN/MPP/RGA khi chọn target, alternative backends chỉ khi có yêu cầu. C++17 cho perception core (§6.7a), bindings pybind11/nanobind dự kiến; Python reference giữ làm oracle. Q19 chỉ yêu cầu dev demo UI đơn giản; chọn HTML/JS do FastAPI phục vụ để test qua API, không bắt buộc React app. Đội giao diện riêng ghép UI sản phẩm qua API/schema sau.
@@ -182,7 +186,7 @@ Evidence manifest: evidence ID, raw/derived designation, segment range thực t�
 
 Mỗi AI revision là full snapshot; identity/origin bất biến, current lấy revision hợp lệ cao nhất dù tới 3→1→2. Event có thể tới trước clip. Pin intent/receipt, anchor pre/post, trạng thái evidence trực giao, hash/retry và review freshness theo [contracts §2–§5](contracts.md). Schema network có version và compatibility policy; không gộp origin live/replay/synthetic vào taxonomy nghiệp vụ.
 
-**Network envelope tối thiểu:** `schema_version, message_id, event_id, revision, device_id, camera_id, stream_session_id, pipeline_id, pipeline_version, origin, event_time, produced_at, config_version, model_lineage, model_artifact_hash, calibration_version, quality_state, payload`. Schema là JSON Schema/OpenAPI trong `schemas/`; CI chạy backward/forward compatibility tests cho các revision còn hỗ trợ.
+**Network envelope tối thiểu:** `schema_version, message_id, event_id, revision, device_id, camera_id, stream_session_id, pipeline_id, pipeline_version, origin, event_time, produced_at, config_version, model_lineage, model_artifact_hash, calibration_version, quality_state, payload`. Trong Python reference hiện hành, hợp đồng wire/snapshot được định nghĩa và kiểm tra trực tiếp tại [`domain/event_contract.py`](../../domain/event_contract.py) (`SCHEMA_VERSION = 1`, `validate_event`, canonical JSON SHA-256) và [`domain/evidence_contract.py`](../../domain/evidence_contract.py), còn [`apps/edge/snapshot.py`](../../apps/edge/snapshot.py) (`build_incident_snapshot`) sở hữu việc dựng full snapshot ([ADR-0005](../adr/0005-incident-snapshot-ownership.md)). Thư mục `schemas/` (JSON Schema/OpenAPI) và CI backward/forward compatibility tests là mục tiêu thiết kế tương lai (§11), hiện chưa tồn tại trong repository.
 
 ## 6. Catalog module
 
@@ -222,6 +226,8 @@ Recorder process riêng chưa đủ nếu socket/demux cấp dữ liệu cho nó
 Một upstream nghĩa là một session **cho mỗi stream profile được chọn**, không nhất thiết một session/camera: record main + analyze sub vẫn cần hai upstream profiles. Không thêm broker/relay nếu dual sessions đã đạt acceptance. USB/CSI raw cần ownership capture/encode riêng, không áp máy móc topology RTSP.
 
 Contract phải khóa reconnect owner, session/discontinuity IDs, PTS/time mapping, codec change, queue/lag limit, quyền pin/query/release và ACK pin trước cleanup. Recorder là chủ segment lifecycle; coordination dùng metadata/IPC tối thiểu, không để analytics giữ DB lock hoặc transaction dài chặn recorder. Gate: kill/hang/OOM analytics trong fault domain đã cấu hình, recorder vẫn đạt gap budget đã ký; recorder/relay chết phải phát fault và reconcile rõ. Cùng cgroup hoặc host OOM vẫn có thể giết cả hai: giới hạn tài nguyên/service priority phải được test.
+
+**Hiện trạng runner & media engine:** Trong entrypoint chạy biên hiện hành ([`run_edge.py`](../../run_edge.py)), [`LivePerceptionRunner`](../../apps/edge/live_pipeline.py) (`cv2.VideoCapture`) và [`RtspRingRecorder`](../../apps/edge/rtsp_recorder.py) (subprocess `ffmpeg` stream-copy) vẫn tự mở các phiên RTSP độc lập trực tiếp lên camera upstream theo mô hình dual-session của [ADR-0007](../adr/0007-rtsp-stream-ownership.md) (hiện ở trạng thái `proposed`). [`Go2RtcMediaEngine`](../../apps/edge/media_engine.py) và cấu hình [`infra/go2rtc.yaml`](../../infra/go2rtc.yaml) đóng vai trò adapter/helper giải mã endpoint stream/snapshot và trích xuất clip (fallback sang `FileRecorder`), chưa thay thế luồng RTSP trực tiếp của runner/recorder; sự hiện diện của adapter này không tự chứng minh khả năng `go2rtc` single-session fanout, độ trễ WebRTC (`<300ms`) hay độ bền lưu trữ clip trên phần cứng thật (xem [nhật ký remediation](../logs/2026-11-11-review-remediation.md)).
 
 ### 6.4 Quality & ODD Monitor
 
@@ -281,6 +287,8 @@ Contract phải khóa reconnect owner, session/discontinuity IDs, PTS/time mappi
 
 **Chú ý:** không viết lại IncidentEngine bằng C++ trước khi profiling chứng minh cần. Không đưa toàn bộ edge app sang C++: lợi ích nằm ở hot path, phần còn lại sẽ chỉ tăng chi phí phát triển.
 
+**Trạng thái thực thi hiện tại:** Kiến trúc C++17 perception core (`native/`, pybind11/nanobind, RKNN/TensorRT/MPP/RGA) ở trên là **hướng thiết kế mục tiêu cho phần cứng đích (G3)**, hiện chưa có mã nguồn C/C++ hay CMake build trong repository. Toàn bộ runtime đang vận hành trong software lab hiện là **Python reference pipeline** ([`apps/edge/oracle_detector.py`](../../apps/edge/oracle_detector.py), [`apps/edge/tracker.py`](../../apps/edge/tracker.py), [`apps/edge/pose.py`](../../apps/edge/pose.py), [`apps/edge/pipeline.py`](../../apps/edge/pipeline.py)) chạy trên ONNX Runtime (mặc định CPU, nhận `providers`), OpenCV và NumPy.
+
 ### 6.8 ObjectDetector
 
 **Stage nội bộ:** detect(frame/request)→DetectionBatch, health/capability; application nhận ObservationBatch qua PerceptionPipeline.
@@ -316,6 +324,8 @@ Contract phải khóa reconnect owner, session/discontinuity IDs, PTS/time mappi
 **Giao tiếp:** point original image→ground position/validity; motion monitor→invalidate; event lưu calibration version.  
 **Chú ý:** bbox bottom không luôn contact point; người chân bị che, đường dốc/multi-plane phải unknown hoặc region models. PTZ preset riêng; lưu mốc đo và sai số theo vùng. Không trả m/s đáng tin nếu geometry chưa hiệu chuẩn.
 
+**Hiện trạng hình học software lab:** [`apps/edge/geometry.py`](../../apps/edge/geometry.py) (`point_in_polygon`, `scale_roi_to_pixels`) và [`apps/edge/homography.py`](../../apps/edge/homography.py) (`GroundPlaneHomography` $3\times 3$) đã có mặt trong codebase; [`PerceptionPipeline`](../../apps/edge/pipeline.py) khởi tạo lười template hình thang mặc định `GroundPlaneHomography.default_urban_cctv(width, height)` từ kích thước khung hình thật cho `VehicleIncidentEngine` để gắn thông số `metric_kinematics` (`x_m`, `y_m`, `vx_mps`, `vy_mps`, `speed_mps`, `accel_mps2`). Tuy nhiên template mặc định này **chưa được hiệu chuẩn cho site thực tế**: các snapshot vẫn được đánh dấu `calibration_version = "uncalibrated"` / `"uncalibrated-image-v1"`, chưa có calibration repository hoặc hiệu chỉnh méo thấu kính, nên không tuyên bố độ chính xác đơn vị mét thực tế khi chưa qua hiệu chuẩn hiện trường.
+
 ### 6.13 MotionAnalyzer
 
 **Nhiệm vụ:** trajectory smoothing/outlier rejection, velocity/acceleration, direction, stationary state, interaction graph/TTC khi hợp lệ.  
@@ -330,6 +340,8 @@ Contract phải khóa reconnect owner, session/discontinuity IDs, PTS/time mappi
 **Dự kiến:** RTMPose model adapter ONNX trước, RKNN/TRT sau conversion test.  
 **Giao tiếp:** tracks/features/quality→PoseRequest; pose→temporal history/incident engine.  
 **Chú ý:** track/frame association đúng; ROI quá nhỏ hoặc keypoint thiếu là unknown. Sampling policy có coverage metrics; không trigger chỉ từ y spike. Raw frame retention phải bounded để async crop còn buffer hợp lệ. Taxonomy schema pinned; không ghép COCO17/whole-body tùy ý.
+
+**Hiện trạng suy luận và phân lô pose:** [`RtmposeEstimator`](../../apps/edge/pose.py) (`models/rtmpose-tiny/rtmpose_tiny.onnx`, mặc định ONNX Runtime CPU) cài đặt `estimate_batch(rgb, bboxes)` trên tensor `[N, 3, 256, 192]`. Tuy nhiên khả năng chạy theo lô phụ thuộc vào việc graph ONNX có hỗ trợ trục batch động hay không — nếu graph cố định `batch_size=1` hoặc lỗi batch, phương thức tự fallback về chạy tuần tự `estimate()` từng bbox. Ở lớp quản lý, `PoseManager.process_pending()` gom nhóm theo cùng `frame_key` khi có từ 2 request trở lên, trong khi lời gọi trực tiếp `PoseManager.request_pose()` vẫn thực thi tuần tự; hiện `PerceptionPipeline.process_frame` chạy đồng bộ quá trình lập lịch và xử lý pose. Khi thiếu estimator hoặc artifact, hệ thống trả trạng thái tường minh `unsupported`/`failed` (`estimator_unavailable`), không âm thầm fallback.
 
 ### 6.15 IncidentEngine
 
@@ -350,6 +362,14 @@ Quyết định Q5/Q9 ngày 2026-10-11: IncidentEngine nằm trong từng pipeli
 - Xe đỗ trong làn chạy → `stationary_vehicle_in_lane` (traffic hazard), không phải `person_down`. Chưa đủ bằng chứng → giữ `verifying/unknown`.
 - Không phân biệt được ngủ vs bất tỉnh qua video. Mặc định kỹ thuật là hàng review mức thấp như trên. Có báo/không báo/ngưỡng thời gian là **quyết định sản phẩm/đạo đức, cần stakeholder ký** trước pilot, không phải mặc định kiến trúc.
 - Góc camera thấp/gần ngang → ODD `degraded` cho loại sự kiện này.
+
+### 6.15a Hậu kiểm Tier-2 VLM Storyboard (`apps/edge/vlm_verifier.py`)
+
+Hậu kiểm hai tầng ([ADR-0008](../adr/0008-civiwatch-v2-hybrid-vlm-architecture.md)) bổ sung bộ lọc hậu kiểm cho các sự kiện ứng viên thuộc 14 nhóm an toàn đô thị (`US01`–`US14`):
+
+- **Quyền sở hữu và luồng thực thi ([ADR-0005](../adr/0005-incident-snapshot-ownership.md)):** Các feature engine (`UrbanSafetyScenarioEngine`, `VehicleIncidentEngine`) chỉ phát hành candidate facts `{anchor_kind, payload}` và giữ `vlm_verifier` làm metadata lựa chọn; [`PerceptionPipeline`](../../apps/edge/pipeline.py) sở hữu trực tiếp `StoryboardBuilder` và thực thi `verifier.verify(facts, storyboard=sb)` **đồng bộ bên trong `_processing_lock`** của `process_frame`, trước khi gọi `apps/edge/snapshot.py:build_incident_snapshot` để tạo full snapshot. Khi ứng viên bị từ chối (`not verdict.verified`), pipeline gọi `reject_candidate(facts)` để giải phóng cooldown tương ứng với cặp `(taxonomy, detection_time)` đó.
+- **Mặc định offline tường minh:** Các feature engine mặc định khởi tạo `VLMVerifier(endpoint_url="")` ở chế độ **offline cục bộ** (`_verify_local`), **không tự bật gọi endpoint ngoài dù biến môi trường `CIVIWATCH_VLM_URL` có được đặt**, trừ khi caller truyền tường minh verifier/endpoint. Khi gọi endpoint remote tường minh, phản hồi phải trả `verified` kiểu boolean và `confidence` hữu hạn trong `[0.0, 1.0]`; phản hồi lỗi hoặc sai định dạng giữ nguyên ứng viên với trạng thái `failed`.
+- **Chọn khung hình Storyboard tại thời điểm phát hiện:** [`StoryboardBuilder.build_grid`](../../apps/edge/vlm_verifier.py) ghép lưới `2×3` Set-of-Mark từ ring buffer khung hình đã nhận. Tại thời điểm phát hiện trực tiếp ($t_{\text{detect}}$), các khung hình tương lai (`+1s`, `+2s`, `+3s`) **chưa sẵn có** (kể cả trong replay nếu các khung hình sau mốc neo chưa được buffer trước đó); `build_grid` thực hiện lấy mẫu lại trên khoảng $[t_{\text{min}} \dots t_{\text{max}}]$ sẵn có trong buffer quá khứ bằng nearest-neighbor nên **có thể trùng lặp cùng một khung hình** và **không bảo đảm 6 quan sát thời gian độc lập**. Việc khảo sát cô đọng ranh giới hậu kiểm giữ nguyên quyền sở hữu của ADR-0005/0008 và chưa đề xuất thay đổi kiến trúc bất đồng bộ/queue hay trì hoãn giao diện.
 
 ### 6.16 EvidenceRecorder & RetentionManager
 
@@ -375,6 +395,8 @@ Quyết định Q5/Q9 ngày 2026-10-11: IncidentEngine nằm trong từng pipeli
 1. DB transaction ghi manifest `pending` (intent) **trước** khi tạo temp file — để mọi temp file đều có chủ.
 2. Ghi temp → `fsync(file)` → atomic `rename` → `fsync(dir)`.
 3. DB transaction: checksum/size/range thực tế, build_state=finalized và completeness=complete hoặc partial kèm lý do; transfer/availability/integrity là các chiều riêng theo contracts §4.
+
+**Ranh giới transaction SQLite và tệp đĩa:** Trong [`apps/edge/outbox.py`](../../apps/edge/outbox.py) (`EventOutbox.enqueue`), thao tác ghi `event_revisions`, `delivery_outbox` và `evidence_requests` nằm trong **cùng một transaction SQLite atomic** (`BEGIN IMMEDIATE`, `WAL`, `synchronous=FULL`). Ngược lại, việc giữ pin với recorder (`recorder.pin`), ghi/đổi tên tệp clip trên đĩa và đồng bộ manifest do [`EvidenceLifecycle`](../../apps/edge/evidence.py) điều phối **không nằm trong transaction SQLite này** và được đối soát tách biệt.
 
 | Startup: DB | File | Hành động |
 |---|---|---|
@@ -412,7 +434,7 @@ Quyết định Q5/Q9 ngày 2026-10-11: IncidentEngine nằm trong từng pipeli
 | Fleet/config service | Inventory, desired/observed versions, rollout status | Versioned DB/bundle store, RBAC, audit |
 | Dev demo / UI bàn giao | Lab list/detail/play/review; UI sản phẩm và annotation/fleet UX do đội giao diện làm sau | Lab HTML/JS gọi API, raw access phân quyền; đội UI nhận OpenAPI/schema/fixtures |
 
-Dev demo do FastAPI phục vụ, gọi public API và giữ auth/download permissions. MongoDB lab replica set một member/persistent volume phải có exact-version transaction/retry tests; không phải HA. Filesystem evidence lab qua adapter; production topology/storage theo gate riêng.
+Dev demo do FastAPI phục vụ, gọi public API và giữ auth/download permissions. MongoDB lab replica set một member/persistent volume phải có exact-version transaction/retry tests; không phải HA. Filesystem evidence lab qua adapter; production topology/storage theo gate riêng. Luồng xem video trực tiếp trên dashboard điều hành ([`apps/server/static/index.html`](../../apps/server/static/index.html)) hiện đi qua endpoint MJPEG sẵn có của FastAPI (`/v1/live/stream`, `multipart/x-mixed-replace` do `LiveStreamService` trong [`apps/server/live_stream.py`](../../apps/server/live_stream.py) phục vụ kèm overlay phát hiện), **chưa chuyển sang `go2rtc` (WebRTC/MSE)**. Giao diện hiện hỗ trợ lọc đủ 21 taxonomy lá thuộc 14 kịch bản `US01`–`US14` và hiển thị thông tin hậu kiểm `vlm_verification` trên API hiện hành.
 
 Không coi evidence storage và MongoDB là một transaction: server cần pending/finalize/reconciliation tương tự edge. Enforce unique `(device_id, event_id, revision)` trong scope device đã authenticate/authorize; cùng key khác payload hash là conflict/quarantine, không overwrite im lặng. Giữ revision history; chỉ cập nhật current view bằng revision hợp lệ mới hơn. Persist revision/current projection và server outbox intent trong cùng MongoDB transaction; cần transaction-capable replica set, lab một-member replica set theo ADR-0003; production topology chốt riêng. Commit dùng `w: majority, j: true`; timeout/unknown commit reconcile/retry bằng idempotency, không ACK giả. Worker dùng idempotency key cho mỗi side effect; không bảo đảm exactly-once ở downstream/provider thiếu dedup/receipt. Synthetic/replay bị chặn trước notification outbox. Eligibility disabled/ineligible/pending, expiry và không tự backfill khi bật provider theo [contracts §6](contracts.md). Journal/revisions phục vụ audit/recovery cục bộ, không cam kết event sourcing toàn hệ thống. [MongoDB transactions](https://www.mongodb.com/docs/manual/core/transactions-production-consideration/), [write concern](https://www.mongodb.com/docs/manual/reference/write-concern/).
 
@@ -485,6 +507,11 @@ Ba nhóm trạng thái độc lập, có revision/audit riêng:
 ### 7.6 Replay/offline
 
 [Contracts §7](contracts.md) phân biệt semantic replay có virtual clock/fixed sampling/watermark và realtime stress dùng deadlines/backpressure thật. Chỉ hứa domain outcomes giống nhau khi cùng semantic inputs; stress mode báo drop/coverage/degraded, không ép cùng event set. Origin replay bất biến, không notification thật.
+
+**Cơ chế Replay và Phạm vi Bộ Đánh giá ([ADR-0006](../adr/0006-semantic-replay-pipeline-reuse.md)):**
+- Các công cụ đánh giá ([`tools/eval_all_scenarios.py`](../../tools/eval_all_scenarios.py), [`tools/eval_clip.py`](../../tools/eval_clip.py), [`tools/eval_vehicle.py`](../../tools/eval_vehicle.py)) gọi chung `PerceptionPipeline.process_frame` với `origin="replay"` và storage tạm thời độc lập.
+- **Registry 14 nhóm vs Bộ đánh giá 4 / 11 nhóm:** Trong khi registry cấu hình ([`domain/urban_scenarios.py`](../../domain/urban_scenarios.py), [`domain/alert_module_config.py`](../../domain/alert_module_config.py)) khai báo đủ **14/14** nhóm `US01`–`US14`, công cụ `eval_all_scenarios.py` mặc định chỉ đánh giá **4 nhóm baseline** (`US05`, `US06`, `US08`, `US09`) và mở rộng lên **11 nhóm** khi truyền `--extended-scenarios` (`US01`, `US02`, `US03`, `US05`, `US06`, `US07`, `US08`, `US09`, `US11`, `US12`, `US13`). Ba nhóm **`US04`, `US10`, `US14` bị loại trừ theo cấu trúc (`unconfigured_scenarios`)** trong `eval_all_scenarios.py` vì đòi hỏi vùng ROI đa giác và lịch chuyên biệt theo camera; công cụ CLI hiện tại không hỗ trợ tham số ROI và không thể tự kích hoạt các nhóm này chỉ bằng việc thay đổi cấu hình bên ngoài.
+- **Giới hạn Storyboard trong Replay:** Replay nạp frame tuần tự nên bản thân chế độ replay không tự tạo trước được các khung hình tương lai cho VLM storyboard nếu các frame sau mốc neo chưa được nạp sẵn vào buffer. Vòng lặp decode/source-clock/cleanup hiện còn lặp lại giữa các evaluator là ứng viên hợp nhất ở mức module thực thi replay mà vẫn giữ nguyên chính sách lấy mẫu và ngưỡng của từng caller ([ADR-0006](../adr/0006-semantic-replay-pipeline-reuse.md)).
 
 ### 7.7 Shutdown và reconnect
 
@@ -560,7 +587,7 @@ Signed config/model bundles, allowlisted factories, hash verification, downgrade
 
 ### 10.1 SLI và NFR
 
-Định nghĩa đo lường cố định ngay. **Preliminary targets** do owner sản phẩm/vận hành duyệt trước chọn hardware/PoC: latency, quality, evidence, offline autonomy, recovery và review load; đó là yêu cầu để thử, không phải kết quả đã đạt. Sau benchmark/lab soak khóa capacity envelope và acceptance cho field pilot; sau field pilot ký final targets trước procurement fleet. Không lấy con số nghiên cứu hoặc TBD làm bằng chứng đạt gate. Hồ sơ đầu vào/owner xem [deployment readiness](deployment-readiness.md).
+Định nghĩa đo lường cố định ngay. **Preliminary targets** do owner sản phẩm/vận hành duyệt trước chọn hardware/PoC: latency, quality, evidence, offline autonomy, recovery và review load; đó là yêu cầu để thử, không phải kết quả đã đạt. Sau benchmark/lab soak khóa capacity envelope và acceptance cho field pilot; sau field pilot ký final targets trước procurement fleet. Không lấy con số nghiên cứu hoặc TBD làm bằng chứng đạt gate. Bằng chứng kiểm thử và kiểu tĩnh của đợt remediation (2026-11-11) ghi nhận **979 tests passed (207 subtests passed), 83 source files `mypy` clean** (xem [nhật ký remediation](../logs/2026-11-11-review-remediation.md) và [tài liệu hiện trạng](../README.md)); đây là bằng chứng software lab, không thay thế đo lường capacity phần cứng đích hay nghiệm thu hiện trường. Hồ sơ đầu vào/owner xem [deployment readiness](deployment-readiness.md).
 
 | SLI | Định nghĩa |
 |---|---|
@@ -584,7 +611,7 @@ Recorder segment gap/pin failure, source mất tiến triển, outbox age/bytes 
 
 ## 11. Kiến trúc source code dự kiến
 
-**Đây là cây đề xuất cho implementation tương lai, không mô tả code đã tồn tại.** Chọn monorepo gọn, không tạo tất cả folder rỗng ngay. Python là baseline dự kiến; tree giữ semantic boundaries để đổi ngôn ngữ khi có lý do.
+**Đây là cây đề xuất cho implementation tương lai, không mô tả code đã tồn tại.** Chọn monorepo gọn, không tạo tất cả folder rỗng ngay. Python là baseline dự kiến; tree giữ semantic boundaries để đổi ngôn ngữ khi có lý do. Cấu trúc Python reference hiện hữu trong software lab nằm trực tiếp tại `domain/`, `apps/edge/`, `apps/server/`, `tools/`, `models/`, `infra/`, `tests/`, `docs/` và `openspec/`; các thư mục mục tiêu như `src/traffic_camera/`, `schemas/` và `native/` chưa tồn tại trong repository.
 
 ```text
 AI-Camera-OC/
@@ -747,7 +774,7 @@ Clock abstraction cho domain tests, ID generator, typed errors và bounded queue
 
 ### 13.2 Mỗi báo cáo benchmark phải ghi
 
-Hardware/OS/drivers/SDK; model/artifact hash; input/precision/batch; source codec/resolution/FPS/bitrate; sampling/crops/pose concurrency; recorder/render/upload settings; nhiệt môi trường; event metrics, latency/drop/quality và provenance dataset. TOPS hay FPS model đơn lẻ không thành camera capacity. Xuất machine-readable manifest với duration/workload, frame age/event latency P95/P99, recorder gaps, fsync/WAL, CPU/RAM/accelerator/thermal/power, outbox bytes/age và pose burst. Đo từng bottleneck decode/preprocess/inference/memory/disk/uplink rồi khóa số camera ở workload bền vững; thiếu kết quả dùng `null` + lý do, không dùng `0` giả số đo. Mẫu trong [deployment readiness](deployment-readiness.md).
+Hardware/OS/drivers/SDK; model/artifact hash; input/precision/batch; source codec/resolution/FPS/bitrate; sampling/crops/pose concurrency; recorder/render/upload settings; nhiệt môi trường; event metrics, latency/drop/quality và provenance dataset. TOPS hay FPS model đơn lẻ không thành camera capacity. Xuất machine-readable manifest với duration/workload, frame age/event latency P95/P99, recorder gaps, fsync/WAL, CPU/RAM/accelerator/thermal/power, outbox bytes/age và pose burst. Đo từng bottleneck decode/preprocess/inference/memory/disk/uplink rồi khóa số camera ở workload bền vững; thiếu kết quả dùng `null` + lý do, không dùng `0` giả số đo. Mẫu trong [deployment readiness](deployment-readiness.md). Các công cụ benchmark hiện hữu ([`tools/compare_models_benchmark.py`](../../tools/compare_models_benchmark.py), [`tools/run_benchmark.py`](../../tools/run_benchmark.py)) chỉ đo đạc đường perception (`PerceptionPipeline`: detector → tracker → homography → pose → engines), không bao gồm ghi ring buffer, đóng gói bằng chứng hay truyền tải WAN; các báo cáo benchmark lịch sử trong `docs/reports/` phản ánh điều kiện đo trước đây và không đại diện cho năng lực realtime, chất lượng hay capacity hiện hành trên phần cứng đích.
 
 ### 13.3 Gates
 
@@ -756,6 +783,7 @@ Hardware/OS/drivers/SDK; model/artifact hash; input/precision/batch; source code
 - Production: commercial license clearance, security/retention review, sustained thermal/disk/network recovery, operator workflow, evidence integrity và rollback.
 - Mục tiêu recall/báo giả/latency chọn theo pilot và nhân lực; không lấy con số nghiên cứu làm cam kết tự động.
 - Trước field pilot: preliminary targets + lab capacity envelope (10.1) đã ký; fault-injection drills đạt — camera freeze/reconnect/codec change, analytics kill/hang/native crash, recorder kill, WAN outage nhiều giờ, disk 95%/100%/write errors/WAL growth, power cut lúc commit và rename, clock jump, model load/config activation failure, duplicate/reordered/conflicting revisions; 24–72h soak recording + analytics + upload. Signed rollout test chặn bad hash/signature, expired/old sequence, wrong target và clock uncertain; synthetic không tạo notification. Final field quality/SLO ký sau pilot trước fleet; central backup/restore drill theo SLA.
+- Mã nguồn, cấu hình mẫu và các ca kiểm thử bảo mật trong lab (bearer token, mã băm cấu hình, xác thực `go2rtc`) không phải chứng nhận tuân thủ pháp lý, quyền riêng tư hay an toàn thông tin; gate pháp chế/privacy tại §9.3 vẫn yêu cầu hồ sơ phê duyệt và người chịu trách nhiệm được chỉ định chính thức.
 
 ## 14. Triển khai và nghiệm thu
 
@@ -783,7 +811,7 @@ G1 dùng software decode khi board chưa chọn; trước target acceptance ph�
 - Native buffer import/concurrency trên board/OS/SDK được chọn; zero-copy phải đo.
 - ROI/ODD/retention, số camera/site, pose budget, alert SLA và final acceptance thresholds.
 - Kênh lệnh lab đã chọn outbound HTTPS long-poll. Chỉ xem xét WebSocket/MQTT khi production requirements chứng minh cần; không là lựa chọn mở chặn baseline.
-- Main/sub stream và topology dual/relay chốt bằng camera test trước nghiệm thu Slice 1; event ring đã chốt, không hỏi lại storage mode của lab.
+- Main/sub stream và topology dual/relay (theo đề xuất [ADR-0007](../adr/0007-rtsp-stream-ownership.md), hiện ở trạng thái proposed) chốt bằng camera test trước nghiệm thu Slice 1; event ring đã chốt, không hỏi lại storage mode của lab.
 - Cloud/on-prem, object store license và yêu cầu pháp lý cụ thể của đơn vị triển khai. **Phải thành ADR trước pilot** vì quyết định HA/DR server, PKI, data residency, backup và chi phí.
 - Cost model `TCO/camera/tháng = edge HW khấu hao + storage wear + điện + mạng + server storage/compute + observability + support + human review`; cần số event/ngày và false alert rate từ pilot. `ReviewHours/month = Cameras × AlertsRequiringReview/camera-day × MeanReviewMinutes × 30 / 60`; false alerts chỉ tính phần chi phí false-positive, tổng review gồm cả true/uncertain/escalation. Không gán effort/person-week hoặc tiền tuyệt đối khi chưa có inventory/workload/team data.
 - Provisioning reproducible (image build + provisioning as code + site desired state versioned) — làm ở Slice 4, khi có thiết bị thật.
