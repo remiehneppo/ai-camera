@@ -15,7 +15,7 @@ from apps.edge.outbox import EventOutbox
 from apps.edge.pipeline import PerceptionPipeline
 from apps.edge.recorder import FileRecorder
 from apps.edge.urban_safety_engine import UrbanSafetyScenarioEngine
-from apps.edge.vlm_verifier import VLMVerifier
+from apps.edge.vlm_verifier import CandidateVerificationCoordinator, VLMVerifier
 from domain.alert_module_config import CameraModuleConfig
 
 
@@ -113,3 +113,69 @@ class PipelineVerificationTests(unittest.TestCase):
         verifier = VLMVerifier(endpoint_url="http://review.invalid/v1/chat/completions", http_transport=provider)
         self.assertEqual(self._rollover(self._vehicle_pipeline(verifier)), [])
         self.assertEqual(self.outbox.pending(), [])
+
+    def test_candidate_verification_coordinator_orchestrates_verification_and_lineage(self) -> None:
+        decisions = iter((True, False))
+
+        def provider(url: str, body: dict, headers: dict, timeout: float) -> dict:
+            return {"choices": [{"message": {"content": json.dumps({
+                "verified": next(decisions), "confidence": 0.92,
+                "hard_negative_class": "steam_mist", "reasoning": "Temporal review",
+            })}}]}
+
+        verifier = VLMVerifier(endpoint_url="http://review.invalid/v1/chat/completions", http_transport=provider)
+        coordinator = CandidateVerificationCoordinator(default_verifier=verifier)
+        engine = UrbanSafetyScenarioEngine(factory="fire_smoke_suspected", min_persistence_seconds=1.0)
+
+        # Before active recording, storyboard is empty
+        self.assertEqual(len(coordinator.storyboard), 0)
+
+        # Record observation buffers frame
+        coordinator.record_observation(self.frame, 1.0, 1, [], [engine])
+        self.assertEqual(len(coordinator.storyboard), 1)
+
+        # Candidate 1: verified
+        facts_verified = {
+            "anchor_kind": "alert_condition",
+            "payload": {
+                "taxonomy": "fire_suspected",
+                "detection_time": 2.0,
+                "severity": "critical",
+                "confidence": 0.85,
+            },
+        }
+        passed, lineage = coordinator.verify_candidate(
+            facts_verified,
+            engine=engine,
+            timestamp=2.0,
+            frame_dimensions=(640.0, 360.0),
+        )
+        self.assertTrue(passed)
+        self.assertTrue(facts_verified["payload"]["vlm_verification"]["verified"])
+        self.assertEqual(facts_verified["payload"]["vlm_verification"]["status"], "verified")
+        self.assertTrue(any(entry["role"] == "vlm_verifier" for entry in lineage))
+
+        # Candidate 2: rejected; releases cooldown on matching (taxonomy, detection_time)
+        engine._last_alert_by_taxonomy["fire_suspected"] = 3.0
+        facts_rejected = {
+            "anchor_kind": "alert_condition",
+            "payload": {
+                "taxonomy": "fire_suspected",
+                "detection_time": 3.0,
+                "severity": "critical",
+                "confidence": 0.85,
+            },
+        }
+        passed_reject, _ = coordinator.verify_candidate(
+            facts_rejected,
+            engine=engine,
+            timestamp=3.0,
+            frame_dimensions=(640.0, 360.0),
+        )
+        self.assertFalse(passed_reject)
+        self.assertFalse(facts_rejected["payload"]["vlm_verification"]["verified"])
+        self.assertNotIn("fire_suspected", engine._last_alert_by_taxonomy)
+
+        # Clear resets storyboard buffer
+        coordinator.clear()
+        self.assertEqual(len(coordinator.storyboard), 0)

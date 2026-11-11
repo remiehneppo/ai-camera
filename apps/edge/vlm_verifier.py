@@ -424,3 +424,90 @@ class VLMVerifier:
             reasoning=f"CiviWatch Tier-2 verified {scen_label} via {grid_note}.",
             model_id=self.model_id,
         )
+
+
+class CandidateVerificationCoordinator:
+    """Cohesive verification orchestrator owning storyboard recording, verification,
+    rejection cooldown release, and verifier lineage annotation."""
+
+    def __init__(
+        self,
+        *,
+        default_verifier: VLMVerifier | None = None,
+        storyboard: StoryboardBuilder | None = None,
+    ) -> None:
+        self.default_verifier = default_verifier
+        self.storyboard = storyboard or StoryboardBuilder()
+
+    def clear(self) -> None:
+        self.storyboard.clear()
+
+    def resolve_verifier(
+        self,
+        engine: Any,
+        *,
+        default_verifier: VLMVerifier | None = None,
+    ) -> VLMVerifier | None:
+        verifier = default_verifier if default_verifier is not None else self.default_verifier
+        if verifier is not None:
+            return verifier
+        return getattr(engine, "vlm_verifier", None)
+
+    def has_active_verifier(
+        self,
+        engines: Sequence[Any],
+        *,
+        default_verifier: VLMVerifier | None = None,
+    ) -> bool:
+        verifier = default_verifier if default_verifier is not None else self.default_verifier
+        if verifier is not None:
+            return True
+        return any(getattr(e, "vlm_verifier", None) is not None for e in engines)
+
+    def record_observation(
+        self,
+        rgb: np.ndarray,
+        timestamp: float,
+        frame_id: int,
+        tracks: Sequence[Any],
+        engines: Sequence[Any],
+        *,
+        default_verifier: VLMVerifier | None = None,
+    ) -> None:
+        if not self.has_active_verifier(engines, default_verifier=default_verifier):
+            return
+        det_dicts = [{"bbox": list(t.bbox), "label": t.label, "score": t.score} for t in tracks]
+        self.storyboard.record_frame(rgb, timestamp, frame_id, det_dicts)
+
+    def verify_candidate(
+        self,
+        facts: dict[str, Any],
+        *,
+        engine: Any,
+        timestamp: float,
+        frame_dimensions: tuple[float, float],
+        default_verifier: VLMVerifier | None = None,
+    ) -> tuple[bool, list[dict[str, Any]]]:
+        """Verify candidate facts and reconcile lineage and cooldown release behind one seam."""
+        verifier = self.resolve_verifier(engine, default_verifier=default_verifier)
+        rule_lineage = [
+            entry for entry in getattr(engine, "rule_lineage", [])
+            if entry.get("role") != "vlm_verifier"
+        ]
+        if verifier is None:
+            return True, rule_lineage
+
+        rule_lineage.append({"role": "vlm_verifier", "version": verifier.model_id})
+        sb = (
+            self.storyboard.build_grid(timestamp, original_dimensions=frame_dimensions)
+            if len(self.storyboard) > 0
+            else None
+        )
+        verdict = verifier.verify(facts, storyboard=sb)
+        facts["payload"]["vlm_verification"] = verdict.to_dict()
+        if not verdict.verified:
+            reject_candidate = getattr(engine, "reject_candidate", None)
+            if reject_candidate is not None:
+                reject_candidate(facts)
+            return False, rule_lineage
+        return True, rule_lineage

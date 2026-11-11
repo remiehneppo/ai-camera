@@ -26,7 +26,7 @@ from apps.edge.oracle_detector import OnnxDetector
 from apps.edge.parking_incident import ParkingIncidentEngine
 from apps.edge.urban_safety_engine import UrbanSafetyScenarioEngine, extract_environmental_signals
 from apps.edge.vehicle_incident import VehicleIncidentEngine
-from apps.edge.vlm_verifier import StoryboardBuilder, VLMVerifier
+from apps.edge.vlm_verifier import CandidateVerificationCoordinator, VLMVerifier
 from domain.urban_scenarios import SCENARIO_BY_FACTORY
 from domain.alert_module_config import (
     ALLOWLISTED_FACTORIES,
@@ -414,7 +414,8 @@ class PerceptionPipeline:
     ) -> None:
         self.alert_registry = alert_registry
         self.vlm_verifier = vlm_verifier
-        self.storyboard = StoryboardBuilder()
+        self.verification = CandidateVerificationCoordinator(default_verifier=vlm_verifier)
+        self.storyboard = self.verification.storyboard
         self.recorder = recorder
         self.outbox = outbox
         self.uploader = uploader
@@ -649,7 +650,7 @@ class PerceptionPipeline:
                 engine.reset()
             if self.pose_manager is not None:
                 self.pose_manager.set_epoch(self.core_epoch)
-            self.storyboard.clear()
+            self.verification.clear()
             self._last_frame_id = -1
             self._last_timestamp = None
             self._lineage = lineage
@@ -746,11 +747,15 @@ class PerceptionPipeline:
         # 3. Assess incident engines
         emitted_events: list[dict[str, Any]] = []
         frame_dims = (float(rgb.shape[1]), float(rgb.shape[0]))
-        if self.vlm_verifier is not None or any(getattr(e, "vlm_verifier", None) is not None for e in self.incident_engines):
-            det_dicts = [{"bbox": list(t.bbox), "label": t.label, "score": t.score} for t in tracks]
-            self.storyboard.record_frame(rgb, ts, fid, det_dicts)
+        self.verification.record_observation(
+            rgb,
+            ts,
+            fid,
+            tracks,
+            self.incident_engines,
+            default_verifier=self.vlm_verifier,
+        )
         for engine in self.incident_engines:
-            verifier = self.vlm_verifier or getattr(engine, "vlm_verifier", None)
             incidents = self._dispatch_engine_process_tracks(
                 engine,
                 tracks=tracks,
@@ -761,15 +766,17 @@ class PerceptionPipeline:
             )
             for facts in (incidents or ()):
                 if isinstance(facts, dict) and isinstance(facts.get("payload"), dict):
-                    if verifier is not None:
-                        sb = self.storyboard.build_grid(ts, original_dimensions=frame_dims) if len(self.storyboard) > 0 else None
-                        verdict = verifier.verify(facts, storyboard=sb)
-                        facts["payload"]["vlm_verification"] = verdict.to_dict()
-                        if not verdict.verified:
-                            reject_candidate = getattr(engine, "reject_candidate", None)
-                            if reject_candidate is not None:
-                                reject_candidate(facts)
-                            continue
+                    verified, rule_lineage = self.verification.verify_candidate(
+                        facts,
+                        engine=engine,
+                        timestamp=ts,
+                        frame_dimensions=frame_dims,
+                        default_verifier=self.vlm_verifier,
+                    )
+                    if not verified:
+                        continue
+                else:
+                    rule_lineage = list(getattr(engine, "rule_lineage", []))
                 cap_name = str(getattr(engine, "factory", getattr(engine, "module", "person_down")))
                 quality = self.quality
                 scope = None
@@ -794,10 +801,6 @@ class PerceptionPipeline:
                     "quality": quality,
                     "capability_scope": scope,
                 }
-                rule_lineage = [entry for entry in getattr(engine, "rule_lineage", [])
-                                if entry.get("role") != "vlm_verifier"]
-                if verifier is not None:
-                    rule_lineage.append({"role": "vlm_verifier", "version": verifier.model_id})
                 feature = {
                     "pipeline_id": self.pipeline_id if cap_name == "person_down" else engine.pipeline_id,
                     "pipeline_version": self.pipeline_version if cap_name == "person_down" else engine.pipeline_version,
@@ -842,7 +845,7 @@ class PerceptionPipeline:
             self._observation_gap()
 
     def _observation_gap(self):
-        self.storyboard.clear()
+        self.verification.clear()
         for engine in self.incident_engines:
             engine.observation_gap()
         # Retain track IDs/cooldown, discard pre-gap motion and standing evidence.
