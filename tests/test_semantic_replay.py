@@ -27,7 +27,6 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from apps.edge.oracle_detector import OracleDetector
 from apps.edge.danger_zone import DangerZoneIncidentEngine
 from apps.edge.outbox import EventOutbox
 from apps.edge.pipeline import PerceptionPipeline
@@ -256,9 +255,17 @@ class SemanticReplayTests(unittest.TestCase):
                 results.append(result)
                 return result
 
+            mock_pe = MagicMock()
+            mock_pe.detector = ScriptedDetector(script)
+            detector_patch = (
+                patch.object(eval_all_scenarios, "PerceptionExecution", return_value=mock_pe)
+                if module is eval_all_scenarios
+                else patch.object(module, "OracleDetector", return_value=ScriptedDetector(script))
+            )
+
             with tempfile.NamedTemporaryFile(suffix=".mp4") as tf, \
                  patch("cv2.VideoCapture", return_value=FakeCapture(frames)), \
-                 patch.object(module, "OracleDetector", return_value=ScriptedDetector(script)), \
+                 detector_patch, \
                  patch.object(module, function_name, observe_result), \
                  patch("sys.argv", [module.__name__, option, tf.name] + (["--no-pose"] if module is eval_all_scenarios else [])), \
                  redirect_stdout(io.StringIO()):
@@ -342,9 +349,11 @@ class SemanticReplayTests(unittest.TestCase):
         for module, option in ((eval_clip, "--video"), (eval_vehicle, "--video"), (eval_all_scenarios, "--videos")):
             with self.subTest(command=module.__name__), tempfile.TemporaryDirectory() as root:
                 missing = Path(root) / "missing.mp4"
+                mock_pe = MagicMock()
+                mock_pe.detector = ScriptedDetector()
                 with patch("sys.argv", [module.__name__, option, str(missing)]), \
                      patch("tools.eval_vehicle.OracleDetector", return_value=ScriptedDetector()), \
-                     patch("tools.eval_all_scenarios.OracleDetector", return_value=ScriptedDetector()), \
+                     patch("tools.eval_all_scenarios.PerceptionExecution", return_value=mock_pe), \
                      redirect_stdout(io.StringIO()), patch("sys.stderr", io.StringIO()):
                     self.assertEqual(module.main(), 1)
 

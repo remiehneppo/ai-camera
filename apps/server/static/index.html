@@ -509,23 +509,27 @@
       <label for="filter-taxonomy">Kịch bản:</label>
       <select id="filter-taxonomy">
         <option value="">Tất cả 14 nhóm kịch bản (US01–US14)</option>
-        <option value="fire_smoke_suspected">US01 · Fire &amp; Smoke (Cháy / khói nghi ngờ)</option>
-        <option value="urban_flooding">US02 · Urban Flooding (Ngập nước đô thị)</option>
-        <option value="illegal_dumping">US03 · Illegal Dumping (Đổ trộm / tồn lưu rác)</option>
-        <option value="sidewalk_encroachment">US04 · Sidewalk Encroachment (Lấn chiếm vỉa hè)</option>
-        <option value="illegal_parking">US05 · Illegal Parking (Đỗ xe sai quy định)</option>
-        <option value="crowd_concentration">US06a · Crowd (Tụ tập đông người)</option>
-        <option value="suspected_disorder">US06b · Disorder (Nghi gây rối trật tự)</option>
-        <option value="violent_altercation">US07 · Violent Altercation (Ẩu đả / xô xát)</option>
-        <option value="vehicle_incident">US08 · Vehicle Incident (Tai nạn giao thông)</option>
-        <option value="person_fall">US09a · Person Fall (Người ngã)</option>
-        <option value="person_lying_persistent">US09b · Person Lying (Nằm bất động)</option>
-        <option value="person_on_stationary_vehicle">US09c · Person on Vehicle (Người trên xe)</option>
-        <option value="danger_zone_intrusion">US10 · Danger Zone (Vào vùng nguy hiểm)</option>
-        <option value="abandoned_object">US11 · Abandoned Object (Vật bỏ quên)</option>
-        <option value="fallen_tree">US12 · Fallen Tree (Cây đổ chắn đường)</option>
-        <option value="streetlight_outage">US13 · Streetlight Outage (Đèn đường hỏng)</option>
-        <option value="property_vandalism">US14 · Property Vandalism (Phá hoại tài sản)</option>
+        <option value="fire_suspected">US01a · Cháy nghi ngờ (ngọn lửa)</option>
+        <option value="smoke_suspected">US01b · Khói nghi ngờ</option>
+        <option value="fire_smoke_suspected">US01c · Cháy và khói kết hợp</option>
+        <option value="urban_flooding">US02 · Ngập nước đô thị</option>
+        <option value="illegal_dumping_action">US03a · Hành vi đổ trộm rác</option>
+        <option value="unlawful_waste_accumulation">US03b · Tồn lưu rác sai quy định</option>
+        <option value="sidewalk_encroachment">US04 · Lấn chiếm vỉa hè</option>
+        <option value="illegal_parking">US05 · Đỗ xe sai quy định</option>
+        <option value="crowd_concentration">US06a · Tụ tập đông người</option>
+        <option value="suspected_disorder">US06b · Nghi gây rối trật tự</option>
+        <option value="violent_altercation">US07 · Nghi ẩu đả / xô xát</option>
+        <option value="vehicle_incident">US08 · Tai nạn giao thông</option>
+        <option value="person_fall">US09a · Người ngã</option>
+        <option value="person_lying_persistent">US09b · Người nằm bất động</option>
+        <option value="person_on_stationary_vehicle">US09c · Người trên xe đứng yên</option>
+        <option value="danger_zone_intrusion">US10 · Vào vùng nguy hiểm</option>
+        <option value="abandoned_object_dropped">US11a · Đồ vật bị bỏ lại</option>
+        <option value="unattended_object_persistent">US11b · Vật thể vô chủ tồn lưu</option>
+        <option value="fallen_tree">US12 · Cây đổ chắn đường</option>
+        <option value="streetlight_outage">US13 · Đèn đường hỏng</option>
+        <option value="property_vandalism">US14 · Phá hoại tài sản</option>
       </select>
     </div>
     <div class="toolbar-group">
@@ -572,10 +576,35 @@
       // Storage keys & URL query parameters
       const STORAGE_DASH_TOKEN = "civi_watch_dash_token";
       const STORAGE_REV_TOKEN = "civi_watch_rev_token";
-      const urlParams = new URLSearchParams(window.location.search);
 
-      let token = urlParams.get("token") || sessionStorage.getItem(STORAGE_DASH_TOKEN) || localStorage.getItem(STORAGE_DASH_TOKEN) || "";
-      let reviewerToken = urlParams.get("reviewer_token") || sessionStorage.getItem(STORAGE_REV_TOKEN) || localStorage.getItem(STORAGE_REV_TOKEN) || "";
+      // Immediately consume and remove token query params from URL via history.replaceState
+      let token = sessionStorage.getItem(STORAGE_DASH_TOKEN) || localStorage.getItem(STORAGE_DASH_TOKEN) || "";
+      let reviewerToken = sessionStorage.getItem(STORAGE_REV_TOKEN) || localStorage.getItem(STORAGE_REV_TOKEN) || "";
+      try {
+        const url = new URL(window.location.href);
+        let urlModified = false;
+        if (url.searchParams.has("token")) {
+          const t = url.searchParams.get("token");
+          if (t) token = t.trim();
+          url.searchParams.delete("token");
+          urlModified = true;
+        }
+        if (url.searchParams.has("reviewer_token")) {
+          const rt = url.searchParams.get("reviewer_token");
+          if (rt) reviewerToken = rt.trim();
+          url.searchParams.delete("reviewer_token");
+          urlModified = true;
+        }
+        if (urlModified && window.history && typeof window.history.replaceState === "function") {
+          const searchStr = url.searchParams.toString();
+          const cleanUrl = url.pathname + (searchStr ? `?${searchStr}` : "") + url.hash;
+          window.history.replaceState(window.history.state, "", cleanUrl);
+        }
+      } catch (_) {}
+
+      let authEpoch = 0;
+      let refreshAbortController = null;
+      let liveStatusAbortController = null;
       let isStreaming = false;
       let refreshing = false;
 
@@ -637,15 +666,70 @@
         }
       }
 
+      function clearProtectedContent() {
+        authEpoch++;
+        if (refreshAbortController) {
+          try { refreshAbortController.abort(); } catch (_) {}
+          refreshAbortController = null;
+        }
+        if (liveStatusAbortController) {
+          try { liveStatusAbortController.abort(); } catch (_) {}
+          liveStatusAbortController = null;
+        }
+        refreshing = false;
+
+        // Clear live camera stream element and revoke src
+        isStreaming = false;
+        liveFeed.pause?.();
+        liveFeed.removeAttribute("src");
+        liveFeed.style.display = "none";
+        livePlaceholder.style.display = "block";
+        liveToggle.textContent = "Start Stream";
+        liveSourceBadge.textContent = "Source: --";
+        liveSourceBadge.className = "badge";
+        liveFpsBadge.textContent = "FPS: --";
+        liveDetectionsBadge.textContent = "Detections: --";
+
+        // Stop and strip all video and evidence download URLs before DOM removal
+        for (const video of list.querySelectorAll("video")) {
+          try { video.pause(); } catch (_) {}
+          video.removeAttribute("src");
+          try { video.load(); } catch (_) {}
+        }
+        for (const a of list.querySelectorAll("a[href]")) {
+          a.removeAttribute("href");
+        }
+        list.replaceChildren();
+        eventsCount.textContent = "";
+
+        // Reset any pending review dialog state
+        pendingReviewRow = null;
+        pendingReviewAction = null;
+        if (reviewDialog && reviewDialog.open) {
+          try { reviewDialog.close(); } catch (_) {}
+        }
+      }
+
       btnSaveTokens.addEventListener("click", () => {
-        token = inputDashToken.value.trim();
-        reviewerToken = inputRevToken.value.trim();
+        const nextToken = inputDashToken.value.trim();
+        const nextRevToken = inputRevToken.value.trim();
+        const tokenChanged = (nextToken !== token || nextRevToken !== reviewerToken);
+        token = nextToken;
+        reviewerToken = nextRevToken;
         sessionStorage.setItem(STORAGE_DASH_TOKEN, token);
         sessionStorage.setItem(STORAGE_REV_TOKEN, reviewerToken);
         localStorage.setItem(STORAGE_DASH_TOKEN, token);
         localStorage.setItem(STORAGE_REV_TOKEN, reviewerToken);
         updateAuthBadge();
+        if (tokenChanged) {
+          clearProtectedContent();
+        }
+        if (!token) {
+          statusText.textContent = "Nhập Dashboard token ở trên để tải danh sách sự kiện.";
+          return;
+        }
         pollSystemHealth();
+        pollLiveStatus();
         if (isStreaming) updateStreamUI();
         refresh();
       });
@@ -660,35 +744,39 @@
         localStorage.removeItem(STORAGE_DASH_TOKEN);
         localStorage.removeItem(STORAGE_REV_TOKEN);
         updateAuthBadge();
-        if (isStreaming) {
-          isStreaming = false;
-          updateStreamUI();
-        }
-        refresh();
+        clearProtectedContent();
+        statusText.textContent = "Nhập Dashboard token ở trên để tải danh sách sự kiện.";
       });
 
       document.querySelector("#auth").addEventListener("click", () => {
         const val = window.prompt("Dashboard bearer token", token) || "";
         if (val) {
-          token = val.trim();
+          const nextToken = val.trim();
+          if (nextToken !== token) {
+            clearProtectedContent();
+          }
+          token = nextToken;
           inputDashToken.value = token;
           sessionStorage.setItem(STORAGE_DASH_TOKEN, token);
           localStorage.setItem(STORAGE_DASH_TOKEN, token);
           updateAuthBadge();
           pollSystemHealth();
+          pollLiveStatus();
           if (isStreaming) updateStreamUI();
           refresh();
         }
       });
 
       function updateStreamUI() {
-        if (isStreaming) {
+        if (isStreaming && token) {
           liveFeed.src = `/v1/live/stream?token=${encodeURIComponent(token)}`;
           liveFeed.style.display = "block";
           livePlaceholder.style.display = "none";
           liveToggle.textContent = "Pause Stream";
         } else {
-          liveFeed.src = "";
+          isStreaming = false;
+          liveFeed.pause?.();
+          liveFeed.removeAttribute("src");
           liveFeed.style.display = "none";
           livePlaceholder.style.display = "block";
           liveToggle.textContent = "Start Stream";
@@ -697,10 +785,15 @@
 
       liveToggle.addEventListener("click", () => {
         if (!token) {
-          token = window.prompt("Dashboard bearer token") || "";
-          if (!token) return;
+          const val = window.prompt("Dashboard bearer token") || "";
+          if (!val.trim()) return;
+          token = val.trim();
+          authEpoch++;
           inputDashToken.value = token;
+          sessionStorage.setItem(STORAGE_DASH_TOKEN, token);
+          localStorage.setItem(STORAGE_DASH_TOKEN, token);
           updateAuthBadge();
+          pollLiveStatus();
           refresh();
         }
         isStreaming = !isStreaming;
@@ -709,19 +802,34 @@
 
       async function pollLiveStatus() {
         if (!token) return;
+        if (liveStatusAbortController) {
+          try { liveStatusAbortController.abort(); } catch (_) {}
+        }
+        const controller = new AbortController();
+        liveStatusAbortController = controller;
+        const currentEpoch = authEpoch;
         try {
-          const res = await fetch(`/v1/live/status?token=${encodeURIComponent(token)}`);
+          const res = await fetch("/v1/live/status", {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: controller.signal,
+          });
+          if (currentEpoch !== authEpoch || !token || controller.signal.aborted) return;
           if (res.ok) {
             const data = await res.json();
+            if (currentEpoch !== authEpoch || !token || controller.signal.aborted) return;
             const src = (data.source || "--").toUpperCase();
             liveSourceBadge.textContent = `Source: ${src}`;
             liveSourceBadge.className = `badge badge-${src.toLowerCase() === "rtsp" ? "rtsp" : "fallback"}`;
             liveFpsBadge.textContent = `FPS: ${typeof data.fps === "number" ? data.fps.toFixed(1) : data.fps}`;
             liveDetectionsBadge.textContent = `Detections: ${data.detections_count ?? 0}`;
           }
-        } catch (_) {}
+        } catch (_) {
+        } finally {
+          if (liveStatusAbortController === controller) {
+            liveStatusAbortController = null;
+          }
+        }
       }
-
       async function pollSystemHealth() {
         try {
           const res = await fetch("/healthz");
@@ -761,33 +869,33 @@
       // Format taxonomy label
       function formatTaxonomy(tax) {
         switch (tax) {
-          case "fire_suspected":
-          case "smoke_suspected":
-          case "fire_smoke_suspected": return "US01 · Cháy / khói nghi ngờ (Fire & Smoke)";
-          case "urban_flooding": return "US02 · Ngập nước đô thị (Urban Flooding)";
-          case "illegal_dumping":
-          case "illegal_dumping_action":
-          case "unlawful_waste_accumulation": return "US03 · Đổ trộm / tồn lưu rác (Illegal Dumping)";
-          case "sidewalk_encroachment": return "US04 · Lấn chiếm vỉa hè (Sidewalk Encroachment)";
-          case "illegal_parking": return "US05 · Đỗ xe sai quy định (Illegal Parking)";
-          case "crowd_concentration": return "US06 · Tụ tập đông người (Crowd)";
-          case "suspected_disorder": return "US06 · Nghi gây rối (Suspected Disorder)";
-          case "violent_altercation": return "US07 · Nghi ẩu đả (Violent Altercation)";
+          case "fire_suspected": return "US01a · Cháy nghi ngờ (ngọn lửa)";
+          case "smoke_suspected": return "US01b · Khói nghi ngờ";
+          case "fire_smoke_suspected": return "US01c · Cháy và khói kết hợp";
+          case "urban_flooding": return "US02 · Ngập nước đô thị";
+          case "illegal_dumping_action": return "US03a · Hành vi đổ trộm rác";
+          case "unlawful_waste_accumulation": return "US03b · Tồn lưu rác sai quy định";
+          case "illegal_dumping": return "US03 · Đổ trộm / tồn lưu rác";
+          case "sidewalk_encroachment": return "US04 · Lấn chiếm vỉa hè";
+          case "illegal_parking": return "US05 · Đỗ xe sai quy định";
+          case "crowd_concentration": return "US06a · Tụ tập đông người";
+          case "suspected_disorder": return "US06b · Nghi gây rối trật tự";
+          case "violent_altercation": return "US07 · Nghi ẩu đả / xô xát";
           case "vehicle_vehicle":
           case "vehicle_pedestrian":
           case "vehicle_rollover_or_barrier":
-          case "vehicle_incident": return "US08 · Sự cố phương tiện (Vehicle Incident)";
-          case "person_fall": return "US09 · Người ngã (Person Fall)";
-          case "person_lying_persistent": return "US09 · Nằm bất động (Persistent Lying)";
-          case "person_on_stationary_vehicle": return "US09 · Người trên xe (On-vehicle)";
-          case "danger_zone_intrusion": return "US10 · Vào vùng nguy hiểm (Danger Zone)";
-          case "abandoned_object":
-          case "abandoned_object_dropped":
-          case "unattended_object_persistent": return "US11 · Vật bỏ quên (Abandoned Object)";
-          case "fallen_tree": return "US12 · Cây đổ chắn đường (Fallen Tree)";
-          case "streetlight_outage": return "US13 · Đèn đường hỏng (Streetlight Outage)";
-          case "property_vandalism": return "US14 · Phá hoại tài sản (Property Vandalism)";
-          default: return tax || "Sự kiện (Event)";
+          case "vehicle_incident": return "US08 · Tai nạn giao thông";
+          case "person_fall": return "US09a · Người ngã";
+          case "person_lying_persistent": return "US09b · Người nằm bất động";
+          case "person_on_stationary_vehicle": return "US09c · Người trên xe đứng yên";
+          case "danger_zone_intrusion": return "US10 · Vào vùng nguy hiểm";
+          case "abandoned_object_dropped": return "US11a · Đồ vật bị bỏ lại";
+          case "unattended_object_persistent": return "US11b · Vật thể vô chủ tồn lưu";
+          case "abandoned_object": return "US11 · Vật bỏ quên / tồn lưu";
+          case "fallen_tree": return "US12 · Cây đổ chắn đường";
+          case "streetlight_outage": return "US13 · Đèn đường hỏng";
+          case "property_vandalism": return "US14 · Phá hoại tài sản";
+          default: return tax || "Sự kiện";
         }
       }
 
@@ -850,7 +958,13 @@
           addFact("Track người", payload.track_id);
           addFact("Thời gian trong vùng", `${payload.dwell_seconds || 0}s`);
           addFact("Vùng nguy hiểm (ROI)", payload.roi_id || "Vùng cảnh báo");
-          addFact("Lịch hiệu lực", payload.schedule_active ? "Đang hiệu lực" : "Ngoài giờ");
+          if (payload.schedule_active === true) {
+            addFact("Lịch hiệu lực", "Đang hiệu lực");
+          } else if (payload.schedule_active === false) {
+            addFact("Lịch hiệu lực", "Ngoài giờ");
+          } else if (payload.schedule_active !== undefined && payload.schedule_active !== null && payload.schedule_active !== "") {
+            addFact("Lịch hiệu lực", String(payload.schedule_active));
+          }
         }
 
         // Tier-2 VLM Storyboard Verification metadata
@@ -880,13 +994,23 @@
       }
 
       async function refresh() {
-        if (refreshing) return;
         if (evidencePlaying()) return;
         if (!token) {
+          clearProtectedContent();
           statusText.textContent = "Nhập Dashboard token ở trên để tải danh sách sự kiện.";
           eventsCount.textContent = "";
           return;
         }
+
+        // Abort previous in-flight refresh so latest filter/request wins
+        if (refreshAbortController) {
+          try { refreshAbortController.abort(); } catch (_) {}
+        }
+        const controller = new AbortController();
+        refreshAbortController = controller;
+        const currentEpoch = authEpoch;
+        const currentToken = token;
+
         refreshing = true;
         statusText.textContent = "Đang tải sự kiện…";
 
@@ -898,14 +1022,20 @@
 
         try {
           const response = await fetch(`/v1/events?${params.toString()}`, {
-            headers: { Authorization: `Bearer ${token}` }
+            headers: { Authorization: `Bearer ${currentToken}` },
+            signal: controller.signal,
           });
+          if (currentEpoch !== authEpoch || !token || controller.signal.aborted) return;
+
           if (!response.ok) {
+            if (response.status === 401) {
+              clearProtectedContent();
+            }
             throw new Error(response.status === 401 ? "Dashboard token bị từ chối (401 Unauthorized)." : `Yêu cầu thất bại (${response.status}).`);
           }
           const data = await response.json();
+          if (currentEpoch !== authEpoch || !token || controller.signal.aborted) return;
           if (evidencePlaying()) return;
-
           // Preserve open details states
           const openDetails = new Set(Array.from(list.querySelectorAll("article")).flatMap(card =>
             Array.from(card.querySelectorAll("details[open]")).map(detail =>
@@ -1163,9 +1293,14 @@
           statusText.textContent = `Hiển thị ${data.events.length} sự kiện. Tự động làm mới mỗi 3s khi video dừng.`;
           eventsCount.textContent = `Tổng: ${data.events.length}`;
         } catch (error) {
+          if (error && error.name === "AbortError") return;
+          if (currentEpoch !== authEpoch || !token) return;
           statusText.textContent = `Lỗi: ${error.message}`;
         } finally {
-          refreshing = false;
+          if (refreshAbortController === controller) {
+            refreshAbortController = null;
+            refreshing = false;
+          }
         }
       }
 
@@ -1209,11 +1344,13 @@
 
       async function submitReview(row, action, reason) {
         const event = row.event;
+        const requestEpoch = authEpoch;
+        const revToken = reviewerToken;
         try {
           const response = await fetch(`/v1/events/${encodeURIComponent(event.device_id)}/${encodeURIComponent(event.event_id)}/review`, {
             method: "POST",
             headers: {
-              Authorization: `Bearer ${reviewerToken}`,
+              Authorization: `Bearer ${revToken}`,
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
@@ -1226,6 +1363,7 @@
             }),
           });
 
+          if (requestEpoch !== authEpoch || !token) return;
           if (response.status === 409) {
             await refresh();
             window.alert("Xung đột phiên bản review: Sự kiện hoặc review đã thay đổi trên server. Vui lòng tải lại trang.");
@@ -1234,6 +1372,8 @@
           if (response.status === 401) {
             reviewerToken = "";
             inputRevToken.value = "";
+            sessionStorage.removeItem(STORAGE_REV_TOKEN);
+            localStorage.removeItem(STORAGE_REV_TOKEN);
             updateAuthBadge();
             window.alert("Reviewer token không hợp lệ (401 Unauthorized).");
             return;
@@ -1244,6 +1384,7 @@
           }
           await refresh();
         } catch (error) {
+          if (requestEpoch !== authEpoch || !token) return;
           window.alert(`Review thất bại: ${error.message}`);
         }
       }
@@ -1257,17 +1398,21 @@
           localStorage.setItem(STORAGE_REV_TOKEN, reviewerToken);
           updateAuthBadge();
         }
+        const requestEpoch = authEpoch;
+        const revToken = reviewerToken;
         try {
           const res = await fetch(`/v1/evidence/${encodeURIComponent(deviceId)}/${encodeURIComponent(eventId)}/${encodeURIComponent(requestId)}/retrieval`, {
             method: "POST",
             headers: {
-              Authorization: `Bearer ${reviewerToken}`,
+              Authorization: `Bearer ${revToken}`,
               "Content-Type": "application/json",
             },
             body: JSON.stringify({ target: "edge", ttl_seconds: 300, retention_scope: "clip" })
           });
+          if (requestEpoch !== authEpoch || !token) return;
           if (res.ok) {
             const retDoc = await res.json();
+            if (requestEpoch !== authEpoch || !token) return;
             window.alert(`Đã phát lệnh truy hồi bằng chứng thành công!\nCommand ID: ${retDoc.command_id}\nTrạng thái: ${retDoc.status}`);
             refresh();
           } else {
@@ -1275,6 +1420,7 @@
             window.alert(`Không thể gửi lệnh truy hồi: ${err.detail || res.statusText}`);
           }
         } catch (err) {
+          if (requestEpoch !== authEpoch || !token) return;
           window.alert(`Lỗi kết nối truy hồi: ${err.message}`);
         }
       }

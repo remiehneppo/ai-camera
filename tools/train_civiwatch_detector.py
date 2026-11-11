@@ -165,20 +165,24 @@ def main(argv: list[str] | None = None) -> int:
     except ImportError:
         torch = None  # type: ignore[assignment]
         cuda_avail = False
-        print("[ENVIRONMENT] PyTorch not installed in current environment; training Blueprint mode active.")
+        print("[ENVIRONMENT] PyTorch not installed in current environment.")
 
-    if args.dry_run or not cuda_avail:
-        print("[INFO] Generating CiviWatch 640x640 ONNX deployment specification & training recipe...")
-        import numpy as np
-        import onnx
-        from onnx import TensorProto, helper, numpy_helper
+    if args.dry_run:
+        print("[INFO] Generating CiviWatch ONNX preparation blueprint specification & training recipe...")
+        try:
+            import numpy as np
+            import onnx
+            from onnx import TensorProto, helper, numpy_helper
+        except ImportError as exc:
+            print(f"[ERROR] Optional ONNX runtime is required for blueprint specification: {exc}", file=sys.stderr)
+            return 1
 
-        blueprint_onnx = args.output_dir / f"{args.model}_civiwatch_640.blueprint.onnx"
+        blueprint_onnx = args.output_dir / f"{args.model}_civiwatch_{args.imgsz}.blueprint.onnx"
         out_arr = np.zeros((1, 300, 6), dtype=np.float32)
         tensor = numpy_helper.from_array(out_arr, "raw")
         graph = helper.make_graph(
             [helper.make_node("Identity", ["raw"], ["output0"])],
-            f"civiwatch-{args.model}-640-blueprint",
+            f"civiwatch-{args.model}-{args.imgsz}-blueprint",
             [helper.make_tensor_value_info("images", TensorProto.FLOAT, [1, 3, args.imgsz, args.imgsz])],
             [helper.make_tensor_value_info("output0", TensorProto.FLOAT, [1, 300, 6])],
             initializer=[tensor],
@@ -186,17 +190,19 @@ def main(argv: list[str] | None = None) -> int:
         onnx_model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
         onnx_model.ir_version = 9
         onnx.save(onnx_model, blueprint_onnx)
+
         manifest = generate_civiwatch_manifest(
             args.model,
             blueprint_onnx,
             input_size=args.imgsz,
             nms_free=True,
         )
-        manifest_path = args.output_dir / "manifest.json"
-        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        print(f"[SAVED] Generated CiviWatch 640x640 manifest specification at: {manifest_path}")
+        manifest["rights"]["production_use_approved"] = False
+        blueprint_manifest_path = args.output_dir / "blueprint_manifest.json"
+        blueprint_manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        print(f"[SAVED] Generated CiviWatch {args.imgsz}x{args.imgsz} blueprint manifest at: {blueprint_manifest_path}")
 
-        recipe_sh = args.output_dir / "run_training.sh"
+        recipe_sh = args.output_dir / "blueprint_run_training.sh"
         recipe_sh.write_text(
             f"""#!/usr/bin/env bash
 # Training command on host GPU (RTX 5060 Ti 16GB):
@@ -207,9 +213,17 @@ yolo export model=runs/detect/train/weights/best.pt format=onnx imgsz={args.imgs
             encoding="utf-8",
         )
         recipe_sh.chmod(0o755)
-        print(f"[SAVED] Generated GPU training script: {recipe_sh}")
-        print("\nTraining preparation completed successfully!")
+        print(f"[SAVED] Generated blueprint GPU training recipe: {recipe_sh}")
+        print("\n[BLUEPRINT] Preparation-only blueprint generated (not an active deployment).")
         return 0
+
+    if not cuda_avail:
+        print(
+            "[ERROR] CUDA accelerator is not available for GPU training. "
+            "Re-run with --dry-run to generate preparation-only blueprint artifacts without training.",
+            file=sys.stderr,
+        )
+        return 1
 
     try:
         from ultralytics import YOLO  # type: ignore[import-not-found]

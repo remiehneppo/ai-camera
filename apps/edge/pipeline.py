@@ -471,6 +471,7 @@ class PerceptionPipeline:
         )
 
         engines_list: list[Any] = []
+        self._pending_vehicle_geometry: list[VehicleIncidentEngine] = []
         if incident_engines is not None:
             if isinstance(incident_engines, Mapping):
                 engines_list.extend(incident_engines.values())
@@ -502,6 +503,8 @@ class PerceptionPipeline:
                     origin=self.origin,
                 )
                 engines_list.append(eng)
+                if isinstance(eng, VehicleIncidentEngine) and eng.homography is None:
+                    self._pending_vehicle_geometry.append(eng)
         no_selection = (incident_engines is None and module_configs is None and incident_engine is None)
         if incident_engine is not None:
             if incident_engine not in engines_list:
@@ -571,6 +574,12 @@ class PerceptionPipeline:
         rgb: np.ndarray | None = None,
     ) -> list[dict[str, Any]]:
         """Dispatch track evaluation to an incident engine matching its supported signature (metadata only)."""
+        if (engine in self._pending_vehicle_geometry
+                and frame_dimensions[0] > 0 and frame_dimensions[1] > 0):
+            engine.homography = GroundPlaneHomography.default_urban_cctv(
+                int(frame_dimensions[0]), int(frame_dimensions[1]),
+            )
+            self._pending_vehicle_geometry.remove(engine)
         engine_id = id(engine)
         params_info = self._engine_param_cache.get(engine_id)
         if params_info is None:
@@ -741,6 +750,7 @@ class PerceptionPipeline:
             det_dicts = [{"bbox": list(t.bbox), "label": t.label, "score": t.score} for t in tracks]
             self.storyboard.record_frame(rgb, ts, fid, det_dicts)
         for engine in self.incident_engines:
+            verifier = self.vlm_verifier or getattr(engine, "vlm_verifier", None)
             incidents = self._dispatch_engine_process_tracks(
                 engine,
                 tracks=tracks,
@@ -751,12 +761,14 @@ class PerceptionPipeline:
             )
             for facts in (incidents or ()):
                 if isinstance(facts, dict) and isinstance(facts.get("payload"), dict):
-                    verifier = self.vlm_verifier or getattr(engine, "vlm_verifier", None)
-                    if verifier is not None and "vlm_verification" not in facts["payload"]:
+                    if verifier is not None:
                         sb = self.storyboard.build_grid(ts, original_dimensions=frame_dims) if len(self.storyboard) > 0 else None
                         verdict = verifier.verify(facts, storyboard=sb)
                         facts["payload"]["vlm_verification"] = verdict.to_dict()
                         if not verdict.verified:
+                            reject_candidate = getattr(engine, "reject_candidate", None)
+                            if reject_candidate is not None:
+                                reject_candidate(facts)
                             continue
                 cap_name = str(getattr(engine, "factory", getattr(engine, "module", "person_down")))
                 quality = self.quality
@@ -782,11 +794,15 @@ class PerceptionPipeline:
                     "quality": quality,
                     "capability_scope": scope,
                 }
+                rule_lineage = [entry for entry in getattr(engine, "rule_lineage", [])
+                                if entry.get("role") != "vlm_verifier"]
+                if verifier is not None:
+                    rule_lineage.append({"role": "vlm_verifier", "version": verifier.model_id})
                 feature = {
                     "pipeline_id": self.pipeline_id if cap_name == "person_down" else engine.pipeline_id,
                     "pipeline_version": self.pipeline_version if cap_name == "person_down" else engine.pipeline_version,
                     "config_version": getattr(engine, "config_version", None) or self.config_version,
-                    "rule_lineage": getattr(engine, "rule_lineage", []),
+                    "rule_lineage": rule_lineage,
                 }
                 snapshot = build_incident_snapshot(facts, context=context, feature=feature)
                 self.evidence.persist(snapshot)
@@ -826,6 +842,7 @@ class PerceptionPipeline:
             self._observation_gap()
 
     def _observation_gap(self):
+        self.storyboard.clear()
         for engine in self.incident_engines:
             engine.observation_gap()
         # Retain track IDs/cooldown, discard pre-gap motion and standing evidence.

@@ -1,6 +1,6 @@
 """Comprehensive Edge Multi-Scenario Evaluation Suite.
 
-Evaluates test video datasets across all edge perception alert engines:
+Evaluates test video datasets across edge perception alert engines:
 1. US09 Person-Down (IncidentEngine + RTMPose-Tiny):
    - person_fall
    - person_lying_persistent
@@ -14,12 +14,18 @@ Evaluates test video datasets across all edge perception alert engines:
 4. US06 Crowd Incidents (CrowdIncidentEngine):
    - crowd_concentration (layer 1)
    - suspected_disorder (layer 2)
+5. Extended scenarios with VLM (UrbanSafetyScenarioEngine):
+   - Evaluates: US01 (fire/smoke), US02 (flooding), US03 (dumping), US07 (altercation),
+     US11 (abandoned object), US12 (fallen tree), US13 (streetlight outage).
+   - Unconfigured/unsupported without camera ROI and specialized configuration:
+     US04 (sidewalk encroachment), US10 (danger zone), US14 (property vandalism).
 """
 from __future__ import annotations
 
 import argparse
 from fractions import Fraction
 import json
+import math
 from pathlib import Path
 import statistics
 import sys
@@ -37,7 +43,6 @@ import tempfile
 from apps.edge.crowd_incident import CrowdIncidentEngine
 from apps.edge.homography import GroundPlaneHomography
 from apps.edge.incident import IncidentEngine
-from apps.edge.oracle_detector import OracleDetector
 from apps.edge.outbox import EventOutbox
 from apps.edge.parking_incident import ParkingIncidentEngine
 from apps.edge.perception import PerceptionExecution
@@ -67,9 +72,10 @@ for _spec in SCENARIO_SPECS:
         if _tax not in TAXONOMY_ENGINE_MAP:
             TAXONOMY_ENGINE_MAP[_tax] = _spec.factory
 
+
 def evaluate_video(
     video_path: Path,
-    detector: OracleDetector,
+    detector: Any,
     *,
     sample_fps: float = 10.0,
     max_frames: int = 300,
@@ -87,7 +93,9 @@ def evaluate_video(
     try:
         if not cap.isOpened():
             raise RuntimeError(f"failed to open video: {video_path}")
-        native_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        native_fps = float(cap.get(cv2.CAP_PROP_FPS))
+        if not math.isfinite(native_fps) or native_fps <= 0:
+            raise RuntimeError(f"Invalid source frame rate: {video_path}")
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         step = max(1, int(round(native_fps / sample_fps)))
@@ -126,6 +134,18 @@ def evaluate_video(
             engines = [fall_engine, vehicle_engine, parking_engine, crowd_engine]
             if extended_scenarios:
                 engines.append(UrbanSafetyScenarioEngine(factory="urban_safety_vlm"))
+
+            if extended_scenarios:
+                evaluated_scenarios = [
+                    "US01", "US02", "US03", "US05", "US06", "US07", "US08", "US09", "US11", "US12", "US13"
+                ]
+                unconfigured_scenarios = ["US04", "US10", "US14"]
+            else:
+                evaluated_scenarios = ["US05", "US06", "US08", "US09"]
+                unconfigured_scenarios = [
+                    "US01", "US02", "US03", "US04", "US07", "US10", "US11", "US12", "US13", "US14"
+                ]
+
             pipeline = PerceptionPipeline(
                 recorder=recorder,
                 outbox=outbox,
@@ -199,6 +219,9 @@ def evaluate_video(
                 processed += 1
                 frame_idx += 1
 
+            if processed == 0:
+                raise RuntimeError(f"No frames processed from video: {video_path}")
+
             events: list[dict[str, Any]] = []
             for row in outbox.pending():
                 snapshot = row["event"]
@@ -246,6 +269,8 @@ def evaluate_video(
                 "resolution": f"{width}x{height}",
                 "native_fps": native_fps,
                 "frames_processed": processed,
+                "evaluated_scenarios": evaluated_scenarios,
+                "unconfigured_scenarios": unconfigured_scenarios,
                 "total_detections": total_detections,
                 "class_counts": class_counts,
                 "total_pose_inferences": total_pose_inferences,
@@ -271,12 +296,20 @@ def evaluate_video(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate video clips across all edge perception engines")
+    parser = argparse.ArgumentParser(description="Evaluate video clips across configured edge perception engines")
     parser.add_argument("--videos", nargs="+", help="Video path(s) to evaluate")
     parser.add_argument("--sample-fps", type=float, default=10.0)
     parser.add_argument("--max-frames", type=int, default=200)
     parser.add_argument("--no-pose", action="store_true", help="Disable pose estimation")
-    parser.add_argument("--extended-scenarios", action="store_true", help="Enable extended 14 urban safety scenarios with VLM")
+    parser.add_argument(
+        "--extended-scenarios",
+        action="store_true",
+        help=(
+            "Enable extended urban safety scenario evaluation with VLM "
+            "(evaluates US01, US02, US03, US07, US11, US12, US13; "
+            "US04, US10, US14 remain unconfigured without camera ROI and specialized configuration)"
+        ),
+    )
     parser.add_argument("--manifest", type=Path, default=ROOT / "models/yolox-tiny/manifest.json", help="Detector manifest path")
     parser.add_argument("--model", type=Path, default=ROOT / "data/oracle/yolox_tiny.onnx", help="Detector model path")
     parser.add_argument("--json-out", type=str, default="", help="Path to write JSON output")
@@ -337,6 +370,8 @@ def main():
             f"Video: {res['video']} [{res['resolution']} @ {res['native_fps']}fps] -> "
             f"{res['frames_processed']} frames evaluated"
         )
+        print(f"Evaluated scenarios ({len(res['evaluated_scenarios'])}): {', '.join(res['evaluated_scenarios'])}")
+        print(f"Unconfigured/unsupported scenarios ({len(res['unconfigured_scenarios'])}): {', '.join(res['unconfigured_scenarios'])}")
         print(
             f"Detections: {res['total_detections']} (classes: {res['class_counts']}) | "
             f"Pose: {res['total_pose_inferences']}"

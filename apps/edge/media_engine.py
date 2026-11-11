@@ -9,6 +9,7 @@ Provides a zero-plumbing interface to `go2rtc` / `MediaMTX` for:
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 import json
 import os
@@ -16,7 +17,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 import urllib.parse
 import urllib.request
-
 if TYPE_CHECKING:
     from apps.edge.recorder import FileRecorder
 
@@ -45,6 +45,41 @@ class StreamEndpointInfo:
         }
 
 
+def _origin_key(url: str) -> tuple[str, str, int | None]:
+    parts = urllib.parse.urlsplit(url)
+    scheme = parts.scheme.lower()
+    host = (parts.hostname or "").lower()
+    port = parts.port
+    if port is None:
+        if scheme == "http":
+            port = 80
+        elif scheme == "https":
+            port = 443
+    return (scheme, host, port)
+
+
+class _SafeAuthRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Strip Authorization credentials when following a cross-origin redirect."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_req is None:
+            return None
+        if _origin_key(req.full_url) != _origin_key(newurl):
+            for hdr_map in (new_req.headers, new_req.unredirected_hdrs):
+                for key in [k for k in hdr_map if k.lower() in {"authorization", "proxy-authorization"}]:
+                    hdr_map.pop(key, None)
+        return new_req
+
+
 class Go2RtcMediaEngine:
     """Adapter for go2rtc REST & streaming endpoints with local fallback."""
 
@@ -54,15 +89,30 @@ class Go2RtcMediaEngine:
         base_url: str | None = None,
         rtsp_port: int = 8554,
         timeout_seconds: float = 2.0,
+        username: str | None = None,
+        password: str | None = None,
         http_getter: Callable[[str, float], bytes] | None = None,
         fallback_recorder: "FileRecorder | None" = None,
     ) -> None:
         raw_url = base_url if base_url is not None else os.environ.get("CIVIWATCH_GO2RTC_URL", "http://127.0.0.1:1984")
+        parsed = urllib.parse.urlsplit(raw_url)
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("base_url must not contain embedded userinfo or credentials")
         self.base_url = raw_url.rstrip("/")
         self.rtsp_port = int(rtsp_port)
         self.timeout_seconds = float(timeout_seconds)
+        self._username = username if username is not None else os.environ.get("GO2RTC_API_USER")
+        self._password = password if password is not None else os.environ.get("GO2RTC_API_PASSWORD")
         self._http_getter = http_getter
         self.fallback_recorder = fallback_recorder
+        self._opener = urllib.request.build_opener(_SafeAuthRedirectHandler())
+
+    def __repr__(self) -> str:
+        authenticated = bool(self._username and self._password)
+        return (
+            f"Go2RtcMediaEngine(base_url={self.base_url!r}, "
+            f"rtsp_port={self.rtsp_port}, authenticated={authenticated})"
+        )
 
     def endpoints_for_camera(self, camera_id: str) -> StreamEndpointInfo:
         """Return canonical WebRTC, MJPEG, RTSP, and MP4 URLs for a camera stream."""
@@ -161,9 +211,16 @@ class Go2RtcMediaEngine:
                 "reason": type(exc).__name__,
             }
 
+    def _auth_headers(self) -> dict[str, str]:
+        if self._username and self._password:
+            raw_creds = f"{self._username}:{self._password}".encode("utf-8")
+            encoded = base64.b64encode(raw_creds).decode("ascii")
+            return {"Authorization": f"Basic {encoded}"}
+        return {}
+
     def _fetch(self, url: str) -> bytes:
         if self._http_getter is not None:
             return self._http_getter(url, self.timeout_seconds)
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=self.timeout_seconds) as resp:
+        req = urllib.request.Request(url, method="GET", headers=self._auth_headers())
+        with self._opener.open(req, timeout=self.timeout_seconds) as resp:
             return resp.read()

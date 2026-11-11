@@ -11,6 +11,8 @@ export DEVICE_TOKENS='{"replace-with-device-token":"lab-edge-01"}'
 export DASHBOARD_TOKEN='replace-with-dashboard-token'
 # Optional: distinct reviewer identities and credentials for event decisions.
 export REVIEWER_TOKENS='{"reviewer-1":"replace-with-reviewer-token-1","reviewer-2":"replace-with-reviewer-token-2"}'
+# Required: separate go2rtc control credentials, injected through the operator's secret environment.
+# Set GO2RTC_API_USER and GO2RTC_API_PASSWORD before starting Compose; no defaults are provided.
 docker compose up --build
 ```
 
@@ -33,6 +35,26 @@ The review API is disabled until `REVIEWER_TOKENS` is configured. Reviewer IDs a
 The chosen perception baseline is ONNX Runtime CPU on x86 with file replay. Future RKNN support uses its own target artifact and the same `PerceptionPipeline` semantics; RTSP replaces the video source configuration without changing event contracts. These future paths still require their target conformance checks.
 
 The server binds to loopback on port 8000. Open `http://127.0.0.1:8000`, choose **Set dashboard token**, and enter `DASHBOARD_TOKEN`.
+
+The media control API uses the digest-pinned official `alexxit/go2rtc:1.9.15` image.
+Compose rejects missing `GO2RTC_API_USER` or `GO2RTC_API_PASSWORD`; inject both from your
+secret environment (placeholder names are in `.env.local.example`). The edge media adapter
+uses those same variables for Basic authentication, including loopback requests, and does
+not forward credentials across redirects to a different origin. Keep this HTTP API on
+loopback or an isolated trusted network; Basic authentication does not encrypt credentials.
+Do not broaden the bind address without a separate TLS/network access policy.
+
+`infra/go2rtc.yaml` rejects foreign WebSocket origins and excludes administrative
+exit/restart/config routes from its allowlist. Public video fixtures must exist at
+`data/benchmark/intersection_traffic_1080p.mp4` and `data/benchmark/shibuya_crossing_1080p.mp4`;
+Compose mounts them under `/app/data/benchmark/`. See the
+[permission-boundary spec](openspec/changes/fix-civiwatch-media-control-auth/proposal.md)
+and [verification log](docs/logs/2026-11-11-review-remediation.md).
+
+Dashboard taxonomy filters use emitted leaf values, not scenario factory names. Clearing
+tokens removes both storage copies, event cards, evidence/download URLs and live media;
+token query parameters are consumed and removed from the address bar. Missing schedule
+state is not presented as inactive.
 
 In another shell, use the same device token and ID:
 
@@ -352,6 +374,17 @@ thresholds 0.25/0.08/0.3 rather than the pipeline defaults used by `eval_clip`.
 Explicit missing paths fail; unavailable auto-selected corpus paths retain existing skip behavior.
 Captures and temporary storage are cleaned up on errors as well as success.
 
+Extended evaluation explicitly reports US04, US10 and US14 as unconfigured without their
+camera-specific ROI/engine configuration. Sample timestamps follow source frame time, not
+the requested sampling rate. `tools/compare_models_benchmark.py` measures the perception
+pipeline only: it does not exercise recording, evidence packaging or WAN upload, and failed
+observations cannot produce a completed result or measured performance claim.
+
+`tools/train_civiwatch_detector.py --dry-run` writes separately named blueprint artifacts
+and preserves an existing active `manifest.json` and model. Without CUDA, normal training
+fails instead of silently generating a deployment. YOLOX COCO preparation regenerates
+annotations from current labels and refuses to replace unmanaged destination directories.
+
 Where latency is reported, `latency_scope` identifies `process_frame` **including local snapshot
 persistence**, excluding decode, sampling, model startup and network. This scope is not directly
 comparable with historical evaluator timings. Zero events means zero emitted snapshots—not a reviewed
@@ -365,6 +398,9 @@ Run static type checking and the entire test suite using the oracle lab environm
 .venv-oracle/bin/python -m mypy domain/ apps/ tools/
 .venv-oracle/bin/python -m pytest -q
 ```
-All **893 tests** (188 subtests) and `mypy` checks across **72 source files** pass across edge perception, centralized incident snapshots, semantic replay evaluators, tracking, fall/danger-zone/vehicle/parking/crowd incident engines, RTMPose estimation, ODD quality assessment, health monitoring, storage quota, server review API, negative audit G2 evaluation, device lifecycle, and event contracts.
+The review remediation check passed **979 tests** (207 subtests), with `mypy` clean across
+**83 source files**. These are software-lab checks, not camera calibration, target-hardware
+acceptance or production deployment evidence. Exact commands and limits are in the
+[remediation log](docs/logs/2026-11-11-review-remediation.md).
 
 Run the local contract and SQLite tests with `python -m unittest discover -s tests`. MongoDB transaction, HTTP auth, and browser checks require the Compose lab to be running; they are separate from this unit suite.

@@ -17,6 +17,7 @@ import base64
 from collections import deque
 from dataclasses import dataclass
 import json
+import math
 import os
 from typing import Any, Callable, Sequence
 import urllib.request
@@ -347,8 +348,22 @@ class VLMVerifier:
 
         raw_msg = resp_data["choices"][0]["message"]["content"]
         parsed = json.loads(raw_msg) if isinstance(raw_msg, str) else raw_msg
-        verified = bool(parsed.get("verified", True))
-        conf = float(np.clip(float(parsed.get("confidence", base_conf)), 0.0, 1.0))
+        if not isinstance(parsed, dict):
+            raise ValueError(f"remote VLM response is not a JSON object: {type(parsed).__name__}")
+
+        if "verified" not in parsed or not isinstance(parsed["verified"], bool):
+            raise ValueError("remote VLM 'verified' field must be an explicit boolean")
+        verified = parsed["verified"]
+
+        if "confidence" not in parsed:
+            raise ValueError("remote VLM 'confidence' field is required")
+        raw_conf = parsed["confidence"]
+        if isinstance(raw_conf, bool) or not isinstance(raw_conf, (int, float)):
+            raise ValueError("remote VLM 'confidence' field must be numeric")
+        conf = float(raw_conf)
+        if not math.isfinite(conf) or conf < 0.0 or conf > 1.0:
+            raise ValueError(f"remote VLM 'confidence' must be finite in [0.0, 1.0], got {conf!r}")
+
         hn_class = parsed.get("hard_negative_class")
         reasoning = str(parsed.get("reasoning") or "Verified by remote VLM storyboard analysis.")
         status = "verified" if verified and conf >= self.min_confidence else "filtered_false_positive"

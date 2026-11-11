@@ -1,23 +1,19 @@
-"""Comprehensive 3-Model Performance & Full-Edge Video Pipeline Benchmark.
+"""Perception Pipeline & Multi-Model Detection Benchmark.
 
-Compares:
-1. Baseline YOLOX-Tiny (416x416 COCO)
-2. Fine-tuned CiviWatch YOLOX-Tiny (416x416 HCMC)
-3. Fine-tuned CiviWatch YOLOX-s (640x640 HCMC)
-4. Fine-tuned CiviWatch YOLO26s (640x640 HCMC NMS-Free)
-
-Across:
-- Detection Recall & Night Recall on 100 AIC_HCMC_2020 validation frames.
+Compares configured detection models on:
+- Class-aware 1-to-1 Detection Recall & Night Recall on validation frames.
 - CPU Inference Latency (P50 / P95).
-- Full Edge Pipeline execution (`LivePerceptionRunner` file mode) on real urban video datasets.
-- Markdown report generation at `docs/reports/2026-11-10-three-models-benchmark-comparison.md`.
+- Perception Pipeline execution (`PerceptionPipeline`: Detector -> Tracker -> Homography -> Pose -> Engines)
+  on video clips (recording, evidence packaging, and WAN upload are not exercised).
+- Measured Markdown report generation.
 """
 
 from __future__ import annotations
 
 import argparse
+from fractions import Fraction
 import json
-import os
+import math
 from pathlib import Path
 import sys
 import tempfile
@@ -33,16 +29,13 @@ import numpy as np
 
 from apps.edge.homography import GroundPlaneHomography
 from apps.edge.incident import IncidentEngine
-from apps.edge.live_pipeline import LivePerceptionRunner
 from apps.edge.oracle_detector import CiviWatchDetector
 from apps.edge.outbox import EventOutbox
+from apps.edge.perception import PerceptionExecution
 from apps.edge.pipeline import PerceptionPipeline
 from apps.edge.pose import PoseManager, PoseScheduler, RtmposeEstimator
 from apps.edge.recorder import FileRecorder
-from apps.edge.tracker import ByteTracker
 from apps.edge.vehicle_incident import VehicleIncidentEngine
-
-ROOT = Path(__file__).resolve().parent.parent
 
 MODELS_CONFIG: list[dict[str, Any]] = [
     {
@@ -51,7 +44,6 @@ MODELS_CONFIG: list[dict[str, Any]] = [
         "manifest": ROOT / "models/yolox-tiny/manifest.json",
         "model": ROOT / "data/oracle/yolox_tiny.onnx",
         "resolution": 416,
-        "license": "Apache-2.0",
         "decode": "yolox_grid",
     },
     {
@@ -60,7 +52,6 @@ MODELS_CONFIG: list[dict[str, Any]] = [
         "manifest": ROOT / "models/yolox-tiny-hcmc/manifest.json",
         "model": ROOT / "models/yolox-tiny-hcmc/yolox_tiny_civiwatch_416.onnx",
         "resolution": 416,
-        "license": "Apache-2.0",
         "decode": "yolox_grid",
     },
     {
@@ -69,7 +60,6 @@ MODELS_CONFIG: list[dict[str, Any]] = [
         "manifest": ROOT / "models/yolox-s-hcmc/manifest.json",
         "model": ROOT / "models/yolox-s-hcmc/yolox_s_civiwatch_640.onnx",
         "resolution": 640,
-        "license": "Apache-2.0",
         "decode": "yolox_grid",
     },
     {
@@ -78,7 +68,6 @@ MODELS_CONFIG: list[dict[str, Any]] = [
         "manifest": ROOT / "models/civiwatch-640/manifest.json",
         "model": ROOT / "models/civiwatch-640/yolo26s_civiwatch_640.onnx",
         "resolution": 640,
-        "license": "AGPL-3.0",
         "decode": "nms_free",
     },
 ]
@@ -92,7 +81,42 @@ def iou(b1: Sequence[float], b2: Sequence[float]) -> float:
     inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
     a1 = max(0.0, b1[2] - b1[0]) * max(0.0, b1[3] - b1[1])
     a2 = max(0.0, b2[2] - b2[0]) * max(0.0, b2[3] - b2[1])
-    return float(inter / (a1 + a2 - inter + 1e-9))
+    union = a1 + a2 - inter
+    if union <= 0.0:
+        return 0.0
+    return float(inter / union)
+
+
+def match_predictions_to_ground_truth(
+    ground_truths: Sequence[dict[str, Any]],
+    predictions: Sequence[tuple[int, Sequence[float]]],
+    iou_threshold: float = 0.4,
+) -> tuple[set[int], set[int]]:
+    """Class-aware one-to-one greedy matching between ground truths and predictions."""
+    candidates: list[tuple[float, int, int]] = []
+    for gt_idx, gt in enumerate(ground_truths):
+        gt_cat = int(gt["category_id"])
+        gbox = gt.get("bbox_xyxy")
+        if gbox is None:
+            bx, by, bw, bh = gt["bbox"]
+            gbox = [bx, by, bx + bw, by + bh]
+        for pred_idx, (pred_cat, pbox) in enumerate(predictions):
+            if pred_cat != gt_cat:
+                continue
+            iou_val = iou(pbox, gbox)
+            if iou_val >= iou_threshold:
+                candidates.append((iou_val, gt_idx, pred_idx))
+
+    candidates.sort(key=lambda item: (-item[0], item[1], item[2]))
+
+    matched_gts: set[int] = set()
+    matched_preds: set[int] = set()
+    for _, gt_idx, pred_idx in candidates:
+        if gt_idx not in matched_gts and pred_idx not in matched_preds:
+            matched_gts.add(gt_idx)
+            matched_preds.add(pred_idx)
+
+    return matched_gts, matched_preds
 
 
 def evaluate_detection_accuracy(
@@ -100,17 +124,22 @@ def evaluate_detection_accuracy(
     val_data: dict[str, Any],
     images_base: Path,
     sample_count: int = 100,
+    iou_threshold: float = 0.4,
 ) -> dict[str, Any]:
-    """Benchmark detection recall, class distribution, and CPU latency on AIC_HCMC_2020 validation frames."""
+    """Benchmark class-aware 1-to-1 detection recall and CPU latency on validation frames."""
     manifest_p = Path(model_cfg["manifest"])
     model_p = Path(model_cfg["model"])
     if not manifest_p.is_file() or not model_p.is_file():
         return {"status": "unavailable", "reason": "model file not found"}
 
+    images = val_data.get("images") or []
+    if sample_count <= 0 or not images:
+        return {"status": "failed", "reason": "no validation images configured", "frames_processed": 0}
+
     detector = CiviWatchDetector(manifest_p, model_p, strict_runtime=False)
 
     anns_by_img: dict[int, list[dict[str, Any]]] = {}
-    for a in val_data["annotations"]:
+    for a in val_data.get("annotations", []):
         anns_by_img.setdefault(int(a["image_id"]), []).append(a)
 
     LABEL_MAP = {
@@ -122,7 +151,7 @@ def evaluate_detection_accuracy(
         "truck": 4,
     }
 
-    sample_imgs = val_data["images"][:: max(1, len(val_data["images"]) // sample_count)][:sample_count]
+    sample_imgs = images[:: max(1, len(images) // sample_count)][:sample_count]
     gt_counts = {1: 0, 2: 0, 3: 0, 4: 0}
     tp_counts = {1: 0, 2: 0, 3: 0, 4: 0}
     pred_counts: dict[str, int] = {}
@@ -139,47 +168,53 @@ def evaluate_detection_accuracy(
             continue
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         is_dark = float(np.mean(rgb)) < 75.0
-        frame = {
-            "camera_id": "aic-bench",
-            "stream_session_id": "s1",
-            "core_epoch": 1,
-            "origin": "replay",
-            "frame_id": idx,
-            "pts": idx,
-            "time_base": "1/10",
-            "event_time": idx / 10.0,
-        }
+        frame = PerceptionExecution.frame("aic-bench", "s1", 1, "replay", idx, idx / 10.0)
         t0 = time.perf_counter()
         res = detector.detect(rgb, frame)
-        if res.get("detection_status") not in {"ok", "ok_empty"}:
-            raise RuntimeError(f"Detector failed on frame {idx}: {res.get('error')}")
+        det_status = res.get("detection_status")
+        if det_status not in {"ok", "ok_empty"}:
+            return {
+                "status": "failed",
+                "error": f"Detector failed on frame {idx}: status={det_status}, error={res.get('error')}",
+                "frames_processed": len(latencies),
+            }
         latencies.append((time.perf_counter() - t0) * 1000.0)
 
         preds: list[tuple[int, list[float]]] = []
-        for d in res["detections"]:
+        for d in res.get("detections", []):
             lbl = d["label"]
             pred_counts[lbl] = pred_counts.get(lbl, 0) + 1
             if lbl in LABEL_MAP:
                 preds.append((LABEL_MAP[lbl], d["bbox_xyxy"]))
 
-        for g in anns_by_img.get(int(info["id"]), []):
+        img_gts = [
+            g for g in anns_by_img.get(int(info["id"]), []) if int(g.get("category_id", -1)) in gt_counts
+        ]
+        for g in img_gts:
             cat = int(g["category_id"])
-            if cat not in gt_counts:
-                continue
-            bx, by, bw, bh = g["bbox"]
-            gbox = [bx, by, bx + bw, by + bh]
             gt_counts[cat] += 1
             if is_dark:
                 night_gt += 1
-            if any(p[0] == cat and iou(p[1], gbox) >= 0.4 for p in preds):
-                tp_counts[cat] += 1
-                if is_dark:
-                    night_tp += 1
+
+        matched_gts, _ = match_predictions_to_ground_truth(img_gts, preds, iou_threshold=iou_threshold)
+        for gt_idx in matched_gts:
+            cat = int(img_gts[gt_idx]["category_id"])
+            tp_counts[cat] += 1
+            if is_dark:
+                night_tp += 1
+
+    if not latencies:
+        return {
+            "status": "failed",
+            "reason": "no valid validation images processed",
+            "frames_processed": 0,
+        }
 
     tot_gt = sum(gt_counts.values())
     tot_tp = sum(tp_counts.values())
     return {
         "status": "completed",
+        "frames_processed": len(latencies),
         "file_size_mb": round(model_p.stat().st_size / 1e6, 1),
         "overall_recall": round((tot_tp / max(1, tot_gt)) * 100.0, 1),
         "moto_recall": round((tp_counts[1] / max(1, gt_counts[1])) * 100.0, 1),
@@ -188,117 +223,322 @@ def evaluate_detection_accuracy(
         "truck_recall": round((tp_counts[4] / max(1, gt_counts[4])) * 100.0, 1),
         "night_recall": round((night_tp / max(1, night_gt)) * 100.0, 1) if night_gt else 0.0,
         "person_detections": pred_counts.get("person", 0),
-        "latency_p50_ms": round(float(np.median(latencies)), 1) if latencies else 0.0,
-        "latency_p95_ms": round(float(np.percentile(latencies, 95)), 1) if latencies else 0.0,
+        "latency_p50_ms": round(float(np.median(latencies)), 1),
+        "latency_p95_ms": round(float(np.percentile(latencies, 95)), 1),
         "pred_counts": pred_counts,
     }
 
 
-def evaluate_full_edge_pipeline_on_video(
+def evaluate_perception_pipeline_on_video(
     model_cfg: dict[str, Any],
     video_path: Path,
     max_frames: int = 100,
     sample_fps: float = 10.0,
 ) -> dict[str, Any]:
-    """Execute the full production edge pipeline (LivePerceptionRunner) on a video dataset."""
+    """Benchmark PerceptionPipeline execution on a video clip.
+
+    Exercises perception path (detector, tracker, homography, pose, incident engines)
+    without claiming full edge ring recording, evidence packaging, or WAN upload.
+    """
+    unexercised = ["full_edge_recording", "evidence_packaging", "wan_outbox_upload"]
     manifest_p = Path(model_cfg["manifest"])
     model_p = Path(model_cfg["model"])
     if not manifest_p.is_file() or not model_p.is_file() or not video_path.is_file():
-        return {"status": "unavailable", "fps": 0.0, "events": 0, "detections": 0}
+        return {
+            "status": "unavailable",
+            "pipeline_type": "perception_pipeline",
+            "unexercised_components": unexercised,
+            "frames_processed": 0,
+            "pipeline_fps": 0.0,
+            "total_events": 0,
+            "total_detections": 0,
+        }
 
-    with tempfile.TemporaryDirectory(prefix="civiwatch-edge-bench-") as tmp:
-        root_dir = Path(tmp)
-        rec_dir = root_dir / "ring"
-        rec = FileRecorder(rec_dir, ring_seconds=120)
-        outbox = EventOutbox(root_dir / "events.sqlite3")
+    if sample_fps <= 0 or not math.isfinite(sample_fps):
+        return {
+            "status": "failed",
+            "error": "invalid sample_fps",
+            "pipeline_type": "perception_pipeline",
+            "unexercised_components": unexercised,
+            "frames_processed": 0,
+            "pipeline_fps": 0.0,
+            "total_events": 0,
+            "total_detections": 0,
+        }
 
-        cap = cv2.VideoCapture(str(video_path))
-        vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
-        vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
-        native_fps = float(cap.get(cv2.CAP_PROP_FPS)) or 25.0
-        total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or max_frames
-        cap.release()
+    cap = cv2.VideoCapture(str(video_path))
+    try:
+        if not cap.isOpened():
+            return {
+                "status": "failed",
+                "error": f"failed to open video: {video_path}",
+                "pipeline_type": "perception_pipeline",
+                "unexercised_components": unexercised,
+                "frames_processed": 0,
+                "pipeline_fps": 0.0,
+                "total_events": 0,
+                "total_detections": 0,
+            }
+
+        vw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        vh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        native_fps = float(cap.get(cv2.CAP_PROP_FPS))
+        if vw <= 0 or vh <= 0 or not math.isfinite(native_fps) or native_fps <= 0.0:
+            return {
+                "status": "failed",
+                "error": "invalid video stream dimensions or native_fps",
+                "pipeline_type": "perception_pipeline",
+                "unexercised_components": unexercised,
+                "frames_processed": 0,
+                "pipeline_fps": 0.0,
+                "total_events": 0,
+                "total_detections": 0,
+            }
+
         step_frames = max(1, int(round(native_fps / sample_fps)))
 
-        hom = GroundPlaneHomography.default_urban_cctv(vw, vh, road_width_m=15.0, road_depth_m=45.0)
-        vehicle_eng = VehicleIncidentEngine(
-            homography=hom,
-            min_moving_speed=15.0,
-            impact_deceleration_threshold=120.0,
-            enable_vlm=False,
-        )
-        person_eng = IncidentEngine()
+        with tempfile.TemporaryDirectory(prefix="civiwatch-perception-bench-") as tmp:
+            root_dir = Path(tmp)
+            rec = FileRecorder(root_dir / "ring", ring_seconds=120)
+            outbox = EventOutbox(root_dir / "events.sqlite3")
 
-        estimator = RtmposeEstimator(
-            manifest_path=ROOT / "models/rtmpose-tiny/manifest.json",
-            model_path=ROOT / "models/rtmpose-tiny/rtmpose_tiny.onnx",
-        )
-        pose_mgr = PoseManager(estimator=estimator, max_queue_size=30, max_cached_frames=30)
-        scheduler = PoseScheduler(batch_budget=8)
+            hom = GroundPlaneHomography.default_urban_cctv(vw, vh, road_width_m=15.0, road_depth_m=45.0)
+            vehicle_eng = VehicleIncidentEngine(
+                homography=hom,
+                min_moving_speed=15.0,
+                impact_deceleration_threshold=120.0,
+                enable_vlm=False,
+            )
+            person_eng = IncidentEngine()
 
-        pipeline = PerceptionPipeline(
-            recorder=rec,
-            outbox=outbox,
-            manifest_path=manifest_p,
-            model_path=model_p,
-            incident_engines=[vehicle_eng, person_eng],
-            pose_manager=pose_mgr,
-            pose_scheduler=scheduler,
-            origin="replay",
-        )
+            estimator = RtmposeEstimator(
+                manifest_path=ROOT / "models/rtmpose-tiny/manifest.json",
+                model_path=ROOT / "models/rtmpose-tiny/rtmpose_tiny.onnx",
+            )
+            pose_mgr = PoseManager(estimator=estimator, max_queue_size=30, max_cached_frames=30)
+            scheduler = PoseScheduler(batch_budget=8)
 
-        runner = LivePerceptionRunner(
-            root=root_dir,
-            rtsp_url="",
-            fallback_path=video_path,
-            pipeline=pipeline,
-            sample_fps=sample_fps,
-        )
+            pipeline = PerceptionPipeline(
+                recorder=rec,
+                outbox=outbox,
+                manifest_path=manifest_p,
+                model_path=model_p,
+                incident_engines=[vehicle_eng, person_eng],
+                pose_manager=pose_mgr,
+                pose_scheduler=scheduler,
+                origin="replay",
+            )
 
-        # Verify file-fallback runner reads video frames directly via step()
-        # and sample at sample_fps cleanly without exceeding clip length
-        cap_iter = cv2.VideoCapture(str(video_path))
-        t_start = time.perf_counter()
-        total_events = 0
-        total_dets = 0
-        latencies: list[float] = []
-        sample_idx = 0
-        raw_idx = 0
+            t_start = time.perf_counter()
+            total_events = 0
+            total_dets = 0
+            latencies: list[float] = []
+            sample_idx = 0
+            raw_idx = 0
 
-        try:
-            while sample_idx < max_frames and raw_idx < total_video_frames:
-                ok, bgr = cap_iter.read()
+            while True:
+                if max_frames and sample_idx >= max_frames:
+                    break
+                ok, bgr = cap.read()
                 if not ok:
                     break
+                source_frame_idx = raw_idx
                 raw_idx += 1
-                if (raw_idx - 1) % step_frames != 0:
+                if source_frame_idx % step_frames != 0:
                     continue
+
                 rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                raw_ts = source_frame_idx / native_fps
+                pts = round(raw_ts * 1_000_000)
+                ts = float(pts * Fraction("1/1000000"))
+
                 t0 = time.perf_counter()
-                evs = runner.step(frame=rgb, frame_id=sample_idx, timestamp=sample_idx * (1.0 / sample_fps))
-                latencies.append((time.perf_counter() - t0) * 1000.0)
-                total_events += len(evs)
+                try:
+                    evs = pipeline.process_frame(rgb, timestamp=ts, frame_id=source_frame_idx)
+                except Exception as exc:
+                    return {
+                        "status": "failed",
+                        "error": f"Pipeline exception on frame {source_frame_idx}: {exc}",
+                        "pipeline_type": "perception_pipeline",
+                        "unexercised_components": unexercised,
+                        "frames_processed": sample_idx,
+                        "total_detections": total_dets,
+                        "total_events": total_events,
+                        "pipeline_fps": 0.0,
+                    }
+                step_ms = (time.perf_counter() - t0) * 1000.0
+
                 obs = pipeline.last_observation or {}
+                det_status = obs.get("detection_status")
+                if det_status not in {"ok", "ok_empty"}:
+                    return {
+                        "status": "failed",
+                        "error": f"Detection failed on frame {source_frame_idx}: status={det_status}, error={obs.get('error')}",
+                        "pipeline_type": "perception_pipeline",
+                        "unexercised_components": unexercised,
+                        "frames_processed": sample_idx,
+                        "total_detections": total_dets,
+                        "total_events": total_events,
+                        "pipeline_fps": 0.0,
+                    }
+
+                latencies.append(step_ms)
+                total_events += len(evs or [])
                 total_dets += len(obs.get("detections", []))
                 sample_idx += 1
-        finally:
-            cap_iter.release()
-            runner.stop()
 
-        elapsed = time.perf_counter() - t_start
-        actual_fps = round(len(latencies) / max(0.001, elapsed), 1)
-        persisted_outbox = len(outbox.pending())
+            if sample_idx == 0:
+                return {
+                    "status": "failed",
+                    "error": "No frames processed from video",
+                    "pipeline_type": "perception_pipeline",
+                    "unexercised_components": unexercised,
+                    "frames_processed": 0,
+                    "total_detections": 0,
+                    "total_events": 0,
+                    "pipeline_fps": 0.0,
+                }
 
-        return {
-            "status": "completed",
-            "frames_processed": len(latencies),
-            "total_detections": total_dets,
-            "total_events": total_events,
-            "persisted_outbox": persisted_outbox,
-            "pipeline_fps": actual_fps,
-            "pipeline_p50_ms": round(float(np.median(latencies)), 1) if latencies else 0.0,
-            "pipeline_p95_ms": round(float(np.percentile(latencies, 95)), 1) if latencies else 0.0,
-        }
+            elapsed = time.perf_counter() - t_start
+            actual_fps = round(len(latencies) / max(0.001, elapsed), 1)
+            persisted_outbox = len(outbox.pending())
+
+            return {
+                "status": "completed",
+                "pipeline_type": "perception_pipeline",
+                "unexercised_components": unexercised,
+                "frames_processed": len(latencies),
+                "total_detections": total_dets,
+                "total_events": total_events,
+                "persisted_outbox": persisted_outbox,
+                "pipeline_fps": actual_fps,
+                "pipeline_p50_ms": round(float(np.median(latencies)), 1),
+                "pipeline_p95_ms": round(float(np.percentile(latencies, 95)), 1),
+            }
+    finally:
+        cap.release()
+
+
+def generate_markdown_report(results: list[dict[str, Any]]) -> str:
+    """Render measured benchmark outcomes into a Markdown report without unmeasured claims."""
+    report_lines = [
+        "# Báo cáo Đo lường & So sánh Hiệu năng Model Nhận diện CiviWatch (Perception Pipeline)",
+        "",
+        f"**Thời điểm thực hiện:** {time.strftime('%Y-%m-%d %H:%M:%S')}  ",
+        "**Môi trường đo kiểm:** CPU ONNXRuntime (Perception Pipeline replay)  ",
+        "",
+        "---",
+        "",
+        "## 1. Cấu hình Kỹ thuật các Model được Đánh giá",
+        "",
+        "| Model | Kiến trúc | Độ phân giải | Kích thước file | Định dạng đầu ra | Trạng thái |",
+        "|---|:---:|:---:|:---:|:---:|:---:|",
+    ]
+
+    for r in results:
+        cfg = r["model_config"]
+        acc = r.get("accuracy", {})
+        size_mb = acc.get("file_size_mb")
+        size_str = f"{size_mb} MB" if size_mb is not None else "N/A"
+        status_str = str(acc.get("status", "unknown"))
+        arch = cfg["id"].split("_")[0].upper()
+        report_lines.append(
+            f"| **{cfg['name']}** | {arch} | {cfg['resolution']}×{cfg['resolution']} | {size_str} | `{cfg['decode']}` | `{status_str}` |"
+        )
+
+    report_lines.extend([
+        "",
+        "---",
+        "",
+        "## 2. Đo kiểm Recall (1-to-1 Class-Aware @ IoU>=0.4) & Độ trễ CPU",
+        "",
+        "| Model | Xe máy (`two_wheeler`) | Ô tô (`car`) | Xe buýt (`bus`) | Xe tải (`truck`) | **Tổng thể Recall@0.4** | **Ban đêm / Thiếu sáng** | Người (`person`) | Độ trễ CPU (P50) |",
+        "|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|",
+    ])
+
+    def _pct(val: Any) -> str:
+        return f"{val}%" if isinstance(val, (int, float)) else "N/A"
+
+    for r in results:
+        cfg = r["model_config"]
+        acc = r.get("accuracy", {})
+        if acc.get("status") == "completed":
+            p50_str = f"**{acc['latency_p50_ms']} ms**" if acc.get("latency_p50_ms") is not None else "N/A"
+            person_str = f"{acc.get('person_detections', 'N/A')} dets"
+            report_lines.append(
+                f"| **{cfg['name']}** | {_pct(acc.get('moto_recall'))} | {_pct(acc.get('car_recall'))} | "
+                f"{_pct(acc.get('bus_recall'))} | {_pct(acc.get('truck_recall'))} | **{_pct(acc.get('overall_recall'))}** | "
+                f"**{_pct(acc.get('night_recall'))}** | {person_str} | {p50_str} |"
+            )
+        else:
+            report_lines.append(
+                f"| **{cfg['name']}** | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A ({acc.get('status', 'unavailable')}) |"
+            )
+
+    video_names: list[str] = []
+    for r in results:
+        for v_name in r.get("videos", {}):
+            if v_name not in video_names:
+                video_names.append(v_name)
+
+    report_lines.extend([
+        "",
+        "---",
+        "",
+        "## 3. Đo kiểm Đường Nhận diện Edge (Perception Pipeline trên Video)",
+        "",
+        "Phạm vi đo: `PerceptionPipeline` (Detector $\\rightarrow$ ByteTrack $\\rightarrow$ Homography $\\rightarrow$ PoseManager $\\rightarrow$ Incident Engines). "
+        "Lưu ý: Ghi hình ring đầy đủ, đóng gói evidence và đồng bộ WAN outbox **không** được thực thi trong bài đo này.",
+        "",
+    ])
+
+    if video_names:
+        header = "| Model | " + " | ".join(video_names) + " |"
+        sep = "|---|" + "|".join([":---:"] * len(video_names)) + "|"
+        report_lines.extend([header, sep])
+        for r in results:
+            cfg = r["model_config"]
+            vids = r.get("videos", {})
+            cells: list[str] = []
+            for v_name in video_names:
+                v_res = vids.get(v_name, {})
+                if v_res.get("status") == "completed":
+                    cells.append(
+                        f"**{v_res.get('pipeline_fps')} FPS** / {v_res.get('total_detections')} dets / {v_res.get('total_events')} ev"
+                    )
+                else:
+                    cells.append(f"`{v_res.get('status', 'N/A')}`")
+            report_lines.append(f"| **{cfg['name']}** | " + " | ".join(cells) + " |")
+    else:
+        report_lines.append("_Không có video nào được cấu hình để đo kiểm._")
+
+    report_lines.extend([
+        "",
+        "---",
+        "",
+        "## 4. Kết quả Đo được & Giới hạn Phạm vi",
+        "",
+    ])
+
+    for r in results:
+        cfg = r["model_config"]
+        acc = r.get("accuracy", {})
+        if acc.get("status") == "completed":
+            report_lines.append(
+                f"- **{cfg['name']}:** Overall Recall@0.4 = **{acc.get('overall_recall')}%** "
+                f"(xe máy: {acc.get('moto_recall')}%, ban đêm: {acc.get('night_recall')}%), "
+                f"độ trễ CPU P50 = **{acc.get('latency_p50_ms')} ms** (P95 = {acc.get('latency_p95_ms')} ms)."
+            )
+        else:
+            reason = acc.get("reason") or acc.get("error") or "không khả dụng"
+            report_lines.append(f"- **{cfg['name']}:** `{acc.get('status', 'unavailable')}` ({reason}).")
+
+    report_lines.extend([
+        "",
+        "**Giới hạn chưa đo trong bài benchmark này:** mAP COCO, tốc độ suy luận GPU thực tế, ghi hình ring liên tục, đóng gói evidence, đồng bộ WAN và kiểm định bản quyền/phần cứng triển khai cần đánh giá riêng theo từng môi trường mục tiêu.",
+    ])
+
+    return "\n".join(report_lines) + "\n"
 
 
 def main():
@@ -309,7 +549,7 @@ def main():
     args = parser.parse_args()
 
     print("=" * 72)
-    print("   CIVIWATCH COMPREHENSIVE 3-MODEL BENCHMARK & FULL-EDGE EVALUATION")
+    print("   CIVIWATCH MULTI-MODEL DETECTION & PERCEPTION PIPELINE BENCHMARK")
     print("=" * 72)
 
     D = Path("/media/tieubaoca/HDD1/F/dataset/video/AIC_HCMC_2020")
@@ -327,15 +567,21 @@ def main():
     results: list[dict[str, Any]] = []
 
     for m_cfg in MODELS_CONFIG:
-        print(f"\n---> Evaluating: {m_cfg['name']} ({m_cfg['resolution']}x{m_cfg['resolution']}, {m_cfg['license']}) ...")
+        print(f"\n---> Evaluating: {m_cfg['name']} ({m_cfg['resolution']}x{m_cfg['resolution']}) ...")
         acc = evaluate_detection_accuracy(m_cfg, val_data, images_base, sample_count=args.sample_count)
-        print(f"     Accuracy -> Overall Recall: {acc.get('overall_recall')}% | Moto: {acc.get('moto_recall')}% | Night: {acc.get('night_recall')}% | CPU P50: {acc.get('latency_p50_ms')} ms")
+        print(
+            f"     Accuracy [{acc.get('status')}] -> Overall Recall: {acc.get('overall_recall')}% | "
+            f"Moto: {acc.get('moto_recall')}% | Night: {acc.get('night_recall')}% | CPU P50: {acc.get('latency_p50_ms')} ms"
+        )
 
         vid_results: dict[str, Any] = {}
         for v_name, v_path in test_videos:
-            v_res = evaluate_full_edge_pipeline_on_video(m_cfg, v_path, max_frames=args.max_video_frames)
+            v_res = evaluate_perception_pipeline_on_video(m_cfg, v_path, max_frames=args.max_video_frames)
             vid_results[v_name] = v_res
-            print(f"     Video: {v_name:<30s} -> {v_res.get('pipeline_fps')} FPS | Detections: {v_res.get('total_detections')} | Incidents: {v_res.get('total_events')}")
+            print(
+                f"     Video [{v_res.get('status')}]: {v_name:<30s} -> {v_res.get('pipeline_fps')} FPS | "
+                f"Detections: {v_res.get('total_detections')} | Incidents: {v_res.get('total_events')}"
+            )
 
         results.append({
             "model_config": m_cfg,
@@ -343,94 +589,10 @@ def main():
             "videos": vid_results,
         })
 
-    # Generate Markdown Report
-    report_lines = [
-        "# Báo cáo Đo lường & So sánh Hiệu năng Toàn bộ 3 Model CiviWatch sau Fine-tune",
-        "",
-        f"**Thời điểm thực hiện:** {time.strftime('%Y-%m-%d %H:%M:%S')}  ",
-        "**Môi trường:** CPU ONNXRuntime + GPU RTX 5060 Ti fine-tune  ",
-        "**Tập dữ liệu:** `AIC_HCMC_2020` (25.977 ảnh, 299.157 boxes) + Video giao thông thực tế TP.HCM  ",
-        "",
-        "---",
-        "",
-        "## 1. So sánh Tổng quan Cấu hình Kỹ thuật & Bản quyền (License)",
-        "",
-        "| Model | Kiến trúc | Độ phân giải | Kích thước file | Định dạng đầu ra | License | Phân khúc phần cứng khuyến nghị |",
-        "|---|:---:|:---:|:---:|:---:|:---:|---|",
-    ]
-
-    for r in results:
-        cfg = r["model_config"]
-        acc = r["accuracy"]
-        size_str = f"{acc.get('file_size_mb', 'N/A')} MB"
-        target_hw = (
-            "CPU thuần / Raspberry Pi 5 / RK3588 (Baseline)" if cfg["id"] == "yolox_tiny_coco" else
-            "Edge Box giá rẻ / RK3566–RK3588 NPU (Siêu nhẹ)" if cfg["id"] == "yolox_tiny_hcmc" else
-            "Edge AI Box / NPU mạnh / Cần 100% Apache-2.0" if cfg["id"] == "yolox_s_hcmc" else
-            "Jetson Orin NX / Server GPU / Độ chính xác tối đa"
-        )
-        report_lines.append(f"| **{cfg['name']}** | {cfg['id'].split('_')[0].upper()} | {cfg['resolution']}×{cfg['resolution']} | {size_str} | `{cfg['decode']}` | **{cfg['license']}** | {target_hw} |")
-
-    report_lines.extend([
-        "",
-        "---",
-        "",
-        "## 2. Đo kiểm Độ chính xác & Recall trên 100 ảnh Kiểm chuẩn AIC_HCMC_2020",
-        "",
-        "| Model | Xe máy (`two_wheeler`) | Ô tô (`car`) | Xe buýt (`bus`) | Xe tải (`truck`) | **Tổng thể Recall@0.4** | **Ban đêm / Thiếu sáng** | Người (`person`) | Độ trễ CPU (P50) |",
-        "|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|",
-    ])
-
-    for r in results:
-        cfg = r["model_config"]
-        acc = r["accuracy"]
-        report_lines.append(
-            f"| **{cfg['name']}** | {acc.get('moto_recall', 'N/A')}% | {acc.get('car_recall', 'N/A')}% | {acc.get('bus_recall', 'N/A')}% | {acc.get('truck_recall', 'N/A')}% | **{acc.get('overall_recall', 'N/A')}%** | **{acc.get('night_recall', 'N/A')}%** | {acc.get('person_detections', 'N/A')} dets | **{acc.get('latency_p50_ms', 'N/A')} ms** |"
-        )
-
-    report_lines.extend([
-        "",
-        "---",
-        "",
-        "## 3. Đo kiểm Full Luồng Xử lý Edge (`LivePerceptionRunner` trên Video Thật)",
-        "",
-        "Chạy toàn bộ luồng sản phẩm Edge: Đọc file video thay thế RTSP $\\rightarrow$ Ring Recorder $\\rightarrow$ `PerceptionPipeline` (Detector $\\rightarrow$ ByteTrack $\\rightarrow$ Homography $\\rightarrow$ PoseManager $\\rightarrow$ All Incident Engines) $\\rightarrow$ Outbox SQLite.",
-        "",
-        "| Model | Video sample_01 (FPS / Dets / Sự kiện) | Video sample_02 (FPS / Dets / Sự kiện) | Shibuya Crossing 1080p (FPS / Dets) | Intersection 1080p (FPS / Dets) | Person Fall (FPS / Sự kiện) |",
-        "|---|:---:|:---:|:---:|:---:|:---:|",
-    ])
-
-    for r in results:
-        cfg = r["model_config"]
-        vids = r["videos"]
-        s1 = vids.get("sample_01.mp4 (HCMC Traffic 1)", {})
-        s2 = vids.get("sample_02.mp4 (HCMC Traffic 2)", {})
-        shib = vids.get("shibuya_crossing_1080p.mp4 (Pedestrian/Veh)", {})
-        inter = vids.get("intersection_traffic_1080p.mp4 (Traffic 1080p)", {})
-        fall = vids.get("fall_0001.mp4 (Person Fall)", {})
-
-        s1_str = f"**{s1.get('pipeline_fps')} FPS** / {s1.get('total_detections')} dets / {s1.get('total_events')} ev"
-        s2_str = f"**{s2.get('pipeline_fps')} FPS** / {s2.get('total_detections')} dets / {s2.get('total_events')} ev"
-        shib_str = f"**{shib.get('pipeline_fps')} FPS** / {shib.get('total_detections')} dets"
-        inter_str = f"**{inter.get('pipeline_fps')} FPS** / {inter.get('total_detections')} dets"
-        fall_str = f"**{fall.get('pipeline_fps')} FPS** / {fall.get('total_events')} ev"
-
-        report_lines.append(f"| **{cfg['name']}** | {s1_str} | {s2_str} | {shib_str} | {inter_str} | {fall_str} |")
-
-    report_lines.extend([
-        "",
-        "---",
-        "",
-        "## 4. Kết luận & Khuyến nghị Triển khai Thực tế",
-        "",
-        "1. **CiviWatch YOLO26s (640×640 NMS-Free):** Dành cho các thiết bị Edge mạnh (Jetson Orin NX, mini PC i5/i7 có GPU) hoặc Server tập trung. Đạt độ thu hồi xe máy cao nhất (**95.6%**), ban đêm (**91.9%**) và mAP50 (**90.2%**), không tốn chi phí NMS trên CPU/GPU.",
-        "2. **CiviWatch YOLOX-Tiny (416×416 HCMC):** Dành cho các thiết bị Edge giá rẻ / CPU thuần / Raspberry Pi 5 / RK3566 NPU. Đạt FPS cao nhất (~25–35 FPS trên CPU), độ thu hồi xe máy tăng từ 14.2% lên **90.5%** với bản quyền **100% Apache-2.0 sạch**.",
-        "3. **CiviWatch YOLOX-s (640×640 HCMC):** Đạt **88.6% mAP50** và độ trễ suy luận GPU siêu tốc **3.67 ms**. Đây là lựa chọn tối ưu cho các khách hàng doanh nghiệp yêu cầu **100% bản quyền Apache-2.0 sạch**, cần độ chính xác cao tương đương YOLO26s mà không chịu ràng buộc lây nhiễm mã nguồn của AGPL-3.0.",
-    ])
-
+    report_text = generate_markdown_report(results)
     args.out_report.parent.mkdir(parents=True, exist_ok=True)
-    args.out_report.write_text("\n".join(report_lines) + "\n", encoding="utf-8")
-    print(f"\n[REPORT] Saved full comparative benchmark report to: {args.out_report}")
+    args.out_report.write_text(report_text, encoding="utf-8")
+    print(f"\n[REPORT] Saved comparative perception benchmark report to: {args.out_report}")
 
 
 if __name__ == "__main__":

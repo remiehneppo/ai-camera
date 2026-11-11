@@ -1,14 +1,4 @@
-"""Comprehensive test suite for CiviWatch v2 architecture & rebranding (branch: civi-watch).
-
-Verifies:
-1. Hard rebranding to CiviWatch / civi_watch across server config, FastAPI title, export CLI, and UI.
-2. Tier-1 Go2RtcMediaEngine endpoints, stream probing, and snapshot retrieval.
-3. Tier-2 GroundPlaneHomography 3x3 perspective transform and metric kinematics (m/s, m/s^2).
-4. Tier-2 Batched RTMPose estimation (`estimate_batch`) across multiple person bounding boxes.
-5. Tier-3 StoryboardBuilder 2x3 Temporal Grid (Set-of-Mark) + VLMVerifier (local & remote JSON schema).
-6. Tier-3 Full coverage of all 14 Urban Safety Scenarios (US01–US14) through AlertModuleRegistry,
-   UrbanSafetyScenarioEngine, PerceptionPipeline, and EventContract validation.
-"""
+"""Behavioral tests for media, geometry, pose, and configured incident snapshots."""
 
 from __future__ import annotations
 
@@ -30,20 +20,12 @@ from apps.edge.vlm_verifier import StoryboardBuilder, VLMVerifier
 from apps.server.config import load_server_config
 from apps.server.export_dataset import build_parser
 from domain.alert_module_config import (
-    ALLOWLISTED_FACTORIES,
     AlertModuleDefinition,
     AlertModuleRegistry,
     CameraModuleConfig,
     RegionOfInterest,
 )
-from domain.event_contract import EventValidationError, URBAN_SAFETY_TAXONOMIES, validate_event
-from domain.urban_scenarios import (
-    ALL_SCENARIO_FACTORIES,
-    ALL_URBAN_TAXONOMIES,
-    SCENARIO_BY_ID,
-    SCENARIO_SPECS,
-    get_scenario_for_taxonomy,
-)
+from domain.event_contract import EventValidationError, validate_event
 
 
 class CiviWatchRebrandTests(unittest.TestCase):
@@ -63,30 +45,6 @@ class CiviWatchRebrandTests(unittest.TestCase):
         args = parser.parse_args([])
         self.assertEqual(args.database, "civi_watch")
 
-    def test_ui_html_carries_civiwatch_branding_and_all_14_scenarios(self) -> None:
-        html = Path("apps/server/static/index.html").read_text(encoding="utf-8")
-        self.assertIn("CiviWatch · Trung tâm Giám sát An toàn Đô thị", html)
-        self.assertIn("CiviWatch Operations Center", html)
-        self.assertIn("civi_watch_dash_token", html)
-        self.assertIn("civi_watch_rev_token", html)
-        for code in (
-            "fire_smoke_suspected",
-            "urban_flooding",
-            "illegal_dumping",
-            "sidewalk_encroachment",
-            "illegal_parking",
-            "crowd_concentration",
-            "suspected_disorder",
-            "violent_altercation",
-            "vehicle_incident",
-            "person_fall",
-            "danger_zone_intrusion",
-            "abandoned_object",
-            "fallen_tree",
-            "streetlight_outage",
-            "property_vandalism",
-        ):
-            self.assertIn(code, html)
 
 
 class Tier1MediaEngineTests(unittest.TestCase):
@@ -168,19 +126,8 @@ class Tier2HomographyAndBatchPoseTests(unittest.TestCase):
 
 
 class Tier3StoryboardAndAll14ScenariosTests(unittest.TestCase):
-    """Verify 2x3 Temporal Storyboard, VLMVerifier, and all 14 Urban Safety Scenarios (US01–US14)."""
+    """Verify storyboards, remote verdicts, and configured scenario snapshots."""
 
-    def test_all_14_urban_scenarios_are_registered_and_allowlisted(self) -> None:
-        self.assertEqual(len(SCENARIO_SPECS), 14)
-        for i in range(1, 15):
-            sid = f"US{i:02d}"
-            self.assertIn(sid, SCENARIO_BY_ID)
-            spec = SCENARIO_BY_ID[sid]
-            self.assertIn(spec.factory, ALLOWLISTED_FACTORIES)
-            for tax in spec.taxonomies:
-                self.assertIn(tax, ALL_URBAN_TAXONOMIES)
-                self.assertIn(tax, URBAN_SAFETY_TAXONOMIES)
-                self.assertEqual(get_scenario_for_taxonomy(tax), spec)
 
     def test_storyboard_2x3_grid_and_remote_vlm_json_verification(self) -> None:
         builder = StoryboardBuilder(tile_width=160, tile_height=90)

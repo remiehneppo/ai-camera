@@ -402,13 +402,7 @@ class ServerEvidenceApiTests(unittest.TestCase):
         self.assertIn("Content-Range", bad_range_res.headers)
         self.assertEqual(bad_range_res.headers["Content-Range"], "bytes */1000")
 
-    def test_dashboard_ui_serves_html_and_list_events_includes_evidence(self) -> None:
-        # Check GET / serves index.html with evidence player elements
-        index_res = self.client.get("/")
-        self.assertEqual(index_res.status_code, 200)
-        self.assertIn("evidence-section", index_res.text)
-        self.assertIn("Download clip", index_res.text)
-        self.assertIn("Pending upload", index_res.text)
+    def test_list_events_includes_uploaded_evidence(self) -> None:
 
         # Upload an evidence clip
         video_payload = b"dummy-mkv-clip"

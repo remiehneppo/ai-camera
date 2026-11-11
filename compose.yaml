@@ -28,7 +28,10 @@ services:
     restart: "no"
 
   go2rtc:
-    image: alexxit/go2rtc:latest
+    image: alexxit/go2rtc:1.9.15@sha256:e098de5c2f8040dc3d4784ed2d5cfdac3b0979f9349afe587ef6a670a14b9f4d
+    environment:
+      GO2RTC_API_USER: ${GO2RTC_API_USER:?Set GO2RTC_API_USER for go2rtc control API basic authentication}
+      GO2RTC_API_PASSWORD: ${GO2RTC_API_PASSWORD:?Set GO2RTC_API_PASSWORD for go2rtc control API basic authentication}
     volumes:
       - ./infra/go2rtc.yaml:/config/go2rtc.yaml:ro
       - ./data:/app/data:ro

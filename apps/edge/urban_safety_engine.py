@@ -15,16 +15,18 @@ Strict architectural guarantees:
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import math
 from typing import Any, Mapping, Sequence
 
+import cv2
 import numpy as np
 
 from apps.edge.geometry import is_normalized_polygon, point_in_polygon
 from apps.edge.tracker import Track
-from apps.edge.vlm_verifier import StoryboardBuilder, VLMVerifier
+from apps.edge.vlm_verifier import VLMVerifier
 from domain.alert_module_config import WEEKDAYS
 from domain.urban_scenarios import SCENARIO_BY_FACTORY, UrbanScenarioSpec
 
@@ -72,9 +74,18 @@ class _ScenarioTrackState:
     first_bbox: list[float]
     last_bbox: list[float]
     dwell_seconds: float = 0.0
+    current_speed: float = 0.0
     max_speed: float = 0.0
     path_distance: float = 0.0
     associated_person_id: int | str | None = None
+    unattended_since: float | None = None
+
+
+@dataclass
+class _PairInteractionState:
+    proximity_start_time: float
+    last_seen_time: float
+    motion_window: deque[tuple[float, float]]
 
 
 def extract_environmental_signals(
@@ -82,48 +93,78 @@ def extract_environmental_signals(
     roi_polygon: Sequence[Sequence[float]] | None = None,
     frame_dimensions: tuple[float, float] | None = None,
 ) -> dict[str, float]:
-    """Compute environmental metadata (fire_ratio, smoke_ratio, water_ratio, mean_luma) within ROI."""
-    if rgb is None or not isinstance(rgb, np.ndarray) or rgb.size == 0 or rgb.ndim != 3:
+    """Compute environmental metadata (fire_ratio, smoke_ratio, water_ratio, mean_luma) within rasterized ROI."""
+    if rgb is None or not isinstance(rgb, np.ndarray) or rgb.size == 0 or rgb.ndim != 3 or rgb.shape[2] < 3:
         return {}
     h, w = rgb.shape[:2]
-    region = rgb
-    if roi_polygon is not None and len(roi_polygon) >= 3:
-        dims = frame_dimensions or (float(w), float(h))
-        if is_normalized_polygon(roi_polygon) and dims[0] > 1.0 and dims[1] > 1.0:
-            xs = [int(np.clip(float(p[0]) * w, 0, w - 1)) for p in roi_polygon]
-            ys = [int(np.clip(float(p[1]) * h, 0, h - 1)) for p in roi_polygon]
-        else:
-            xs = [int(np.clip(float(p[0]), 0, w - 1)) for p in roi_polygon]
-            ys = [int(np.clip(float(p[1]), 0, h - 1)) for p in roi_polygon]
-        x1, x2 = min(xs), max(xs)
-        y1, y2 = min(ys), max(ys)
-        if x2 > x1 and y2 > y1:
-            region = rgb[y1 : y2 + 1, x1 : x2 + 1]
-
-    if region.size == 0:
+    if h <= 0 or w <= 0:
         return {}
 
-    r = region[:, :, 0].astype(np.float32)
-    g = region[:, :, 1].astype(np.float32)
-    b = region[:, :, 2].astype(np.float32)
+    if roi_polygon is not None:
+        if len(roi_polygon) < 3:
+            return {}
+        dims = frame_dimensions or (float(w), float(h))
+        if is_normalized_polygon(roi_polygon) and dims[0] > 1.0 and dims[1] > 1.0:
+            poly_px = [[float(p[0]) * w, float(p[1]) * h] for p in roi_polygon if len(p) >= 2]
+        else:
+            poly_px = [[float(p[0]), float(p[1])] for p in roi_polygon if len(p) >= 2]
+
+        n_pts = len(poly_px)
+        if n_pts < 3 or not all(math.isfinite(pt[0]) and math.isfinite(pt[1]) for pt in poly_px):
+            return {}
+        area2 = sum(
+            poly_px[i][0] * poly_px[(i + 1) % n_pts][1] - poly_px[(i + 1) % n_pts][0] * poly_px[i][1]
+            for i in range(n_pts)
+        )
+        if abs(area2) <= 1e-6:
+            return {}
+
+        clipped_pts = np.clip(np.round(np.asarray(poly_px, dtype=np.float64)), -10_000_000.0, 10_000_000.0).astype(
+            np.int32
+        )
+        mask_u8 = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillPoly(mask_u8, [clipped_pts], (1,))
+        poly_mask = mask_u8 > 0
+    else:
+        poly_mask = np.ones((h, w), dtype=bool)
+
+    poly_area = int(np.count_nonzero(poly_mask))
+    if poly_area == 0:
+        return {}
+
+    ys_idx, xs_idx = np.nonzero(poly_mask)
+    y1, y2 = int(ys_idx.min()), int(ys_idx.max())
+    x1, x2 = int(xs_idx.min()), int(xs_idx.max())
+
+    sub_rgb = rgb[y1 : y2 + 1, x1 : x2 + 1]
+    sub_mask = poly_mask[y1 : y2 + 1, x1 : x2 + 1]
+
+    r = sub_rgb[:, :, 0].astype(np.float32)
+    g = sub_rgb[:, :, 1].astype(np.float32)
+    b = sub_rgb[:, :, 2].astype(np.float32)
 
     fire_mask = (r > 200.0) & (g > 80.0) & (g < 190.0) & (b < 80.0) & ((r - b) > 110.0)
-    fire_ratio = float(np.mean(fire_mask))
+    fire_ratio = float(np.count_nonzero(fire_mask & sub_mask)) / float(poly_area)
 
     max_c = np.maximum(np.maximum(r, g), b)
     min_c = np.minimum(np.minimum(r, g), b)
     smoke_mask = (max_c > 125.0) & (max_c < 215.0) & ((max_c - min_c) < 14.0)
-    smoke_ratio = float(np.mean(smoke_mask))
+    smoke_ratio = float(np.count_nonzero(smoke_mask & sub_mask)) / float(poly_area)
 
-    rh = region.shape[0]
-    lower = region[rh // 2 :, :, :] if rh >= 4 else region
-    lr = lower[:, :, 0].astype(np.float32)
-    lg = lower[:, :, 1].astype(np.float32)
-    lb = lower[:, :, 2].astype(np.float32)
-    water_mask = (lb > 110.0) & (lb > lr + 25.0) & (lg > lr + 10.0)
-    water_ratio = float(np.mean(water_mask))
+    rh = sub_rgb.shape[0]
+    if rh >= 4:
+        lower_sub_mask = sub_mask.copy()
+        lower_sub_mask[: rh // 2, :] = False
+    else:
+        lower_sub_mask = sub_mask
+    lower_area = int(np.count_nonzero(lower_sub_mask))
+    if lower_area > 0:
+        water_mask = (b > 110.0) & (b > r + 25.0) & (g > r + 10.0)
+        water_ratio = float(np.count_nonzero(water_mask & lower_sub_mask)) / float(lower_area)
+    else:
+        water_ratio = 0.0
 
-    mean_luma = float(np.mean(region))
+    mean_luma = float(np.mean(sub_rgb[:, :, :3][sub_mask]))
     return {
         "fire_ratio": fire_ratio,
         "smoke_ratio": smoke_ratio,
@@ -197,10 +238,8 @@ class UrbanSafetyScenarioEngine:
         self.min_obstruction_area_ratio = float(thresholds.get("min_obstruction_area_ratio", 0.04))
 
         self.enable_vlm = bool(enable_vlm)
-        # Keep pure evaluation when no external VLM is injected; use offline LocalVisualVerifier by default
+        # Configuration/lineage selection only; pipeline owns VLM execution and storyboard construction.
         self.vlm_verifier = vlm_verifier or (VLMVerifier(endpoint_url="") if self.enable_vlm else None)
-        self.storyboard = StoryboardBuilder()
-
         self.rule_lineage = [
             {
                 "role": f"{self.factory}_engine",
@@ -216,6 +255,7 @@ class UrbanSafetyScenarioEngine:
             )
 
         self._track_states: dict[int | str, _ScenarioTrackState] = {}
+        self._pair_states: dict[tuple[int | str, int | str], _PairInteractionState] = {}
         # Isolated timers per environmental condition: never clobber across scenarios!
         self._env_active_since: dict[str, float] = {}
         self._last_timestamp: float | None = None
@@ -223,15 +263,33 @@ class UrbanSafetyScenarioEngine:
 
     def reset(self) -> None:
         self._track_states.clear()
+        self._pair_states.clear()
         self._env_active_since.clear()
         self._last_timestamp = None
         self._last_alert_by_taxonomy.clear()
-        self.storyboard.clear()
+
+    def reject_candidate(self, facts: Mapping[str, Any]) -> None:
+        """Release cooldown written for a rejected candidate when taxonomy and detection_time match."""
+        if not isinstance(facts, Mapping):
+            return
+        raw_payload = facts.get("payload")
+        payload = raw_payload if isinstance(raw_payload, Mapping) else facts
+        taxonomy = payload.get("taxonomy")
+        detection_time = payload.get("detection_time")
+        if not isinstance(taxonomy, str) or not taxonomy:
+            return
+        if isinstance(detection_time, bool) or not isinstance(detection_time, (int, float)):
+            return
+        det_ts = float(detection_time)
+        if not math.isfinite(det_ts):
+            return
+        recorded_ts = self._last_alert_by_taxonomy.get(taxonomy)
+        if recorded_ts is not None and recorded_ts == det_ts:
+            self._last_alert_by_taxonomy.pop(taxonomy, None)
 
     def observation_gap(self) -> None:
-        for st in self._track_states.values():
-            st.dwell_seconds = 0.0
-            st.first_seen = st.last_seen
+        self._track_states.clear()
+        self._pair_states.clear()
         self._env_active_since.clear()
         self._last_timestamp = None
 
@@ -278,23 +336,18 @@ class UrbanSafetyScenarioEngine:
         environmental_signals: Mapping[str, float] | None = None,
     ) -> list[dict[str, Any]]:
         ts = float(timestamp)
-        dims = frame_dimensions or self.frame_dimensions
+        dims = frame_dimensions or self.frame_dimensions or (
+            (float(rgb.shape[1]), float(rgb.shape[0]))
+            if isinstance(rgb, np.ndarray) and rgb.ndim >= 2 and rgb.shape[0] > 0 and rgb.shape[1] > 0
+            else None
+        )
 
         if self._last_timestamp is not None and (
             ts < self._last_timestamp or ts - self._last_timestamp > self.max_observation_gap
         ):
             self.observation_gap()
 
-        dt = (ts - self._last_timestamp) if self._last_timestamp is not None and ts > self._last_timestamp else 0.0
         self._last_timestamp = ts
-
-        if rgb is not None:
-            det_dicts = [
-                {"bbox": list(t.bbox), "label": t.label, "score": t.score}
-                for t in tracks
-            ]
-            self.storyboard.record_frame(rgb, ts, int(ts * 10), det_dicts)
-
         if not self.is_in_schedule(ts):
             return []
 
@@ -313,8 +366,8 @@ class UrbanSafetyScenarioEngine:
 
         candidates: list[dict[str, Any]] = []
         roi_tracks = [t for t in tracks if t.score >= self.min_score and self.in_roi(t, dims)]
-        self._update_track_states(roi_tracks, ts, dt)
-
+        self._update_track_states(roi_tracks, ts)
+        self._update_pair_states(roi_tracks, ts)
         if self.factory in {"fire_smoke_suspected", "urban_safety_vlm"}:
             cand = self._eval_us01_fire_smoke(roi_tracks, ts, env_sigs)
             if cand is not None:
@@ -360,28 +413,21 @@ class UrbanSafetyScenarioEngine:
             if cand is not None:
                 candidates.append(cand)
 
-        verified_incidents: list[dict[str, Any]] = []
+        emitted_candidates: list[dict[str, Any]] = []
         for facts in candidates:
             tax = str(facts["payload"]["taxonomy"])
             last_alert = self._last_alert_by_taxonomy.get(tax)
             if last_alert is not None and ts - last_alert < self.cooldown_seconds:
                 continue
 
-            if self.vlm_verifier is not None:
-                sb = self.storyboard.build_grid(ts, original_dimensions=dims) if len(self.storyboard) > 0 else None
-                verdict = self.vlm_verifier.verify(facts, storyboard=sb)
-                facts["payload"]["vlm_verification"] = verdict.to_dict()
-                if not verdict.verified:
-                    continue
-
             self._last_alert_by_taxonomy[tax] = ts
-            verified_incidents.append(facts)
+            emitted_candidates.append(facts)
 
-        return verified_incidents
+        return emitted_candidates
 
-    def _update_track_states(self, roi_tracks: list[Track], ts: float, dt: float) -> None:
+    def _update_track_states(self, roi_tracks: list[Track], ts: float) -> None:
         observed_ids: set[int | str] = set()
-        persons = [t for t in roi_tracks if t.label in {"person", "pedestrian"}]
+        persons = [track for track in roi_tracks if track.label in {"person", "pedestrian"}]
 
         for track in roi_tracks:
             tid = track.track_id
@@ -399,27 +445,87 @@ class UrbanSafetyScenarioEngine:
                 self._track_states[tid] = st
             else:
                 step_dt = ts - st.last_seen
-                if step_dt > 0:
+                if step_dt <= 0.0 or step_dt > self.max_observation_gap:
+                    st.dwell_seconds = 0.0
+                    st.current_speed = 0.0
+                    st.max_speed = 0.0
+                    st.path_distance = 0.0
+                    st.first_seen = ts
+                    st.first_bbox = list(track.bbox)
+                    st.associated_person_id = None
+                    st.unattended_since = None
+                else:
                     prev_cx = (st.last_bbox[0] + st.last_bbox[2]) * 0.5
                     prev_cy = (st.last_bbox[1] + st.last_bbox[3]) * 0.5
                     step_dist = math.hypot(track.cx - prev_cx, track.cy - prev_cy)
                     speed = step_dist / step_dt
+                    st.current_speed = speed
                     st.path_distance += step_dist
                     st.max_speed = max(st.max_speed, speed)
                     st.dwell_seconds += step_dt
                 st.last_seen = ts
                 st.last_bbox = list(track.bbox)
 
-            if track.label not in {"person", "pedestrian"} and persons:
-                nearest_p = min(
-                    persons,
-                    key=lambda p: math.hypot(track.cx - p.cx, track.cy - p.cy),
-                )
-                if math.hypot(track.cx - nearest_p.cx, track.cy - nearest_p.cy) <= self.owner_separation_px:
-                    st.associated_person_id = nearest_p.track_id
+            if track.label not in {"person", "pedestrian"}:
+                near_person: Track | None = None
+                if persons:
+                    nearest_p = min(
+                        persons,
+                        key=lambda p: math.hypot(track.cx - p.cx, track.cy - p.cy),
+                    )
+                    if math.hypot(track.cx - nearest_p.cx, track.cy - nearest_p.cy) <= self.owner_separation_px:
+                        near_person = nearest_p
+
+                if near_person is not None:
+                    st.associated_person_id = near_person.track_id
+                    st.unattended_since = None
+                else:
+                    if st.unattended_since is None:
+                        st.unattended_since = ts
 
         for stale_id in [k for k in self._track_states if k not in observed_ids]:
             del self._track_states[stale_id]
+
+    def _update_pair_states(self, roi_tracks: list[Track], ts: float) -> None:
+        persons = [t for t in roi_tracks if t.label in {"person", "pedestrian"}]
+        active_pairs: set[tuple[int | str, int | str]] = set()
+
+        if len(persons) >= 2:
+            for i in range(len(persons)):
+                for j in range(i + 1, len(persons)):
+                    p1, p2 = persons[i], persons[j]
+                    dist = math.hypot(p1.cx - p2.cx, p1.cy - p2.cy)
+                    if dist > self.proximity_distance_px:
+                        continue
+                    st1 = self._track_states.get(p1.track_id)
+                    st2 = self._track_states.get(p2.track_id)
+                    if st1 is None or st2 is None:
+                        continue
+
+                    k1 = (type(p1.track_id).__name__, str(p1.track_id))
+                    k2 = (type(p2.track_id).__name__, str(p2.track_id))
+                    key = (p1.track_id, p2.track_id) if k1 <= k2 else (p2.track_id, p1.track_id)
+                    active_pairs.add(key)
+
+                    current_energy = st1.current_speed + st2.current_speed
+                    pair = self._pair_states.get(key)
+                    if pair is None:
+                        pair = _PairInteractionState(
+                            proximity_start_time=ts,
+                            last_seen_time=ts,
+                            motion_window=deque(),
+                        )
+                        self._pair_states[key] = pair
+                    else:
+                        pair.last_seen_time = ts
+                        pair.motion_window.append((ts, current_energy))
+
+                    cutoff = ts - max(self.min_interaction_seconds, 1.0)
+                    while pair.motion_window and pair.motion_window[0][0] < cutoff:
+                        pair.motion_window.popleft()
+
+        for stale_key in [k for k in self._pair_states if k not in active_pairs]:
+            del self._pair_states[stale_key]
 
     def _build_facts(
         self,
@@ -609,44 +715,43 @@ class UrbanSafetyScenarioEngine:
         for i in range(len(persons)):
             for j in range(i + 1, len(persons)):
                 p1, p2 = persons[i], persons[j]
-                dist = math.hypot(p1.cx - p2.cx, p1.cy - p2.cy)
-                if dist > self.proximity_distance_px:
+                k1 = (type(p1.track_id).__name__, str(p1.track_id))
+                k2 = (type(p2.track_id).__name__, str(p2.track_id))
+                key = (p1.track_id, p2.track_id) if k1 <= k2 else (p2.track_id, p1.track_id)
+                pair = self._pair_states.get(key)
+                if pair is None:
                     continue
-                st1 = self._track_states.get(p1.track_id)
-                st2 = self._track_states.get(p2.track_id)
-                if st1 is None or st2 is None:
+                duration = ts - pair.proximity_start_time
+                if duration < self.min_interaction_seconds:
                     continue
-                duration = min(st1.dwell_seconds, st2.dwell_seconds)
-                combined_energy = st1.max_speed + st2.max_speed
-                if duration >= self.min_interaction_seconds and combined_energy >= self.motion_energy_threshold:
+                window_energy = max((s[1] for s in pair.motion_window), default=0.0)
+                if window_energy >= self.motion_energy_threshold:
+                    dist = math.hypot(p1.cx - p2.cx, p1.cy - p2.cy)
                     return self._build_facts(
                         scenario_id="US07",
                         taxonomy="violent_altercation",
                         severity="critical",
-                        confidence=round(min(p1.score, p2.score), 3),
+                        confidence=round(min(float(p1.score), float(p2.score)), 3),
                         anchor_time=ts,
                         detection_time=ts,
                         involved_track_ids=[p1.track_id, p2.track_id],
                         extra={
                             "interaction_duration_seconds": round(duration, 2),
                             "pair_distance_px": round(dist, 2),
-                            "motion_energy": round(combined_energy, 2),
+                            "motion_energy": round(window_energy, 2),
                         },
                     )
         return None
 
     def _eval_us11_abandoned_object(self, tracks: list[Track], ts: float) -> dict[str, Any] | None:
-        persons = [t for t in tracks if t.label in {"person", "pedestrian"}]
         for t in tracks:
             if t.label not in WASTE_AND_OBJECT_LABELS:
                 continue
             st = self._track_states.get(t.track_id)
-            if st is None or st.dwell_seconds < self.min_unattended_seconds:
+            if st is None or st.unattended_since is None:
                 continue
-            near_any_person = any(
-                math.hypot(t.cx - p.cx, t.cy - p.cy) <= self.owner_separation_px for p in persons
-            )
-            if near_any_person:
+            unattended_duration = ts - st.unattended_since
+            if unattended_duration < self.min_unattended_seconds:
                 continue
             taxonomy = (
                 "abandoned_object_dropped"
@@ -662,7 +767,7 @@ class UrbanSafetyScenarioEngine:
                 detection_time=ts,
                 involved_track_ids=[t.track_id],
                 extra={
-                    "unattended_seconds": round(st.dwell_seconds, 2),
+                    "unattended_seconds": round(unattended_duration, 2),
                     "object_label": t.label,
                     "observed_placer_departed": st.associated_person_id is not None,
                 },

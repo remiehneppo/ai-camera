@@ -242,6 +242,9 @@ def generate_yolox_manifest(
     }
 
 
+_COCO_COPY_MARKER = ".civiwatch_copied_split"
+
+
 def prepare_coco_dataset(mixed_dir: Path, coco_dir: Path) -> Path:
     """Prepare and link COCO dataset directory from mixed traffic directory."""
     ann_dir = coco_dir / "annotations"
@@ -251,20 +254,39 @@ def prepare_coco_dataset(mixed_dir: Path, coco_dir: Path) -> Path:
         img_src = mixed_dir / f"images/{split}"
         lbl_src = mixed_dir / f"labels/{split}"
         link_dst = coco_dir / coco_name
-        if not link_dst.exists() and img_src.is_dir():
+        if not img_src.is_dir():
+            raise FileNotFoundError(f"Missing source images directory: {img_src}")
+
+        # Refresh destination link/copy safely without deleting user files or symlink targets
+        if link_dst.is_symlink() or os.path.islink(link_dst):
+            try:
+                if link_dst.resolve() != img_src.resolve():
+                    link_dst.unlink()
+            except (OSError, RuntimeError):
+                link_dst.unlink()
+        elif link_dst.exists():
+            if link_dst.resolve() != img_src.resolve():
+                marker = link_dst / _COCO_COPY_MARKER
+                if link_dst.is_dir() and marker.is_file() and not marker.is_symlink() and coco_dir.resolve() in link_dst.resolve().parents:
+                    shutil.rmtree(link_dst)
+                else:
+                    raise FileExistsError(
+                        f"Refusing to overwrite non-symlink destination {link_dst} without managed copy marker"
+                    )
+
+        if not (link_dst.is_symlink() or os.path.islink(link_dst) or link_dst.exists()) and img_src.is_dir():
             try:
                 link_dst.symlink_to(img_src.resolve())
             except OSError:
-                shutil.copytree(img_src, link_dst)
+                shutil.copytree(img_src, link_dst, symlinks=True)
+                (link_dst / _COCO_COPY_MARKER).write_text(str(img_src.resolve()), encoding="utf-8")
 
         out_json = ann_dir / f"instances_{coco_name}.json"
-        if not out_json.is_file() or out_json.stat().st_size < 1000:
-            print(f"[COCO] Converting {split} labels to {out_json.name} ...")
-            stats = yolo_split_to_coco_json(img_src, lbl_src, out_json)
-            print(f"       -> {stats['images']} images, {stats['annotations']} annotations.")
+        print(f"[COCO] Converting {split} labels to {out_json.name} ...")
+        stats = yolo_split_to_coco_json(img_src, lbl_src, out_json)
+        print(f"       -> {stats['images']} images, {stats['annotations']} annotations.")
 
     return coco_dir
-
 
 def train_and_export(
     variant: str,

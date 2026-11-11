@@ -31,12 +31,10 @@ import math
 from typing import Any, Sequence
 from uuid import uuid4
 
-import numpy as np
-
 from apps.edge.geometry import is_normalized_polygon, point_in_polygon
 from apps.edge.homography import GroundPlaneHomography
 from apps.edge.tracker import Track
-from apps.edge.vlm_verifier import StoryboardBuilder, VLMVerifier
+from apps.edge.vlm_verifier import VLMVerifier
 
 from domain.vehicle_motion import (
     KinematicsTracker,
@@ -135,7 +133,6 @@ class VehicleIncidentEngine:
         self.homography = homography
         self.enable_vlm = bool(enable_vlm)
         self.vlm_verifier = vlm_verifier or (VLMVerifier(endpoint_url="") if self.enable_vlm else None)
-        self.storyboard = StoryboardBuilder()
         self.rule_lineage: list[dict[str, str]] = [
             {"role": "vehicle_motion", "version": "1.0.0"},
             {"role": "vehicle_incident", "version": "1.0.0"},
@@ -166,7 +163,6 @@ class VehicleIncidentEngine:
         """Clear all internal tracking states and history."""
         self._tracks.clear()
         self._pairs.clear()
-        self.storyboard.clear()
 
     def observation_gap(self) -> None:
         """Reset kinematics and continuous history across an observation gap."""
@@ -267,30 +263,32 @@ class VehicleIncidentEngine:
             "payload": payload,
         }
 
-    def _verify_candidate(self, event: dict[str, Any], ts: float, dims: tuple[float, float] | None) -> bool:
-        """Run VLMVerifier on a candidate vehicle event across all 3 branches."""
-        if self.vlm_verifier is None:
-            return True
-        sb = self.storyboard.build_grid(ts, original_dimensions=dims) if len(self.storyboard) > 0 else None
-        verdict = self.vlm_verifier.verify(event, storyboard=sb)
-        event["payload"]["vlm_verification"] = verdict.to_dict()
-        return verdict.verified
+    def reject_candidate(self, facts: dict[str, Any]) -> None:
+        """Release cooldown consumed by a candidate rejected by pipeline verification."""
+        payload = facts["payload"]
+        timestamp = payload["detection_time"]
+        track_ids = payload["track_ids"]
+        for track_id in track_ids:
+            state = self._tracks.get(track_id)
+            if state is not None and state.last_alert_time == timestamp:
+                state.last_alert_time = None
+        if len(track_ids) == 2:
+            id1, id2 = track_ids
+            key = (id1, id2) if str(id1) <= str(id2) else (id2, id1)
+            pair = self._pairs.get(key)
+            if pair is not None and pair.last_alert_time == timestamp:
+                pair.last_alert_time = None
 
     def process_tracks(
         self,
         tracks: list[Track],
         timestamp: float,
         frame_dimensions: tuple[float, float] | None = None,
-        rgb: np.ndarray | None = None,
     ) -> list[dict[str, Any]]:
-        """Evaluate tracks at timestamp and return validated event snapshots for any triggered incidents."""
+        """Evaluate tracks and return candidate incident facts for pipeline verification."""
         ts = float(timestamp)
         dims = frame_dimensions or self.frame_dimensions
         events: list[dict[str, Any]] = []
-
-        if rgb is not None:
-            det_dicts = [{"bbox": list(t.bbox), "label": t.label, "score": t.score} for t in tracks]
-            self.storyboard.record_frame(rgb, ts, int(ts * 10), det_dicts)
 
         # 1. Update kinematics and track state for tracks in ROI
         active_track_ids: set[int | str] = set()
@@ -479,8 +477,6 @@ class VehicleIncidentEngine:
                         confidence=conf,
                         tracks=[v1, v2],
                     )
-                    if not self._verify_candidate(event, ts, dims):
-                        continue
                     pair.last_alert_time = ts
                     v1.last_alert_time = ts
                     v2.last_alert_time = ts
@@ -557,8 +553,6 @@ class VehicleIncidentEngine:
                     confidence=round(float(state.last_score), 3),
                     tracks=[state],
                 )
-                if not self._verify_candidate(event, ts, dims):
-                    continue
                 state.last_alert_time = ts
                 events.append(event)
 
@@ -635,8 +629,6 @@ class VehicleIncidentEngine:
                         confidence=conf,
                         tracks=[v, p],
                     )
-                    if not self._verify_candidate(event, ts, dims):
-                        continue
                     pair.last_alert_time = ts
                     v.last_alert_time = ts
                     p.last_alert_time = ts
